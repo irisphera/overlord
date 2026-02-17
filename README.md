@@ -1,6 +1,27 @@
-# Overlord - Dockerized OpenCode
+# Overlord - Dockerized Oh-My-Opencode
 
-Isolated Docker environment for running [opencode](https://opencode.ai) with terminal multiplexing via [zellij](https://zellij.dev). Run multiple opencode instances side by side, install whatever you need, and everything persists across restarts.
+Isolated Docker environment for running [OpenCode](https://opencode.ai) + [Oh My OpenCode](https://github.com/code-yeongyu/oh-my-opencode) with terminal multiplexing via [zellij](https://zellij.dev). Run multiple AI coding agents side by side, install whatever you need, and everything persists across restarts.
+
+## Powered by Oh My OpenCode
+
+This environment comes **fully loaded** with [oh-my-opencode](https://github.com/code-yeongyu/oh-my-opencode) — the best agent harness for OpenCode. Just type `ultrawork` (or `ulw`) in your prompt and watch the magic happen.
+
+### What You Get Out of the Box
+
+| Feature                       | Description                                                                                |
+| ----------------------------- | ------------------------------------------------------------------------------------------ |
+| **Sisyphus Agent**            | Main orchestrator (Opus 4.5) that delegates, verifies, and ships like a senior engineer    |
+| **Multi-Agent Orchestra**     | Oracle (debugging), Librarian (docs/code search), Explore (fast grep), Frontend Engineer   |
+| **Background Agents**         | Fire parallel agents to search codebases, fetch docs, and explore — while you keep working |
+| **LSP + AST Tools**           | Surgical refactoring with goto-definition, find-references, rename, and AST-aware search   |
+| **Curated MCPs**              | Exa (web search), Context7 (official docs), Grep.app (GitHub code search)                  |
+| **Todo Continuation**         | Agent keeps rolling until the task is 100% done — no quitting halfway                      |
+| **Claude Code Compatibility** | Full hook system, commands, skills, agents                                                 |
+
+### The Magic Words
+
+- **`ultrawork`** or **`ulw`** — Activates parallel agents, deep exploration, and relentless execution until completion
+- **`ultrathink`** — Deep analysis mode for complex architectural decisions
 
 ## Features
 
@@ -78,16 +99,88 @@ The following data is stored in named Docker volumes and survives even `--reset-
 
 ### Zellij shortcuts
 
-| Key | Action |
-|-----|--------|
-| `Ctrl+q` | Detach from session (container stays alive) |
-| `Alt+n` | New pane |
-| `Alt+[` / `Alt+]` | Switch panes |
-| `Alt+f` | Toggle floating pane |
+| Key               | Action                                      |
+| ----------------- | ------------------------------------------- |
+| `Ctrl+q`          | Detach from session (container stays alive) |
+| `Alt+n`           | New pane                                    |
+| `Alt+[` / `Alt+]` | Switch panes                                |
+| `Alt+f`           | Toggle floating pane                        |
 
-## Configuration
+## Model Configuration
 
 All model, provider, and agent configuration lives in `config/providers.json`.
+
+### Quick Start: Adding a New Model
+
+```bash
+# 1. Define your provider (if not already present)
+# 2. Add a model alias
+# 3. Assign it to agents/categories
+# 4. Run overlord --reset to apply
+```
+
+**Example: Adding GPT-4o via Azure**
+
+```json
+{
+  "providers": {
+    "azure": {
+      "env": ["AZURE_OPENAI_API_KEY", "AZURE_OPENAI_ENDPOINT"]
+    }
+  },
+  "models": {
+    "gpt4o": {
+      "provider": "azure",
+      "id": "azure/gpt-4o"
+    }
+  },
+  "agents": {
+    "oracle": "gpt4o"
+  }
+}
+```
+
+### Configuration Flow
+
+```
+┌──────────────────┐     ┌─────────────────┐     ┌──────────────────┐
+│ providers.json   │ ──► │ overlord script │ ──► │ Generated Config │
+│ (your config)    │     │ (validation)    │     │ (injected)       │
+└──────────────────┘     └─────────────────┘     └──────────────────┘
+                                                         │
+                         ┌───────────────────────────────┼───────────────────────────────┐
+                         │                               │                               │
+                         ▼                               ▼                               ▼
+              ┌──────────────────┐          ┌──────────────────┐          ┌──────────────────┐
+              │ opencode.json    │          │oh-my-opencode.json│         │ Environment Vars │
+              │ (model registry) │          │ (agent mapping)   │         │ (API credentials)│
+              └──────────────────┘          └──────────────────┘          └──────────────────┘
+```
+
+### Available Agents (Oh My OpenCode)
+
+| Agent             | Purpose                                                  | Default Model |
+| ----------------- | -------------------------------------------------------- | ------------- |
+| `sisyphus`        | Main orchestrator — delegates, verifies, ships           | Opus          |
+| `sisyphus-junior` | Lighter tasks delegated from Sisyphus                    | Sonnet        |
+| `oracle`          | Architecture decisions, debugging consultation           | GPT           |
+| `librarian`       | Official docs, OSS implementations, codebase exploration | Sonnet        |
+| `explore`         | Blazing fast contextual grep                             | Sonnet        |
+| `prometheus`      | Task planning and breakdown                              | Sonnet        |
+| `metis`           | Pre-planning analysis                                    | Sonnet        |
+| `momus`           | Plan review and quality assurance                        | Sonnet        |
+
+### Available Categories
+
+| Category             | Purpose                                           |
+| -------------------- | ------------------------------------------------- |
+| `visual-engineering` | Frontend, UI/UX, design, styling, animation       |
+| `ultrabrain`         | Genuinely hard, logic-heavy tasks                 |
+| `artistry`           | Complex problems with unconventional approaches   |
+| `quick`              | Trivial tasks — single file changes, typo fixes   |
+| `unspecified-low`    | Low-effort tasks that don't fit other categories  |
+| `unspecified-high`   | High-effort tasks that don't fit other categories |
+| `writing`            | Documentation, prose, technical writing           |
 
 ### Schema
 
@@ -144,14 +237,6 @@ All model, provider, and agent configuration lives in `config/providers.json`.
 
 Agents and categories not listed fall back to `default`. Env vars are collected from the union of all providers referenced by models.
 
-### Available agents
-
-`sisyphus`, `sisyphus-junior`, `atlas`, `OpenCode-Builder`, `build`, `plan`, `oracle`, `librarian`, `explore`, `multimodal-looker`, `prometheus`, `metis`, `momus`
-
-### Available categories
-
-`visual-engineering`, `ultrabrain`, `artistry`, `quick`, `unspecified-low`, `unspecified-high`, `writing`
-
 ### Adding a new model
 
 1. Ensure the provider exists in `providers`
@@ -162,6 +247,21 @@ Agents and categories not listed fall back to `default`. Env vars are collected 
 
 Always forwarded regardless of provider: `CONTEXT7_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`.
 
+## Oh My OpenCode Configuration
+
+The oh-my-opencode plugin is configured in `config/oh-my-opencode.json`:
+
+```json
+{
+  "sisyphus_agent": {
+    "planner_enabled": true, // Prometheus planner for complex tasks
+    "replace_plan": true // Agent creates execution plans
+  }
+}
+```
+
+See the [oh-my-opencode documentation](https://github.com/code-yeongyu/oh-my-opencode/blob/dev/docs/configurations.md) for all available options.
+
 ## Project Structure
 
 ```
@@ -171,7 +271,7 @@ overlord/
 ├── config/
 │   ├── providers.json      # Providers, models, and agent/category assignments
 │   ├── opencode.json       # Base opencode config (plugins, MCP servers)
-│   ├── oh-my-opencode.json # Default oh-my-opencode plugin config
+│   ├── oh-my-opencode.json # Oh My OpenCode plugin configuration
 │   ├── entrypoint.sh       # Container entrypoint (UID/GID fixup)
 │   ├── zellij-config.kdl   # Zellij keybindings
 │   └── zellij-opencode.kdl # Zellij layout
@@ -181,20 +281,76 @@ overlord/
 
 ## Security Model
 
-- Container runs as non-root user `overlord`
-- Only current directory mounted (read-write to `/workspace`)
-- Git config and SSH keys mounted read-only (if present)
-- API credentials passed via environment (never in image)
-- Docker socket mounted for Docker-in-Docker workflows
+Overlord is designed for secure, isolated AI-assisted development:
+
+### Container Isolation
+
+| Layer              | Protection                                                            |
+| ------------------ | --------------------------------------------------------------------- |
+| **User namespace** | Container runs as non-root user `overlord` (UID/GID matched to host)  |
+| **Filesystem**     | Only current directory mounted read-write to `/workspace`             |
+| **Git/SSH**        | Host's `~/.gitconfig` and `~/.ssh` mounted **read-only**              |
+| **Credentials**    | API keys passed via environment variables, **never baked into image** |
+| **SELinux**        | `--security-opt label=disable` for cross-platform compatibility       |
+
+### UID/GID Remapping (Zero Permission Issues)
+
+The entrypoint automatically handles permission mismatches:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Host workspace owned by UID 501?                           │
+│  → Container remaps overlord user to UID 501                │
+│  → No permission denied errors, no chown needed             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+This works seamlessly across:
+
+- **Linux** — Native UID passthrough
+- **macOS Docker Desktop** — Root fallback with overlord's home directory
+- **Rootless Docker/Podman** — UID remapping just works
+
+### What's Mounted
+
+```bash
+# Read-write (your project)
+$(pwd) → /workspace
+
+# Read-only (identity)
+~/.gitconfig → /home/overlord/.gitconfig
+~/.ssh → /home/overlord/.ssh
+
+# Persistent volumes (survive --reset-hard)
+overlord-opencode-data-* → ~/.local/share/opencode  # Sessions, history
+overlord-zsh-data-*      → ~/.zsh_data              # Shell history
+```
+
+### Credential Handling
+
+API credentials are **never stored in the image**. They're passed at runtime:
+
+```bash
+# Export in your shell before running overlord
+export AWS_ACCESS_KEY_ID="..."
+export AWS_SECRET_ACCESS_KEY="..."
+export OPENAI_API_KEY="..."
+
+overlord  # Credentials forwarded automatically
+```
+
+The launcher reads `providers.json` and forwards only the env vars needed by your configured providers.
 
 ## Troubleshooting
 
 **Permission denied in container:**
+
 ```bash
 overlord --build --reset
 ```
 
 **Stale container after image rebuild:**
+
 ```bash
 overlord --reset
 ```
@@ -204,6 +360,7 @@ Ensure credentials are exported in your shell before running overlord.
 
 **Config validation errors:**
 The launcher validates `config/providers.json` on startup. Check that:
+
 - `default` references a model alias that exists in `models`
 - All `agents`/`categories` values reference valid model aliases
 - All models reference valid providers with an `id` field

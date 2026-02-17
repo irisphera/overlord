@@ -1,0 +1,14 @@
+# Sessions data
+sessions/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+*.swp
+*.swo
+*~
+
+# Local overrides
+opencode.json

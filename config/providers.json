@@ -1,0 +1,60 @@
+{
+  "providers": {
+    "amazon-bedrock": {
+      "env": [
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+        "AWS_DEFAULT_REGION",
+        "AWS_REGION",
+        "AWS_BEARER_TOKEN_BEDROCK"
+      ],
+      "opencode": {
+        "npm": "@ai-sdk/amazon-bedrock",
+        "name": "AWS Bedrock"
+      }
+    },
+    "azure": {
+      "env": [
+        "AZURE_OPENAI_API_KEY",
+        "AZURE_OPENAI_ENDPOINT",
+        "AZURE_OPENAI_API_VERSION",
+        "AZURE_RESOURCE_NAME",
+        "AZURE_API_KEY"
+      ],
+      "opencode": {
+        "npm": "@ai-sdk/azure",
+        "name": "Azure OpenAI",
+        "options": {
+          "apiKey": "{env:AZURE_API_KEY}",
+          "resourceName": "{env:AZURE_RESOURCE_NAME}"
+        }
+      }
+    }
+  },
+  "models": {
+    "opus": {
+      "provider": "amazon-bedrock",
+      "id": "amazon-bedrock/global.anthropic.claude-opus-4-5-20251101-v1:0:max",
+      "omo_id": "amazon-bedrock/anthropic.claude-opus-4-5-20251101-v1:0",
+      "name": "Claude Opus 4.5"
+    },
+    "haiku": {
+      "provider": "amazon-bedrock",
+      "id": "amazon-bedrock/global.anthropic.claude-haiku-4-5-20251001-v1:0",
+      "name": "Claude Haiku 4.5"
+    },
+    "gpt": {
+      "provider": "azure",
+      "id": "azure/gpt-5.2-codex",
+      "name": "GPT 5.2 Codex",
+      "options": { "serviceTier": "priority" }
+    }
+  },
+  "default": "opus",
+  "agents": {},
+  "categories": {
+    "quick": "haiku",
+    "ultrabrain": "gpt"
+  }
+}

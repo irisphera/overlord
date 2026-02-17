@@ -1,0 +1,423 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+OVERLORD_DIR="$(dirname "${SCRIPT_DIR}")"
+IMAGE_NAME="overlord-opencode"
+PROVIDERS_FILE="${OVERLORD_DIR}/config/providers.json"
+BASE_CONFIG="${OVERLORD_DIR}/config/opencode.json"
+
+# Container name: one per workspace directory (sanitized for docker)
+WORKSPACE_SLUG="$(basename "$(pwd)" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9._-]/-/g')"
+CONTAINER_NAME="overlord-${WORKSPACE_SLUG}"
+
+# Zellij session name: just the directory basename (no prefix needed)
+ZELLIJ_SESSION="$(basename "$(pwd)")"
+
+# Named volumes for stateful data that survives --reset-hard
+VOL_OPENCODE_DATA="overlord-opencode-data-${WORKSPACE_SLUG}"
+VOL_ZSH_DATA="overlord-zsh-data-${WORKSPACE_SLUG}"
+
+# All oh-my-opencode agent and category names (must stay in sync with schema)
+ALL_AGENTS='["sisyphus","sisyphus-junior","atlas","OpenCode-Builder","build","plan","oracle","librarian","explore","multimodal-looker","prometheus","metis","momus"]'
+ALL_CATEGORIES='["visual-engineering","ultrabrain","artistry","quick","unspecified-low","unspecified-high","writing"]'
+
+show_help() {
+    cat << 'USAGE'
+overlord - Launch isolated opencode container
+
+USAGE: overlord [OPTIONS]
+
+OPTIONS:
+    --build            Force rebuild the Docker image
+    --reset            Restart zellij session (keeps container state)
+    --reset-hard       Destroy container and start fresh
+    --help             Show this help
+
+EXAMPLES:
+    overlord                         # Start or reattach
+    overlord --build                 # Rebuild image, then start
+    overlord --reset                 # Restart zellij (picks up config changes)
+    overlord --reset-hard            # Destroy container, start fresh
+
+LIFECYCLE:
+    First run creates a persistent container per workspace directory.
+    Subsequent runs reattach to the same zellij session.
+    Anything installed in the container persists across restarts.
+    Use --reset to restart zellij (picks up config changes).
+    Use --reset-hard to start from a clean image.
+
+    Models, providers, and per-agent/category assignments are configured
+    in config/providers.json.
+
+ZELLIJ:
+    Ctrl+q         Detach from session (container stays alive)
+    Ctrl+b         Tab mode
+    Alt+n          New pane
+    Alt+[ / Alt+]  Switch panes
+USAGE
+}
+
+build_image() {
+    echo "Building overlord image from ${OVERLORD_DIR}..."
+    local build_args=()
+    build_args+=(--build-arg "USER_ID=$(id -u)")
+    build_args+=(--build-arg "GROUP_ID=$(id -g)")
+    if [[ -S /var/run/docker.sock ]]; then
+        local docker_gid
+        docker_gid=$(stat -f '%g' /var/run/docker.sock 2>/dev/null || stat -c '%g' /var/run/docker.sock 2>/dev/null || echo "999")
+        build_args+=(--build-arg "DOCKER_GID=${docker_gid}")
+    fi
+    docker build "${build_args[@]}" -t "${IMAGE_NAME}" "${OVERLORD_DIR}"
+}
+
+ensure_image() {
+    if ! docker image inspect "${IMAGE_NAME}" &>/dev/null; then
+        build_image
+    fi
+}
+
+container_state() {
+    local state
+    state=$(docker inspect --format '{{.State.Status}}' "${CONTAINER_NAME}" 2>/dev/null) || true
+    echo "${state:-missing}"
+}
+
+# --- Argument parsing ---
+
+FORCE_BUILD=false
+RESET=false
+RESET_HARD=false
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --build)      FORCE_BUILD=true; shift ;;
+        --reset)      RESET=true; shift ;;
+        --reset-hard) RESET_HARD=true; shift ;;
+        --help|-h) show_help; exit 0 ;;
+        --*)       echo "Warning: unknown option '$1'" >&2; shift ;;
+        *)         echo "Error: unexpected argument '$1'" >&2; exit 1 ;;
+    esac
+done
+
+# --- Require jq ---
+
+if ! command -v jq &>/dev/null; then
+    echo "Error: jq is required but not installed." >&2
+    echo "  brew install jq  (macOS)" >&2
+    echo "  apt install jq   (Debian/Ubuntu)" >&2
+    exit 1
+fi
+
+# --- Validate config ---
+
+validate_config() {
+    local cfg="${PROVIDERS_FILE}"
+
+    # default must reference a valid model alias
+    local default_alias
+    default_alias=$(jq -r '.default // empty' "${cfg}")
+    if [[ -z "${default_alias}" ]]; then
+        echo "Error: 'default' not set in ${cfg}" >&2
+        exit 1
+    fi
+    if ! jq -e ".models.\"${default_alias}\"" "${cfg}" &>/dev/null; then
+        echo "Error: default '${default_alias}' does not reference a valid model in ${cfg}" >&2
+        exit 1
+    fi
+
+    # every model must have an id and reference a valid provider
+    local invalid
+    invalid=$(jq -r '
+        .models | to_entries[] |
+        select(.value.id == null or .value.id == "") |
+        .key' "${cfg}")
+    if [[ -n "${invalid}" ]]; then
+        echo "Error: model(s) missing 'id' field: ${invalid}" >&2
+        exit 1
+    fi
+    invalid=$(jq -r '
+        . as $c |
+        .models | to_entries[] |
+        select($c.providers[.value.provider] == null) |
+        "\(.key) -> \(.value.provider)"' "${cfg}")
+    if [[ -n "${invalid}" ]]; then
+        echo "Error: model(s) reference unknown provider: ${invalid}" >&2
+        exit 1
+    fi
+
+    # agent/category overrides must reference valid model aliases (if model specified)
+    # Supports both string values and object values with optional .model field
+    invalid=$(jq -r '
+        . as $c |
+        (.agents // {}) | to_entries[] |
+        (.value | if type == "string" then . elif .model then .model else null end) as $alias |
+        select($alias != null and $c.models[$alias] == null) |
+        "\(.key) -> \($alias)"' "${cfg}")
+    if [[ -n "${invalid}" ]]; then
+        echo "Error: agent override(s) reference unknown model: ${invalid}" >&2
+        exit 1
+    fi
+    invalid=$(jq -r '
+        . as $c |
+        (.categories // {}) | to_entries[] |
+        (.value | if type == "string" then . elif .model then .model else null end) as $alias |
+        select($alias != null and $c.models[$alias] == null) |
+        "\(.key) -> \($alias)"' "${cfg}")
+    if [[ -n "${invalid}" ]]; then
+        echo "Error: category override(s) reference unknown model: ${invalid}" >&2
+        exit 1
+    fi
+}
+
+validate_config
+
+# --- Build ---
+
+if [[ "${FORCE_BUILD}" == "true" ]]; then
+    build_image
+else
+    ensure_image
+fi
+
+# --- Reset ---
+
+if [[ "${RESET_HARD}" == "true" ]]; then
+    echo "Removing container ${CONTAINER_NAME}..."
+    docker rm -f "${CONTAINER_NAME}" 2>/dev/null || true
+elif [[ "${RESET}" == "true" ]]; then
+    # Light reset: kill zellij session but keep container
+    if [[ "$(container_state)" == "running" ]]; then
+        echo "Restarting zellij session..."
+        docker exec "${CONTAINER_NAME}" zellij delete-session "${ZELLIJ_SESSION}" --force &>/dev/null || true
+    fi
+fi
+
+# --- Env vars ---
+
+EXEC_ENV=()
+
+pass_env() {
+    local var="$1"
+    if [[ -n "${!var:-}" ]]; then
+        EXEC_ENV+=(-e "${var}=${!var}")
+    fi
+}
+
+# Terminal
+EXEC_ENV+=(-e "TERM=${TERM:-xterm-256color}")
+pass_env COLORTERM
+pass_env TERM_PROGRAM
+pass_env TERM_PROGRAM_VERSION
+pass_env LANG
+pass_env LC_ALL
+
+# Common credentials (always forwarded)
+pass_env CONTEXT7_API_KEY
+pass_env OPENAI_API_KEY
+pass_env ANTHROPIC_API_KEY
+pass_env ANTHROPIC_MODEL
+
+# --- Collect env vars from all referenced providers ---
+
+# Find every provider actually used by a model alias, then union their env lists.
+PROVIDER_ENV_VARS=$(jq -r '
+    . as $c |
+    [.models[].provider] | unique | map($c.providers[.].env // []) | add | unique | .[]
+' "${PROVIDERS_FILE}")
+for var in ${PROVIDER_ENV_VARS}; do
+    pass_env "${var}"
+done
+
+# --- Generate configs ---
+
+# oh-my-opencode.json: per-agent and per-category model assignments.
+# For oh-my-opencode, use omo_id if set, otherwise auto-derive from id by
+# stripping cross-region prefix (global.) and throughput tier (:max/:min).
+# Supports both string values (model alias) and object values (model + reasoning fields).
+GENERATED_OMO_JSON=$(jq \
+    --argjson allAgents "${ALL_AGENTS}" \
+    --argjson allCats "${ALL_CATEGORIES}" '
+    . as $c |
+    def omo_id(alias):
+        $c.models[alias] |
+        if .omo_id then .omo_id
+        else .id | gsub("/global\\."; "/") | gsub(":(max|min)$"; "")
+        end;
+    # Resolve a category entry: string → {"model":...}, object → resolve model + extras
+    def resolve_cat(name):
+        ($c.categories // {})[name] as $val |
+        if $val == null then {"model": omo_id($c.default)}
+        elif ($val | type) == "string" then {"model": omo_id($val)}
+        else
+            (($val.model // $c.default) as $alias |
+             {"model": omo_id($alias)} + ($val | del(.model)))
+        end;
+    # Resolve an agent entry: string → {"model":...}, object → resolve model + extras
+    def resolve_agent(name):
+        ($c.agents // {})[name] as $val |
+        if $val == null then {"model": omo_id($c.default)}
+        elif ($val | type) == "string" then {"model": omo_id($val)}
+        else
+            (if $val.model then {"model": omo_id($val.model)} else {} end) +
+            ($val | del(.model))
+        end;
+    {
+        "$schema": "https://raw.githubusercontent.com/code-yeongyu/oh-my-opencode/master/assets/oh-my-opencode.schema.json",
+        "sisyphus_agent": {
+            "planner_enabled": true,
+            "replace_plan": true
+        },
+        "categories": ($allCats | map({(.): resolve_cat(.)}) | add),
+        "agents": ($allAgents | map({(.): resolve_agent(.)}) | add)
+    }
+' "${PROVIDERS_FILE}")
+
+# opencode.json: merge base config with provider definitions, model registrations,
+# and per-model options.  Each model is registered under its provider so opencode
+# can discover it.
+GENERATED_OPENCODE_JSON=$(jq --slurpfile base "${BASE_CONFIG}" '
+    . as $c |
+    # Build provider object: start with each provider opencode config (npm/name),
+    # then add all models grouped under their provider.
+    [
+        $c.providers | to_entries[] | select(.value.opencode != null) |
+        .key as $prov |
+        .value.opencode * {
+            "models": (
+                [ $c.models | to_entries[] | select(.value.provider == $prov) |
+                  # Strip "provider/" prefix to get bare model name
+                  (.value.id | split("/")[1:] | join("/")) as $bare |
+                  # Build model entry: name + options (if present)
+                  { ($bare): (
+                      (if .value.name then {"name": .value.name} else {} end) *
+                      (if .value.options then {"options": .value.options} else {} end)
+                  )}
+                ] | add // {}
+            )
+        } | {($prov): .}
+    ] | add // {} |
+    # Default model id
+    $c.models[$c.default].id as $model |
+    # Merge with base config
+    $base[0] * {"provider": .} | .model = $model
+' "${PROVIDERS_FILE}")
+
+# --- Container lifecycle ---
+
+STATE=$(container_state)
+
+ensure_running() {
+    case "${STATE}" in
+        missing)
+            echo "Creating container ${CONTAINER_NAME}..."
+
+            DOCKER_ARGS=(
+                -d
+                --name "${CONTAINER_NAME}"
+                --security-opt label=disable
+                -v "$(pwd):/workspace:rw"
+                -v /var/run/docker.sock:/var/run/docker.sock
+                -v "${VOL_OPENCODE_DATA}:/home/overlord/.local/share/opencode"
+                -v "${VOL_ZSH_DATA}:/home/overlord/.zsh_data"
+                "${EXEC_ENV[@]}"
+            )
+
+            if [[ -f "${HOME}/.gitconfig" ]]; then
+                DOCKER_ARGS+=(-v "${HOME}/.gitconfig:/home/overlord/.gitconfig:ro")
+            fi
+            if [[ -d "${HOME}/.ssh" ]]; then
+                DOCKER_ARGS+=(-v "${HOME}/.ssh:/home/overlord/.ssh:ro")
+            fi
+
+            docker run "${DOCKER_ARGS[@]}" "${IMAGE_NAME}" sleep infinity >/dev/null
+            # Fix ownership on named volumes (created as root by Docker)
+            docker exec "${CONTAINER_NAME}" chown -R overlord:overlord \
+                /home/overlord/.local/share/opencode /home/overlord/.zsh_data
+            ;;
+
+        exited)
+            echo "Starting container ${CONTAINER_NAME}..."
+            docker start "${CONTAINER_NAME}" >/dev/null
+            ;;
+
+        running)
+            ;;
+
+        *)
+            echo "Error: Container ${CONTAINER_NAME} is in unexpected state: ${STATE}" >&2
+            echo "Try: overlord --reset" >&2
+            exit 1
+            ;;
+    esac
+}
+
+ensure_running
+
+# Detect which user the entrypoint chose (overlord or root)
+EXEC_USER=$(docker exec "${CONTAINER_NAME}" cat /run/.overlord-exec-user 2>/dev/null || echo "overlord")
+if [[ "${EXEC_USER}" == "root" ]]; then
+    EXEC_ENV+=(-e "HOME=/home/overlord" -e "USER=overlord")
+fi
+
+# --- Inject configs into container ---
+
+# opencode.json: write to global config dir AND pass via OPENCODE_CONFIG_CONTENT
+# env var (highest precedence, overrides any project-level opencode.json).
+printf '%s\n' "${GENERATED_OPENCODE_JSON}" | \
+    docker exec -i "${CONTAINER_NAME}" sh -c 'cat > /home/overlord/.config/opencode/opencode.json'
+# OPENCODE_CONFIG_CONTENT has the highest precedence in opencode's config
+# chain, overriding any project-level opencode.json in the workspace.
+# Compact JSON avoids newline issues in env vars.
+OPENCODE_COMPACT=$(echo "${GENERATED_OPENCODE_JSON}" | jq -c .)
+EXEC_ENV+=(-e "OPENCODE_CONFIG_CONTENT=${OPENCODE_COMPACT}")
+# Persist the env var for subsequent panes/shells inside the container
+printf 'export OPENCODE_CONFIG_CONTENT=%q\n' "${OPENCODE_COMPACT}" | \
+    docker exec -i "${CONTAINER_NAME}" sh -c 'cat > /home/overlord/.overlord-env'
+docker exec "${CONTAINER_NAME}" chown overlord:overlord /home/overlord/.overlord-env
+# Ensure shell rc files source the env file so new panes inherit it
+docker exec "${CONTAINER_NAME}" sh -c \
+    'grep -q overlord-env /home/overlord/.zshrc 2>/dev/null || echo "[ -f ~/.overlord-env ] && . ~/.overlord-env" >> /home/overlord/.zshrc'
+docker exec "${CONTAINER_NAME}" sh -c \
+    'grep -q overlord-env /home/overlord/.bashrc 2>/dev/null || echo "[ -f ~/.overlord-env ] && . ~/.overlord-env" >> /home/overlord/.bashrc'
+# Point zsh history at the persistent volume so it survives --reset-hard
+docker exec "${CONTAINER_NAME}" sh -c \
+    'grep -q zsh_data /home/overlord/.zshrc 2>/dev/null || echo "export HISTFILE=~/.zsh_data/.zsh_history" >> /home/overlord/.zshrc'
+
+# oh-my-opencode config: write to user-level ~/.config/opencode/ only.
+# Both .json and .jsonc extensions (oh-my-opencode checks .jsonc first).
+OMO_DIR=/home/overlord/.config/opencode
+for ext in json jsonc; do
+    printf '%s\n' "${GENERATED_OMO_JSON}" | \
+        docker exec -i "${CONTAINER_NAME}" sh -c "cat > ${OMO_DIR}/oh-my-opencode.${ext}"
+done
+docker exec "${CONTAINER_NAME}" \
+    chown overlord:overlord "${OMO_DIR}/oh-my-opencode.json" "${OMO_DIR}/oh-my-opencode.jsonc"
+
+# Inject zellij config (overwrite any auto-generated config)
+docker cp "${OVERLORD_DIR}/config/zellij-config.kdl" \
+    "${CONTAINER_NAME}:/home/overlord/.config/zellij/config.kdl"
+
+# --- Fix cross-platform native modules ---
+# When node_modules was created on a different OS (e.g., macOS), npm's optional
+# platform-specific dependencies (rollup, esbuild, swc, etc.) will be missing
+# for Linux. Detect the mismatch and run npm install to add them.
+docker exec -u "${EXEC_USER}" "${CONTAINER_NAME}" sh -c '
+    if [ -d /workspace/node_modules ] && [ -f /workspace/package.json ]; then
+        MARKER=/workspace/node_modules/.overlord-platform
+        CURRENT="linux-$(uname -m)"
+        if [ ! -f "$MARKER" ] || [ "$(cat "$MARKER" 2>/dev/null)" != "$CURRENT" ]; then
+            echo "==> Fixing native dependencies for ${CURRENT}..."
+            cd /workspace && npm install --no-audit --no-fund 2>&1 | tail -5
+            echo "$CURRENT" > "$MARKER"
+            echo "==> Done."
+        fi
+    fi
+'
+
+# --- Zellij session ---
+# One session per workspace directory.
+# Attach if exists, create if not.
+
+docker exec -it -u "${EXEC_USER}" "${EXEC_ENV[@]}" "${CONTAINER_NAME}" \
+    zellij attach "${ZELLIJ_SESSION}" --create

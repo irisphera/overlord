@@ -43,18 +43,11 @@
       "provider": "amazon-bedrock",
       "id": "amazon-bedrock/global.anthropic.claude-haiku-4-5-20251001-v1:0",
       "name": "Claude Haiku 4.5"
-    },
-    "gpt": {
-      "provider": "azure",
-      "id": "azure/gpt-5.2-codex",
-      "name": "GPT 5.2 Codex",
-      "options": { "serviceTier": "priority" }
     }
   },
   "default": "opus",
   "agents": {},
   "categories": {
-    "quick": "haiku",
-    "ultrabrain": "gpt"
+    "quick": "haiku"
   }
 }

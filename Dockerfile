@@ -29,6 +29,7 @@ RUN apt-get update && apt-get install -y \
     python3-pylsp \
     shellcheck \
     shfmt \
+    tigervnc-tools \
     && rm -rf /var/lib/apt/lists/*
 
 # uv - fast Python package manager
@@ -62,18 +63,24 @@ COPY --chown=gitpod:gitpod config/oh-my-opencode.json /home/gitpod/.config/openc
 COPY --chown=gitpod:gitpod config/zellij-config.kdl /home/gitpod/.config/zellij/config.kdl
 RUN cd /home/gitpod/.config/opencode && bun init -y > /dev/null 2>&1 && bun add oh-my-opencode@latest
 
+# VNC password (default: overlord) + xstartup for XFCE desktop
+RUN mkdir -p /home/gitpod/.vnc \
+    && echo "overlord" | tigervncpasswd -f > /home/gitpod/.vnc/passwd \
+    && chmod 600 /home/gitpod/.vnc/passwd \
+    && printf '#!/bin/sh\nexec startxfce4\n' > /home/gitpod/.vnc/xstartup \
+    && chmod +x /home/gitpod/.vnc/xstartup
+
 RUN git config --global --add safe.directory /workspace
 
 WORKDIR /workspace
 
 USER root
 
-COPY scripts/install-java.sh scripts/install-typescript.sh scripts/install-php.sh /usr/local/bin/
 COPY scripts/start-vnc.sh /usr/local/bin/start-vnc.sh
-RUN chmod +x /usr/local/bin/install-java.sh /usr/local/bin/install-typescript.sh /usr/local/bin/install-php.sh /usr/local/bin/start-vnc.sh
+RUN chmod 755 /usr/local/bin/start-vnc.sh
 
 COPY config/entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
+RUN chmod 755 /usr/local/bin/entrypoint.sh
 
 EXPOSE 6080
 

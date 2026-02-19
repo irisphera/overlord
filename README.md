@@ -124,11 +124,16 @@ overlord --gui --reset-hard      # Fresh start with GUI
 
 ### Accessing the Desktop
 
-Once started with `--gui`, open your browser:
+Once started with `--gui`, the assigned port will be displayed:
 
 ```
-http://localhost:6080/vnc.html
+Selected port 6080 for noVNC
+Remote Desktop enabled!
+  URL: http://localhost:6080/vnc.html
+  Password: overlord
 ```
+
+The port is automatically selected from range 6080-6180, allowing multiple containers to run simultaneously on different ports.
 
 Default VNC password: `overlord`
 
@@ -166,6 +171,7 @@ sudo apt-get install -y gimp       # Image editor
 - VNC runs in background; terminal remains primary interface
 - Container needs `--shm-size=256m` (auto-set with `--gui`)
 - GUI state persists until `--reset-hard`
+- **Multiple containers**: Each `--gui` instance gets a unique port (6080-6180 range)
 
 ## Model Configuration
 

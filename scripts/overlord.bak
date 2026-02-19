@@ -32,7 +32,7 @@ OPTIONS:
     --build            Force rebuild the Docker image
     --reset            Restart zellij session (keeps container state)
     --reset-hard       Destroy container and start fresh
-    --gui              Enable Remote Desktop (noVNC on auto-selected port)
+    --gui              Enable Remote Desktop (noVNC on port 6080)
     --help             Show this help
 
 EXAMPLES:
@@ -54,7 +54,7 @@ LIFECYCLE:
     in config/providers.json.
 
 REMOTE DESKTOP:
-    When --gui is enabled, the port will be displayed when container starts
+    When --gui is enabled, access the desktop at http://localhost:6080/vnc.html
     Default VNC password: overlord
     You can install GUI applications (Firefox, VS Code, etc.) inside the container.
 
@@ -343,12 +343,6 @@ ensure_running() {
             )
 
             if [[ "${ENABLE_GUI}" == "true" ]]; then
-                NOVNC_PORT=$(find_free_port 6080 6180)
-                if [[ -z "${NOVNC_PORT}" ]]; then
-                    echo "Error: Could not find free port in range 6080-6180" >&2
-                    exit 1
-                fi
-                echo "Selected port ${NOVNC_PORT} for noVNC"
                 DOCKER_ARGS+=(-p "${NOVNC_PORT}:6080")
                 DOCKER_ARGS+=(-e "OVERLORD_GUI=1")
                 DOCKER_ARGS+=(-e "NOVNC_PORT=6080")
@@ -365,6 +359,14 @@ ensure_running() {
             docker run "${DOCKER_ARGS[@]}" "${IMAGE_NAME}" sleep infinity >/dev/null
             docker exec "${CONTAINER_NAME}" chown -R gitpod:gitpod \
                 /home/gitpod/.local/share/opencode /home/gitpod/.zsh_data 2>/dev/null || true
+            
+            if [[ "${ENABLE_GUI}" == "true" ]]; then
+                echo ""
+                echo "Remote Desktop enabled!"
+                echo "  URL: http://localhost:${NOVNC_PORT}/vnc.html"
+                echo "  Password: overlord"
+                echo ""
+            fi
             ;;
 
         exited)

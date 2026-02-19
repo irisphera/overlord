@@ -31,6 +31,8 @@ This environment comes **fully loaded** with [oh-my-opencode](https://github.com
 - **Multi-provider**: Mix providers (Bedrock, Azure, etc.) in a single session
 - **Per-agent control**: Assign different models to different agents and categories
 - **Secure**: Credentials from host environment, never baked into images
+- **Extensible**: Full apt repositories (Debian Bookworm) — install LSPs, compilers, anything
+- **Remote Desktop**: Browser-based GUI access via noVNC (XFCE desktop)
 
 ## Installation
 
@@ -58,6 +60,7 @@ OPTIONS:
     --build            Force rebuild the Docker image
     --reset            Restart zellij session (keeps container state)
     --reset-hard       Destroy container and start fresh
+    --gui              Enable Remote Desktop (noVNC on port 6080)
     --help             Show help
 ```
 
@@ -69,6 +72,8 @@ overlord --build                 # Rebuild image, then start
 overlord --reset                 # Restart zellij (picks up config changes)
 overlord --reset-hard            # Destroy container, start fresh
 overlord --build --reset-hard    # Full clean rebuild
+overlord --gui                   # Start with Remote Desktop enabled
+overlord --gui --build           # Rebuild and start with GUI
 ```
 
 ### Container lifecycle
@@ -86,8 +91,8 @@ overlord --reset-hard     # Wipe container, start from clean image
 Anything installed inside the container persists until `--reset-hard`:
 
 ```bash
-# Inside a shell pane:
-apt-get update && apt-get install -y python3 openjdk-17-jdk
+# Inside a shell pane (sudo available without password):
+sudo apt-get update && sudo apt-get install -y python3 openjdk-17-jdk clangd rust-analyzer
 pip install pytest
 # These survive container restarts and reattaches
 ```
@@ -105,6 +110,62 @@ The following data is stored in named Docker volumes and survives even `--reset-
 | `Alt+n`           | New pane                                    |
 | `Alt+[` / `Alt+]` | Switch panes                                |
 | `Alt+f`           | Toggle floating pane                        |
+
+## Remote Desktop (GUI Access)
+
+Overlord includes browser-based remote desktop access via noVNC. This lets you run GUI applications inside the container.
+
+### Enabling Remote Desktop
+
+```bash
+overlord --gui                   # Start with GUI enabled
+overlord --gui --reset-hard      # Fresh start with GUI
+```
+
+### Accessing the Desktop
+
+Once started with `--gui`, open your browser:
+
+```
+http://localhost:6080/vnc.html
+```
+
+Default VNC password: `overlord`
+
+### What's Included
+
+| Component | Description |
+|-----------|-------------|
+| **XFCE** | Lightweight desktop environment |
+| **TigerVNC** | VNC server |
+| **noVNC** | Browser-based VNC client |
+| **Firefox ESR** | Web browser |
+| **Mousepad** | Text editor |
+
+### Installing GUI Applications
+
+```bash
+# Inside the container:
+sudo apt-get update
+sudo apt-get install -y code       # VS Code
+sudo apt-get install -y chromium   # Chromium browser
+sudo apt-get install -y gimp       # Image editor
+```
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VNC_RESOLUTION` | `1920x1080` | Desktop resolution |
+| `VNC_DEPTH` | `24` | Color depth |
+| `NOVNC_PORT` | `6080` | noVNC web port |
+
+### Notes
+
+- GUI is **optional** — only starts when `--gui` is passed
+- VNC runs in background; terminal remains primary interface
+- Container needs `--shm-size=256m` (auto-set with `--gui`)
+- GUI state persists until `--reset-hard`
 
 ## Model Configuration
 
@@ -266,17 +327,18 @@ See the [oh-my-opencode documentation](https://github.com/code-yeongyu/oh-my-ope
 
 ```
 overlord/
-├── Dockerfile              # Lean container (node + bun + opencode + zellij)
+├── Dockerfile              # Extensible container (Debian + XFCE + VNC + dev tools)
 ├── README.md
 ├── config/
 │   ├── providers.json      # Providers, models, and agent/category assignments
 │   ├── opencode.json       # Base opencode config (plugins, MCP servers)
 │   ├── oh-my-opencode.json # Oh My OpenCode plugin configuration
-│   ├── entrypoint.sh       # Container entrypoint (UID/GID fixup)
+│   ├── entrypoint.sh       # Container entrypoint (UID/GID fixup, VNC startup)
 │   ├── zellij-config.kdl   # Zellij keybindings
 │   └── zellij-opencode.kdl # Zellij layout
 └── scripts/
-    └── overlord            # Launcher
+    ├── overlord            # Launcher
+    └── start-vnc.sh        # VNC/noVNC startup script
 ```
 
 ## Security Model
@@ -346,13 +408,13 @@ The launcher reads `providers.json` and forwards only the env vars needed by you
 **Permission denied in container:**
 
 ```bash
-overlord --build --reset
+overlord --build --reset-hard
 ```
 
 **Stale container after image rebuild:**
 
 ```bash
-overlord --reset
+overlord --reset-hard
 ```
 
 **Container can't reach API:**
@@ -364,6 +426,19 @@ The launcher validates `config/providers.json` on startup. Check that:
 - `default` references a model alias that exists in `models`
 - All `agents`/`categories` values reference valid model aliases
 - All models reference valid providers with an `id` field
+
+**Remote Desktop not accessible:**
+- Ensure you started with `--gui` flag
+- Check if port 6080 is available: `lsof -i :6080`
+- View VNC logs: `docker exec overlord-<project> cat /tmp/vnc.log`
+
+**GUI applications crash or glitch:**
+- Increase shared memory: container runs with `--shm-size=256m` by default
+- For heavy apps, recreate container with larger shm
+
+**Installing packages fails:**
+- Run `sudo apt-get update` first
+- The container has full Debian apt repositories available
 
 ## License
 

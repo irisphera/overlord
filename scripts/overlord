@@ -32,6 +32,7 @@ OPTIONS:
     --build            Force rebuild the Docker image
     --reset            Restart zellij session (keeps container state)
     --reset-hard       Destroy container and start fresh
+    --gui              Enable Remote Desktop (noVNC on port 6080)
     --help             Show this help
 
 EXAMPLES:
@@ -39,6 +40,8 @@ EXAMPLES:
     overlord --build                 # Rebuild image, then start
     overlord --reset                 # Restart zellij (picks up config changes)
     overlord --reset-hard            # Destroy container, start fresh
+    overlord --gui                   # Start with Remote Desktop enabled
+    overlord --gui --build           # Rebuild and start with GUI
 
 LIFECYCLE:
     First run creates a persistent container per workspace directory.
@@ -50,6 +53,11 @@ LIFECYCLE:
     Models, providers, and per-agent/category assignments are configured
     in config/providers.json.
 
+REMOTE DESKTOP:
+    When --gui is enabled, access the desktop at http://localhost:6080/vnc.html
+    Default VNC password: overlord
+    You can install GUI applications (Firefox, VS Code, etc.) inside the container.
+
 ZELLIJ:
     Ctrl+q         Detach from session (container stays alive)
     Ctrl+b         Tab mode
@@ -60,15 +68,7 @@ USAGE
 
 build_image() {
     echo "Building overlord image from ${OVERLORD_DIR}..."
-    local build_args=()
-    build_args+=(--build-arg "USER_ID=$(id -u)")
-    build_args+=(--build-arg "GROUP_ID=$(id -g)")
-    if [[ -S /var/run/docker.sock ]]; then
-        local docker_gid
-        docker_gid=$(stat -f '%g' /var/run/docker.sock 2>/dev/null || stat -c '%g' /var/run/docker.sock 2>/dev/null || echo "999")
-        build_args+=(--build-arg "DOCKER_GID=${docker_gid}")
-    fi
-    docker build "${build_args[@]}" -t "${IMAGE_NAME}" "${OVERLORD_DIR}"
+    docker build --platform linux/amd64 -t "${IMAGE_NAME}" "${OVERLORD_DIR}"
 }
 
 ensure_image() {
@@ -88,12 +88,14 @@ container_state() {
 FORCE_BUILD=false
 RESET=false
 RESET_HARD=false
+ENABLE_GUI=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --build)      FORCE_BUILD=true; shift ;;
         --reset)      RESET=true; shift ;;
         --reset-hard) RESET_HARD=true; shift ;;
+        --gui)        ENABLE_GUI=true; shift ;;
         --help|-h) show_help; exit 0 ;;
         --*)       echo "Warning: unknown option '$1'" >&2; shift ;;
         *)         echo "Error: unexpected argument '$1'" >&2; exit 1 ;;
@@ -307,6 +309,8 @@ GENERATED_OPENCODE_JSON=$(jq --slurpfile base "${BASE_CONFIG}" '
 
 STATE=$(container_state)
 
+NOVNC_PORT=6080
+
 ensure_running() {
     case "${STATE}" in
         missing)
@@ -314,26 +318,41 @@ ensure_running() {
 
             DOCKER_ARGS=(
                 -d
+                --platform linux/amd64
                 --name "${CONTAINER_NAME}"
                 --security-opt label=disable
                 -v "$(pwd):/workspace:rw"
                 -v /var/run/docker.sock:/var/run/docker.sock
-                -v "${VOL_OPENCODE_DATA}:/home/overlord/.local/share/opencode"
-                -v "${VOL_ZSH_DATA}:/home/overlord/.zsh_data"
+                -v "${VOL_OPENCODE_DATA}:/home/gitpod/.local/share/opencode"
+                -v "${VOL_ZSH_DATA}:/home/gitpod/.zsh_data"
                 "${EXEC_ENV[@]}"
             )
 
+            if [[ "${ENABLE_GUI}" == "true" ]]; then
+                DOCKER_ARGS+=(-p "${NOVNC_PORT}:6080")
+                DOCKER_ARGS+=(-e "OVERLORD_GUI=1")
+                DOCKER_ARGS+=(-e "NOVNC_PORT=6080")
+                DOCKER_ARGS+=(--shm-size=256m)
+            fi
+
             if [[ -f "${HOME}/.gitconfig" ]]; then
-                DOCKER_ARGS+=(-v "${HOME}/.gitconfig:/home/overlord/.gitconfig:ro")
+                DOCKER_ARGS+=(-v "${HOME}/.gitconfig:/home/gitpod/.gitconfig:ro")
             fi
             if [[ -d "${HOME}/.ssh" ]]; then
-                DOCKER_ARGS+=(-v "${HOME}/.ssh:/home/overlord/.ssh:ro")
+                DOCKER_ARGS+=(-v "${HOME}/.ssh:/home/gitpod/.ssh:ro")
             fi
 
             docker run "${DOCKER_ARGS[@]}" "${IMAGE_NAME}" sleep infinity >/dev/null
-            # Fix ownership on named volumes (created as root by Docker)
-            docker exec "${CONTAINER_NAME}" chown -R overlord:overlord \
-                /home/overlord/.local/share/opencode /home/overlord/.zsh_data
+            docker exec "${CONTAINER_NAME}" chown -R gitpod:gitpod \
+                /home/gitpod/.local/share/opencode /home/gitpod/.zsh_data 2>/dev/null || true
+            
+            if [[ "${ENABLE_GUI}" == "true" ]]; then
+                echo ""
+                echo "Remote Desktop enabled!"
+                echo "  URL: http://localhost:${NOVNC_PORT}/vnc.html"
+                echo "  Password: overlord"
+                echo ""
+            fi
             ;;
 
         exited)
@@ -354,55 +373,35 @@ ensure_running() {
 
 ensure_running
 
-# Detect which user the entrypoint chose (overlord or root)
-EXEC_USER=$(docker exec "${CONTAINER_NAME}" cat /run/.overlord-exec-user 2>/dev/null || echo "overlord")
-if [[ "${EXEC_USER}" == "root" ]]; then
-    EXEC_ENV+=(-e "HOME=/home/overlord" -e "USER=overlord")
-fi
+EXEC_USER="gitpod"
 
 # --- Inject configs into container ---
 
-# opencode.json: write to global config dir AND pass via OPENCODE_CONFIG_CONTENT
-# env var (highest precedence, overrides any project-level opencode.json).
 printf '%s\n' "${GENERATED_OPENCODE_JSON}" | \
-    docker exec -i "${CONTAINER_NAME}" sh -c 'cat > /home/overlord/.config/opencode/opencode.json'
-# OPENCODE_CONFIG_CONTENT has the highest precedence in opencode's config
-# chain, overriding any project-level opencode.json in the workspace.
-# Compact JSON avoids newline issues in env vars.
+    docker exec -i "${CONTAINER_NAME}" sh -c 'cat > /home/gitpod/.config/opencode/opencode.json'
 OPENCODE_COMPACT=$(echo "${GENERATED_OPENCODE_JSON}" | jq -c .)
 EXEC_ENV+=(-e "OPENCODE_CONFIG_CONTENT=${OPENCODE_COMPACT}")
-# Persist the env var for subsequent panes/shells inside the container
 printf 'export OPENCODE_CONFIG_CONTENT=%q\n' "${OPENCODE_COMPACT}" | \
-    docker exec -i "${CONTAINER_NAME}" sh -c 'cat > /home/overlord/.overlord-env'
-docker exec "${CONTAINER_NAME}" chown overlord:overlord /home/overlord/.overlord-env
-# Ensure shell rc files source the env file so new panes inherit it
+    docker exec -i "${CONTAINER_NAME}" sh -c 'cat > /home/gitpod/.overlord-env'
+docker exec "${CONTAINER_NAME}" chown gitpod:gitpod /home/gitpod/.overlord-env
 docker exec "${CONTAINER_NAME}" sh -c \
-    'grep -q overlord-env /home/overlord/.zshrc 2>/dev/null || echo "[ -f ~/.overlord-env ] && . ~/.overlord-env" >> /home/overlord/.zshrc'
+    'grep -q overlord-env /home/gitpod/.bashrc 2>/dev/null || echo "[ -f ~/.overlord-env ] && . ~/.overlord-env" >> /home/gitpod/.bashrc'
 docker exec "${CONTAINER_NAME}" sh -c \
-    'grep -q overlord-env /home/overlord/.bashrc 2>/dev/null || echo "[ -f ~/.overlord-env ] && . ~/.overlord-env" >> /home/overlord/.bashrc'
-# Point zsh history at the persistent volume so it survives --reset-hard
-docker exec "${CONTAINER_NAME}" sh -c \
-    'grep -q zsh_data /home/overlord/.zshrc 2>/dev/null || echo "export HISTFILE=~/.zsh_data/.zsh_history" >> /home/overlord/.zshrc'
+    'grep -q zsh_data /home/gitpod/.bashrc 2>/dev/null || echo "export HISTFILE=~/.zsh_data/.zsh_history" >> /home/gitpod/.bashrc'
 
-# oh-my-opencode config: write to user-level ~/.config/opencode/ only.
-# Both .json and .jsonc extensions (oh-my-opencode checks .jsonc first).
-OMO_DIR=/home/overlord/.config/opencode
+OMO_DIR=/home/gitpod/.config/opencode
 for ext in json jsonc; do
     printf '%s\n' "${GENERATED_OMO_JSON}" | \
         docker exec -i "${CONTAINER_NAME}" sh -c "cat > ${OMO_DIR}/oh-my-opencode.${ext}"
 done
 docker exec "${CONTAINER_NAME}" \
-    chown overlord:overlord "${OMO_DIR}/oh-my-opencode.json" "${OMO_DIR}/oh-my-opencode.jsonc"
+    chown gitpod:gitpod "${OMO_DIR}/oh-my-opencode.json" "${OMO_DIR}/oh-my-opencode.jsonc"
 
-# Inject zellij config (overwrite any auto-generated config)
 docker cp "${OVERLORD_DIR}/config/zellij-config.kdl" \
-    "${CONTAINER_NAME}:/home/overlord/.config/zellij/config.kdl"
+    "${CONTAINER_NAME}:/home/gitpod/.config/zellij/config.kdl"
 
 # --- Fix cross-platform native modules ---
-# When node_modules was created on a different OS (e.g., macOS), npm's optional
-# platform-specific dependencies (rollup, esbuild, swc, etc.) will be missing
-# for Linux. Detect the mismatch and run npm install to add them.
-docker exec -u "${EXEC_USER}" "${CONTAINER_NAME}" sh -c '
+docker exec -u "${EXEC_USER}" "${CONTAINER_NAME}" bash -c '
     if [ -d /workspace/node_modules ] && [ -f /workspace/package.json ]; then
         MARKER=/workspace/node_modules/.overlord-platform
         CURRENT="linux-$(uname -m)"
@@ -416,8 +415,5 @@ docker exec -u "${EXEC_USER}" "${CONTAINER_NAME}" sh -c '
 '
 
 # --- Zellij session ---
-# One session per workspace directory.
-# Attach if exists, create if not.
-
 docker exec -it -u "${EXEC_USER}" "${EXEC_ENV[@]}" "${CONTAINER_NAME}" \
     zellij attach "${ZELLIJ_SESSION}" --create

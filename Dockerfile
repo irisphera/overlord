@@ -1,77 +1,66 @@
-# Overlord - Lean Dockerized OpenCode with zellij multiplexing
-# Provides isolated execution environment with multi-provider support
+# Overlord - Full-fat OpenCode with EVERYTHING
+# Base: gitpod/workspace-full-vnc (Node, Python, Java, PHP, Docker, VNC, etc.)
 
-FROM node:22-slim AS base
+FROM gitpod/workspace-full-vnc
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    git \
-    bash \
-    zsh \
-    neovim \
-    curl \
-    less \
-    openssh-client \
-    ca-certificates \
-    locales \
-    ncurses-base \
-    docker.io \
-    gosu \
-    && sed -i 's/^# *\(en_US.UTF-8\)/\1/' /etc/locale.gen \
-    && locale-gen \
+USER root
+
+# JDK 24 (latest GA) via Adoptium + Maven
+RUN curl -fsSL "https://api.adoptium.net/v3/binary/latest/24/ga/linux/x64/jdk/hotspot/normal/eclipse" -o /tmp/jdk.tar.gz \
+    && mkdir -p /opt/jdk-24 && tar xzf /tmp/jdk.tar.gz -C /opt/jdk-24 --strip-components=1 && rm /tmp/jdk.tar.gz \
+    && update-alternatives --install /usr/bin/java java /opt/jdk-24/bin/java 100 \
+    && update-alternatives --install /usr/bin/javac javac /opt/jdk-24/bin/javac 100 \
+    && apt-get update && apt-get install -y maven && rm -rf /var/lib/apt/lists/*
+
+# LSPs
+RUN npm install -g \
+    intelephense \
+    typescript-language-server \
+    typescript \
+    vscode-langservers-extracted \
+    @tailwindcss/language-server \
+    yaml-language-server \
+    dockerfile-language-server-nodejs \
+    bash-language-server
+
+# More LSPs + tools via apt
+RUN apt-get update && apt-get install -y \
+    clangd \
+    python3-pylsp \
+    shellcheck \
+    shfmt \
     && rm -rf /var/lib/apt/lists/*
 
-RUN git clone https://github.com/LazyVim/starter ~/.config/nvim
-RUN rm -rf ~/.config/nvim/.git
+# uv - fast Python package manager
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# zellij - terminal multiplexer (static musl binary)
+# zellij
 ARG ZELLIJ_VERSION=0.43.1
-RUN ARCH=$(dpkg --print-architecture) \
-    && case "${ARCH}" in \
-         amd64) ZELLIJ_ARCH="x86_64" ;; \
-         arm64) ZELLIJ_ARCH="aarch64" ;; \
-         *) echo "Unsupported arch: ${ARCH}" >&2; exit 1 ;; \
-       esac \
-    && curl -fsSL "https://github.com/zellij-org/zellij/releases/download/v${ZELLIJ_VERSION}/zellij-${ZELLIJ_ARCH}-unknown-linux-musl.tar.gz" \
-       | tar xz -C /usr/local/bin
+RUN curl -fsSL "https://github.com/zellij-org/zellij/releases/download/v${ZELLIJ_VERSION}/zellij-x86_64-unknown-linux-musl.tar.gz" \
+    | tar xz -C /usr/local/bin
 
-# bun - JavaScript runtime and package manager
+# bun
 COPY --from=oven/bun:latest /usr/local/bin/bun /usr/local/bin/bunx /usr/local/bin/
 
-ARG USER_ID=1000
-ARG GROUP_ID=1000
-ARG DOCKER_GID=999
-RUN groupadd -g ${GROUP_ID} overlord 2>/dev/null || groupadd overlord && \
-    useradd -m -u ${USER_ID} -g overlord -s /bin/zsh overlord 2>/dev/null || \
-    useradd -m -g overlord -s /bin/zsh overlord && \
-    groupadd -g ${DOCKER_GID} docker 2>/dev/null || true && \
-    usermod -aG docker overlord
+RUN mkdir -p /home/gitpod/.config/opencode /home/gitpod/.config/zellij/layouts /home/gitpod/.bun \
+    && chown -R gitpod:gitpod /home/gitpod/.config /home/gitpod/.bun
 
-RUN mkdir -p /home/overlord/.config/opencode /home/overlord/.config/zellij/layouts /home/overlord/.bun /home/overlord/.local/state /home/overlord/.local/share/opencode /workspace && \
-    chown -R overlord:overlord /home/overlord /workspace
+USER gitpod
 
-USER overlord
-WORKDIR /home/overlord
+ENV BUN_INSTALL=/home/gitpod/.bun
+ENV PATH="/home/gitpod/.bun/bin:/opt/jdk-24/bin:$PATH"
+ENV JAVA_HOME=/opt/jdk-24
 
-# oh-my-zsh
-RUN sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended \
-    && chmod 700 /home/overlord/.oh-my-zsh /home/overlord/.oh-my-zsh/cache /home/overlord/.oh-my-zsh/custom \
-    && sed -i '1i export ZSH_DISABLE_COMPFIX=true' /home/overlord/.zshrc
-
-ENV HOME=/home/overlord
-ENV BUN_INSTALL=/home/overlord/.bun
-ENV PATH="/home/overlord/.bun/bin:$PATH"
-ENV TERM=xterm-256color
-ENV LANG=en_US.UTF-8
-ENV LC_ALL=en_US.UTF-8
+RUN echo 'export JAVA_HOME=/opt/jdk-24' >> /home/gitpod/.bashrc \
+    && echo 'export PATH="/opt/jdk-24/bin:$PATH"' >> /home/gitpod/.bashrc
 
 RUN bun add -g opencode-ai@latest
 
-# Install oh-my-opencode plugin into opencode's config directory
-COPY --chown=overlord:overlord config/opencode.json /home/overlord/.config/opencode/opencode.json
-COPY --chown=overlord:overlord config/oh-my-opencode.json /home/overlord/.config/opencode/oh-my-opencode.json
-COPY --chown=overlord:overlord config/oh-my-opencode.json /home/overlord/.config/opencode/oh-my-opencode.jsonc
-COPY --chown=overlord:overlord config/zellij-config.kdl /home/overlord/.config/zellij/config.kdl
-RUN cd /home/overlord/.config/opencode && bun init -y > /dev/null 2>&1 && bun add oh-my-opencode@latest
+COPY --chown=gitpod:gitpod config/opencode.json /home/gitpod/.config/opencode/opencode.json
+COPY --chown=gitpod:gitpod config/oh-my-opencode.json /home/gitpod/.config/opencode/oh-my-opencode.json
+COPY --chown=gitpod:gitpod config/oh-my-opencode.json /home/gitpod/.config/opencode/oh-my-opencode.jsonc
+COPY --chown=gitpod:gitpod config/zellij-config.kdl /home/gitpod/.config/zellij/config.kdl
+RUN cd /home/gitpod/.config/opencode && bun init -y > /dev/null 2>&1 && bun add oh-my-opencode@latest
 
 RUN git config --global --add safe.directory /workspace
 
@@ -80,8 +69,12 @@ WORKDIR /workspace
 USER root
 
 COPY scripts/install-java.sh scripts/install-typescript.sh scripts/install-php.sh /usr/local/bin/
-RUN chmod +x /usr/local/bin/install-java.sh /usr/local/bin/install-typescript.sh /usr/local/bin/install-php.sh
+COPY scripts/start-vnc.sh /usr/local/bin/start-vnc.sh
+RUN chmod +x /usr/local/bin/install-java.sh /usr/local/bin/install-typescript.sh /usr/local/bin/install-php.sh /usr/local/bin/start-vnc.sh
 
 COPY config/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
+
+EXPOSE 6080
+
 ENTRYPOINT ["entrypoint.sh"]

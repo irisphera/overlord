@@ -10,5 +10,11 @@ Thumbs.db
 *.swo
 *~
 
+# Crash dumps
+*.core
+
 # Local overrides
 opencode.json
+
+# Per-workspace persistent state (created by overlord script)
+.overlord/

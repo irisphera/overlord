@@ -14,9 +14,8 @@ CONTAINER_NAME="overlord-${WORKSPACE_SLUG}"
 # Zellij session name: just the directory basename (no prefix needed)
 ZELLIJ_SESSION="$(basename "$(pwd)")"
 
-# Named volumes for stateful data that survives --reset-hard
-VOL_OPENCODE_DATA="overlord-opencode-data-${WORKSPACE_SLUG}"
-VOL_ZSH_DATA="overlord-zsh-data-${WORKSPACE_SLUG}"
+# Persistent state directory inside the workspace
+OVERLORD_STATE_DIR="$(pwd)/.overlord"
 
 # All oh-my-opencode agent and category names (must stay in sync with schema)
 ALL_AGENTS='["sisyphus","sisyphus-junior","atlas","OpenCode-Builder","build","plan","oracle","librarian","explore","multimodal-looker","prometheus","metis","momus"]'
@@ -26,37 +25,34 @@ show_help() {
     cat << 'USAGE'
 overlord - Launch isolated opencode container
 
-USAGE: overlord [OPTIONS]
+USAGE: overlord <command>
 
-OPTIONS:
-    --build            Force rebuild the Docker image
-    --reset            Restart zellij session (keeps container state)
-    --reset-hard       Destroy container and start fresh
-    --gui              Enable Remote Desktop (noVNC on auto-selected port)
-    --help             Show this help
+COMMANDS:
+    zellij         Launch zellij terminal multiplexer (default)
+    opencode       Launch opencode directly
+    shell          Open a zsh shell in the container
+    build          Rebuild the Docker image
+    reset          Remove the container (next launch starts fresh)
+    help           Show this help
 
 EXAMPLES:
-    overlord                         # Start or reattach
-    overlord --build                 # Rebuild image, then start
-    overlord --reset                 # Restart zellij (picks up config changes)
-    overlord --reset-hard            # Destroy container, start fresh
-    overlord --gui                   # Start with Remote Desktop enabled
-    overlord --gui --build           # Rebuild and start with GUI
+    overlord                         # Launch zellij
+    overlord opencode                # Launch opencode directly
+    overlord shell                   # Open a shell
+    overlord build && overlord       # Rebuild, then launch
+    overlord reset && overlord       # Fresh container, then launch
 
 LIFECYCLE:
     First run creates a persistent container per workspace directory.
-    Subsequent runs reattach to the same zellij session.
+    Subsequent runs reattach to the existing container.
     Anything installed in the container persists across restarts.
-    Use --reset to restart zellij (picks up config changes).
-    Use --reset-hard to start from a clean image.
+    Use 'reset' to destroy the container and start from a clean image.
+
+    Conversations, memory, and shell history are stored in
+    .overlord/ inside the workspace and survive resets.
 
     Models, providers, and per-agent/category assignments are configured
     in config/providers.json.
-
-REMOTE DESKTOP:
-    When --gui is enabled, the port will be displayed when container starts
-    Default VNC password: overlord
-    You can install GUI applications (Firefox, VS Code, etc.) inside the container.
 
 ZELLIJ:
     Ctrl+q         Detach from session (container stays alive)
@@ -68,7 +64,7 @@ USAGE
 
 build_image() {
     echo "Building overlord image from ${OVERLORD_DIR}..."
-    docker build --platform linux/amd64 -t "${IMAGE_NAME}" "${OVERLORD_DIR}"
+    docker build -t "${IMAGE_NAME}" "${OVERLORD_DIR}"
 }
 
 ensure_image() {
@@ -83,24 +79,33 @@ container_state() {
     echo "${state:-missing}"
 }
 
-# --- Argument parsing ---
+# --- Parse command ---
 
-FORCE_BUILD=false
-RESET=false
-RESET_HARD=false
-ENABLE_GUI=false
+COMMAND="${1:-zellij}"
 
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        --build)      FORCE_BUILD=true; shift ;;
-        --reset)      RESET=true; shift ;;
-        --reset-hard) RESET_HARD=true; shift ;;
-        --gui)        ENABLE_GUI=true; shift ;;
-        --help|-h) show_help; exit 0 ;;
-        --*)       echo "Warning: unknown option '$1'" >&2; shift ;;
-        *)         echo "Error: unexpected argument '$1'" >&2; exit 1 ;;
-    esac
-done
+case "${COMMAND}" in
+    help|-h|--help)
+        show_help
+        exit 0
+        ;;
+    build)
+        build_image
+        exit 0
+        ;;
+    reset)
+        echo "Removing container ${CONTAINER_NAME}..."
+        docker rm -f "${CONTAINER_NAME}" 2>/dev/null || true
+        echo "Done. Run 'overlord' to start fresh."
+        exit 0
+        ;;
+    opencode|shell|zellij)
+        ;;
+    *)
+        echo "Error: unknown command '${COMMAND}'" >&2
+        echo "Run 'overlord help' for usage." >&2
+        exit 1
+        ;;
+esac
 
 # --- Require jq ---
 
@@ -174,26 +179,9 @@ validate_config() {
 
 validate_config
 
-# --- Build ---
+# --- Build (if needed) ---
 
-if [[ "${FORCE_BUILD}" == "true" ]]; then
-    build_image
-else
-    ensure_image
-fi
-
-# --- Reset ---
-
-if [[ "${RESET_HARD}" == "true" ]]; then
-    echo "Removing container ${CONTAINER_NAME}..."
-    docker rm -f "${CONTAINER_NAME}" 2>/dev/null || true
-elif [[ "${RESET}" == "true" ]]; then
-    # Light reset: kill zellij session but keep container
-    if [[ "$(container_state)" == "running" ]]; then
-        echo "Restarting zellij session..."
-        docker exec "${CONTAINER_NAME}" zellij delete-session "${ZELLIJ_SESSION}" --force &>/dev/null || true
-    fi
-fi
+ensure_image
 
 # --- Env vars ---
 
@@ -309,62 +297,43 @@ GENERATED_OPENCODE_JSON=$(jq --slurpfile base "${BASE_CONFIG}" '
 
 STATE=$(container_state)
 
-# Find a free port for noVNC (default 6080, or first available in range)
-find_free_port() {
-    local start_port="${1:-6080}"
-    local end_port="${2:-6180}"
-    for port in $(seq "$start_port" "$end_port"); do
-        if ! (lsof -i ":$port" &>/dev/null || ss -tuln 2>/dev/null | grep -q ":$port "); then
-            echo "$port"
-            return 0
-        fi
-    done
-    echo ""
-    return 1
+ensure_state_dir() {
+    mkdir -p "${OVERLORD_STATE_DIR}/opencode-data" "${OVERLORD_STATE_DIR}/zsh-data"
+    # Ensure .overlord/ is git-ignored in the workspace
+    local gi="$(pwd)/.gitignore"
+    if [[ -f "${gi}" ]]; then
+        grep -qxF '.overlord/' "${gi}" 2>/dev/null || echo '.overlord/' >> "${gi}"
+    else
+        echo '.overlord/' > "${gi}"
+    fi
 }
-
-NOVNC_PORT=""
 
 ensure_running() {
     case "${STATE}" in
         missing)
             echo "Creating container ${CONTAINER_NAME}..."
+            ensure_state_dir
 
             DOCKER_ARGS=(
                 -d
-                --platform linux/amd64
                 --name "${CONTAINER_NAME}"
                 --security-opt label=disable
+                --security-opt seccomp=unconfined
                 -v "$(pwd):/workspace:rw"
                 -v /var/run/docker.sock:/var/run/docker.sock
-                -v "${VOL_OPENCODE_DATA}:/home/gitpod/.local/share/opencode"
-                -v "${VOL_ZSH_DATA}:/home/gitpod/.zsh_data"
+                -v "$(pwd)/.overlord/opencode-data:/home/overlord/.local/share/opencode"
+                -v "$(pwd)/.overlord/zsh-data:/home/overlord/.zsh_data"
                 "${EXEC_ENV[@]}"
             )
 
-            if [[ "${ENABLE_GUI}" == "true" ]]; then
-                NOVNC_PORT=$(find_free_port 6080 6180)
-                if [[ -z "${NOVNC_PORT}" ]]; then
-                    echo "Error: Could not find free port in range 6080-6180" >&2
-                    exit 1
-                fi
-                echo "Selected port ${NOVNC_PORT} for noVNC"
-                DOCKER_ARGS+=(-p "${NOVNC_PORT}:6080")
-                DOCKER_ARGS+=(-e "OVERLORD_GUI=1")
-                DOCKER_ARGS+=(-e "NOVNC_PORT=6080")
-                DOCKER_ARGS+=(--shm-size=256m)
-            fi
-
             if [[ -f "${HOME}/.gitconfig" ]]; then
-                DOCKER_ARGS+=(-v "${HOME}/.gitconfig:/home/gitpod/.gitconfig:ro")
+                DOCKER_ARGS+=(-v "${HOME}/.gitconfig:/home/overlord/.gitconfig:ro")
             fi
             if [[ -d "${HOME}/.ssh" ]]; then
-                DOCKER_ARGS+=(-v "${HOME}/.ssh:/home/gitpod/.ssh:ro")
+                DOCKER_ARGS+=(-v "${HOME}/.ssh:/home/overlord/.ssh:ro")
             fi
 
             docker run "${DOCKER_ARGS[@]}" "${IMAGE_NAME}" sleep infinity >/dev/null
-            docker exec "${CONTAINER_NAME}" chown -R gitpod:gitpod \
-                /home/gitpod/.local/share/opencode /home/gitpod/.zsh_data 2>/dev/null || true
             ;;
 
         exited)
@@ -377,7 +346,7 @@ ensure_running() {
 
         *)
             echo "Error: Container ${CONTAINER_NAME} is in unexpected state: ${STATE}" >&2
-            echo "Try: overlord --reset" >&2
+            echo "Try: overlord reset" >&2
             exit 1
             ;;
     esac
@@ -385,32 +354,58 @@ ensure_running() {
 
 ensure_running
 
-EXEC_USER="gitpod"
+EXEC_USER="overlord"
+
+# --- Fix workspace permissions for rootless Podman ---
+# Rootless Podman maps host UID to container UID 0 (root).
+# The overlord user (UID 33333) sees mounted files as "others".
+# macOS default umask omits the execute bit on directories for
+# group/others, which prevents directory traversal inside the
+# container. Adding +X (execute on directories only) fixes this.
+chmod -R a+X "$(pwd)" 2>/dev/null || true
 
 # --- Inject configs into container ---
 
 printf '%s\n' "${GENERATED_OPENCODE_JSON}" | \
-    docker exec -i "${CONTAINER_NAME}" sh -c 'cat > /home/gitpod/.config/opencode/opencode.json'
+    docker exec -i "${CONTAINER_NAME}" sh -c 'cat > /home/overlord/.config/opencode/opencode.json'
 OPENCODE_COMPACT=$(echo "${GENERATED_OPENCODE_JSON}" | jq -c .)
 EXEC_ENV+=(-e "OPENCODE_CONFIG_CONTENT=${OPENCODE_COMPACT}")
 printf 'export OPENCODE_CONFIG_CONTENT=%q\n' "${OPENCODE_COMPACT}" | \
-    docker exec -i "${CONTAINER_NAME}" sh -c 'cat > /home/gitpod/.overlord-env'
-docker exec "${CONTAINER_NAME}" chown gitpod:gitpod /home/gitpod/.overlord-env
+    docker exec -i "${CONTAINER_NAME}" sh -c 'cat > /home/overlord/.overlord-env'
 docker exec "${CONTAINER_NAME}" sh -c \
-    'grep -q overlord-env /home/gitpod/.bashrc 2>/dev/null || echo "[ -f ~/.overlord-env ] && . ~/.overlord-env" >> /home/gitpod/.bashrc'
+    'grep -q overlord-env /home/overlord/.zshrc 2>/dev/null || echo "[ -f ~/.overlord-env ] && . ~/.overlord-env" >> /home/overlord/.zshrc'
 docker exec "${CONTAINER_NAME}" sh -c \
-    'grep -q zsh_data /home/gitpod/.bashrc 2>/dev/null || echo "export HISTFILE=~/.zsh_data/.zsh_history" >> /home/gitpod/.bashrc'
+    'grep -q zsh_data /home/overlord/.zshrc 2>/dev/null || echo "export HISTFILE=~/.zsh_data/.zsh_history" >> /home/overlord/.zshrc'
 
-OMO_DIR=/home/gitpod/.config/opencode
+OMO_DIR=/home/overlord/.config/opencode
 for ext in json jsonc; do
     printf '%s\n' "${GENERATED_OMO_JSON}" | \
         docker exec -i "${CONTAINER_NAME}" sh -c "cat > ${OMO_DIR}/oh-my-opencode.${ext}"
 done
-docker exec "${CONTAINER_NAME}" \
-    chown gitpod:gitpod "${OMO_DIR}/oh-my-opencode.json" "${OMO_DIR}/oh-my-opencode.jsonc"
 
-docker cp "${OVERLORD_DIR}/config/zellij-config.kdl" \
-    "${CONTAINER_NAME}:/home/gitpod/.config/zellij/config.kdl"
+cat "${OVERLORD_DIR}/config/zellij-config.kdl" | \
+    docker exec -i "${CONTAINER_NAME}" sh -c 'cat > /home/overlord/.config/zellij/config.kdl'
+
+# --- Fix permissions (single pass for all injected configs + volumes) ---
+# chown sets ownership; chmod a+rwX is the fallback for rootless Podman
+# where UID namespace mapping makes chown ineffective.
+docker exec "${CONTAINER_NAME}" sh -c '
+    chmod 755 /home/overlord
+    chown -R overlord:overlord \
+        /home/overlord/.config \
+        /home/overlord/.oh-my-zsh \
+        /home/overlord/.overlord-env \
+        /home/overlord/.zshrc \
+        /home/overlord/.cache \
+        /home/overlord/.local/share/opencode \
+        /home/overlord/.zsh_data \
+        2>/dev/null || true
+    chmod -R a+rwX \
+        /home/overlord/.local \
+        /home/overlord/.zsh_data \
+        /home/overlord/.cache \
+        2>/dev/null || true
+'
 
 # --- Fix cross-platform native modules ---
 docker exec -u "${EXEC_USER}" "${CONTAINER_NAME}" bash -c '
@@ -426,6 +421,22 @@ docker exec -u "${EXEC_USER}" "${CONTAINER_NAME}" bash -c '
     fi
 '
 
-# --- Zellij session ---
-docker exec -it -u "${EXEC_USER}" "${EXEC_ENV[@]}" "${CONTAINER_NAME}" \
-    zellij attach "${ZELLIJ_SESSION}" --create
+# --- Ensure zellij cache dir is writable (rootless Podman UID mapping can break chown) ---
+docker exec "${CONTAINER_NAME}" sh -c \
+    'mkdir -p /home/overlord/.cache/zellij && chown -R overlord:overlord /home/overlord/.cache/zellij; chmod -R a+rwX /home/overlord/.cache'
+
+# --- Launch ---
+case "${COMMAND}" in
+    opencode)
+        docker exec -it -w /workspace -u "${EXEC_USER}" "${EXEC_ENV[@]}" "${CONTAINER_NAME}" \
+            opencode
+        ;;
+    shell)
+        docker exec -it -w /workspace -u "${EXEC_USER}" "${EXEC_ENV[@]}" "${CONTAINER_NAME}" \
+            zsh -il
+        ;;
+    zellij)
+        docker exec -it -u "${EXEC_USER}" "${EXEC_ENV[@]}" "${CONTAINER_NAME}" \
+            zellij attach "${ZELLIJ_SESSION}" --create
+        ;;
+esac

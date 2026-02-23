@@ -10,7 +10,7 @@ cd overlord
 ln -s "$(pwd)/scripts/overlord" ~/.local/bin/
 ```
 
-Requires Docker and `jq` (`brew install jq` / `apt install jq`).
+Requires Docker.
 
 ```bash
 # Navigate to any project and launch
@@ -73,55 +73,7 @@ Comes with [oh-my-opencode](https://github.com/code-yeongyu/oh-my-opencode) pre-
 
 ## Model Configuration
 
-All model/provider/agent configuration lives in `config/providers.json`.
-
-### Example
-
-```json
-{
-  "providers": {
-    "amazon-bedrock": {
-      "env": ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION"],
-      "opencode": { "npm": "@ai-sdk/amazon-bedrock", "name": "AWS Bedrock" }
-    },
-    "azure": {
-      "env": ["AZURE_OPENAI_API_KEY", "AZURE_OPENAI_ENDPOINT"]
-    }
-  },
-  "models": {
-    "opus": {
-      "provider": "amazon-bedrock",
-      "id": "amazon-bedrock/global.anthropic.claude-opus-4-5-20251101-v1:0:max"
-    },
-    "sonnet": {
-      "provider": "amazon-bedrock",
-      "id": "amazon-bedrock/global.anthropic.claude-sonnet-4-20250514-v1:0"
-    },
-    "gpt": {
-      "provider": "azure",
-      "id": "azure/gpt-5.2-codex"
-    }
-  },
-  "default": "opus",
-  "agents": {
-    "oracle": "gpt",
-    "explore": "sonnet",
-    "sisyphus-junior": "sonnet"
-  },
-  "categories": {
-    "quick": "gpt",
-    "unspecified-low": "sonnet"
-  }
-}
-```
-
-### Key Concepts
-
-- **`providers`** — Available providers with their required env vars and optional opencode SDK config
-- **`models`** — Named aliases mapping to a provider and model ID
-  - `omo_id` — Optional override for oh-my-opencode (auto-derived by stripping `global.` and `:max/:min`)
-- **`default`** — Model alias used when an agent/category has no explicit override
-- **`agents`** / **`categories`** — Per-agent and per-category model overrides
+All model/provider configuration lives in `config/opencode.json` (native opencode format). Agent and category model assignments live in `config/oh-my-opencode.jsonc`.
 
 ### Credentials
 
@@ -133,7 +85,7 @@ export AWS_SECRET_ACCESS_KEY="..."
 overlord
 ```
 
-The launcher reads `providers.json` and forwards only the env vars needed by your configured providers. `CONTEXT7_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, and `ANTHROPIC_MODEL` are always forwarded.
+The launcher forwards provider env vars listed in the `PROVIDER_ENV_VARS` array in `scripts/overlord`. `CONTEXT7_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, and `ANTHROPIC_MODEL` are always forwarded.
 
 ## Troubleshooting
 

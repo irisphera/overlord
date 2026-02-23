@@ -4,8 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OVERLORD_DIR="$(dirname "${SCRIPT_DIR}")"
 IMAGE_NAME="overlord-opencode"
-PROVIDERS_FILE="${OVERLORD_DIR}/config/providers.json"
-BASE_CONFIG="${OVERLORD_DIR}/config/opencode.json"
+CONFIG_FILE="${OVERLORD_DIR}/config/opencode.json"
 
 # Container name: one per workspace directory (sanitized for docker)
 WORKSPACE_SLUG="$(basename "$(pwd)" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9._-]/-/g')"
@@ -17,12 +16,8 @@ ZELLIJ_SESSION="$(basename "$(pwd)")"
 # Persistent state directory inside the workspace
 OVERLORD_STATE_DIR="$(pwd)/.overlord"
 
-# All oh-my-opencode agent and category names (must stay in sync with schema)
-ALL_AGENTS='["sisyphus","sisyphus-junior","atlas","OpenCode-Builder","build","plan","oracle","librarian","explore","multimodal-looker","prometheus","metis","momus"]'
-ALL_CATEGORIES='["visual-engineering","ultrabrain","artistry","quick","unspecified-low","unspecified-high","writing"]'
-
 show_help() {
-    cat << 'USAGE'
+  cat <<'USAGE'
 overlord - Launch isolated opencode container
 
 USAGE: overlord <command>
@@ -31,29 +26,22 @@ COMMANDS:
     zellij         Launch zellij terminal multiplexer (default)
     opencode       Launch opencode directly
     shell          Open a zsh shell in the container
-    build          Rebuild the Docker image
-    reset          Remove the container (next launch starts fresh)
+    fresh          Remove the container (next launch starts from clean image)
+    purge          Remove the container and image (next launch rebuilds everything)
     help           Show this help
-
 EXAMPLES:
     overlord                         # Launch zellij
     overlord opencode                # Launch opencode directly
     overlord shell                   # Open a shell
-    overlord build && overlord       # Rebuild, then launch
-    overlord reset && overlord       # Fresh container, then launch
-
-LIFECYCLE:
+    overlord fresh && overlord       # Fresh container, then launch
+    overlord purge && overlord       # Full rebuild, then launch
     First run creates a persistent container per workspace directory.
     Subsequent runs reattach to the existing container.
     Anything installed in the container persists across restarts.
-    Use 'reset' to destroy the container and start from a clean image.
-
-    Conversations, memory, and shell history are stored in
-    .overlord/ inside the workspace and survive resets.
-
-    Models, providers, and per-agent/category assignments are configured
-    in config/providers.json.
-
+    Use 'fresh' to destroy the container and start from a clean image.
+    Use 'purge' to also remove the image (full rebuild on next launch).
+    .overlord/ inside the workspace and survive fresh/purge.
+    Configuration lives in config/opencode.json.
 ZELLIJ:
     Ctrl+q         Detach from session (container stays alive)
     Ctrl+b         Tab mode
@@ -63,20 +51,37 @@ USAGE
 }
 
 build_image() {
-    echo "Building overlord image from ${OVERLORD_DIR}..."
-    docker build -t "${IMAGE_NAME}" "${OVERLORD_DIR}"
+  echo "Building overlord image from ${OVERLORD_DIR}..."
+  docker build -t "${IMAGE_NAME}" "${OVERLORD_DIR}"
+}
+
+# Backup session data from a running/stopped container before removal.
+# If .overlord/opencode-data already has data (volume mount was active),
+# docker cp is redundant but harmless.  If the container was created
+# without the volume mount, this saves sessions that would otherwise
+# be lost on docker rm.
+backup_container_data() {
+  if ! docker inspect "${CONTAINER_NAME}" &>/dev/null; then
+    return
+  fi
+  mkdir -p "${OVERLORD_STATE_DIR}/opencode-data" "${OVERLORD_STATE_DIR}/zsh-data"
+  echo "Backing up session data..."
+  docker cp "${CONTAINER_NAME}:/home/overlord/.local/share/opencode/." \
+    "${OVERLORD_STATE_DIR}/opencode-data/" 2>/dev/null || true
+  docker cp "${CONTAINER_NAME}:/home/overlord/.zsh_data/." \
+    "${OVERLORD_STATE_DIR}/zsh-data/" 2>/dev/null || true
 }
 
 ensure_image() {
-    if ! docker image inspect "${IMAGE_NAME}" &>/dev/null; then
-        build_image
-    fi
+  if ! docker image inspect "${IMAGE_NAME}" &>/dev/null; then
+    build_image
+  fi
 }
 
 container_state() {
-    local state
-    state=$(docker inspect --format '{{.State.Status}}' "${CONTAINER_NAME}" 2>/dev/null) || true
-    echo "${state:-missing}"
+  local state
+  state=$(docker inspect --format '{{.State.Status}}' "${CONTAINER_NAME}" 2>/dev/null) || true
+  echo "${state:-missing}"
 }
 
 # --- Parse command ---
@@ -84,100 +89,38 @@ container_state() {
 COMMAND="${1:-zellij}"
 
 case "${COMMAND}" in
-    help|-h|--help)
-        show_help
-        exit 0
-        ;;
-    build)
-        build_image
-        exit 0
-        ;;
-    reset)
-        echo "Removing container ${CONTAINER_NAME}..."
-        docker rm -f "${CONTAINER_NAME}" 2>/dev/null || true
-        echo "Done. Run 'overlord' to start fresh."
-        exit 0
-        ;;
-    opencode|shell|zellij)
-        ;;
-    *)
-        echo "Error: unknown command '${COMMAND}'" >&2
-        echo "Run 'overlord help' for usage." >&2
-        exit 1
-        ;;
+help | -h | --help)
+  show_help
+  exit 0
+  ;;
+fresh)
+  backup_container_data
+  echo "Removing container ${CONTAINER_NAME}..."
+  docker stop "${CONTAINER_NAME}" 2>/dev/null || true
+  docker rm "${CONTAINER_NAME}" 2>/dev/null || true
+  echo "Done. Run 'overlord' to start fresh."
+  exit 0
+  ;;
+purge)
+  backup_container_data
+  echo "==> Removing container ${CONTAINER_NAME}..."
+  docker stop "${CONTAINER_NAME}" 2>/dev/null || true
+  docker rm "${CONTAINER_NAME}" 2>/dev/null || true
+
+  echo "==> Removing image ${IMAGE_NAME}..."
+  docker rmi "${IMAGE_NAME}" 2>/dev/null || true
+  echo "==> Pruning dangling images..."
+  docker image prune -f --filter "dangling=true" 2>/dev/null || true
+  echo "==> Done. Run 'overlord' to rebuild and launch."
+  exit 0
+  ;;
+opencode | shell | zellij) ;;
+*)
+  echo "Error: unknown command '${COMMAND}'" >&2
+  echo "Run 'overlord help' for usage." >&2
+  exit 1
+  ;;
 esac
-
-# --- Require jq ---
-
-if ! command -v jq &>/dev/null; then
-    echo "Error: jq is required but not installed." >&2
-    echo "  brew install jq  (macOS)" >&2
-    echo "  apt install jq   (Debian/Ubuntu)" >&2
-    exit 1
-fi
-
-# --- Validate config ---
-
-validate_config() {
-    local cfg="${PROVIDERS_FILE}"
-
-    # default must reference a valid model alias
-    local default_alias
-    default_alias=$(jq -r '.default // empty' "${cfg}")
-    if [[ -z "${default_alias}" ]]; then
-        echo "Error: 'default' not set in ${cfg}" >&2
-        exit 1
-    fi
-    if ! jq -e ".models.\"${default_alias}\"" "${cfg}" &>/dev/null; then
-        echo "Error: default '${default_alias}' does not reference a valid model in ${cfg}" >&2
-        exit 1
-    fi
-
-    # every model must have an id and reference a valid provider
-    local invalid
-    invalid=$(jq -r '
-        .models | to_entries[] |
-        select(.value.id == null or .value.id == "") |
-        .key' "${cfg}")
-    if [[ -n "${invalid}" ]]; then
-        echo "Error: model(s) missing 'id' field: ${invalid}" >&2
-        exit 1
-    fi
-    invalid=$(jq -r '
-        . as $c |
-        .models | to_entries[] |
-        select($c.providers[.value.provider] == null) |
-        "\(.key) -> \(.value.provider)"' "${cfg}")
-    if [[ -n "${invalid}" ]]; then
-        echo "Error: model(s) reference unknown provider: ${invalid}" >&2
-        exit 1
-    fi
-
-    # agent/category overrides must reference valid model aliases (if model specified)
-    # Supports both string values and object values with optional .model field
-    invalid=$(jq -r '
-        . as $c |
-        (.agents // {}) | to_entries[] |
-        (.value | if type == "string" then . elif .model then .model else null end) as $alias |
-        select($alias != null and $c.models[$alias] == null) |
-        "\(.key) -> \($alias)"' "${cfg}")
-    if [[ -n "${invalid}" ]]; then
-        echo "Error: agent override(s) reference unknown model: ${invalid}" >&2
-        exit 1
-    fi
-    invalid=$(jq -r '
-        . as $c |
-        (.categories // {}) | to_entries[] |
-        (.value | if type == "string" then . elif .model then .model else null end) as $alias |
-        select($alias != null and $c.models[$alias] == null) |
-        "\(.key) -> \($alias)"' "${cfg}")
-    if [[ -n "${invalid}" ]]; then
-        echo "Error: category override(s) reference unknown model: ${invalid}" >&2
-        exit 1
-    fi
-}
-
-validate_config
 
 # --- Build (if needed) ---
 
@@ -188,10 +131,10 @@ ensure_image
 EXEC_ENV=()
 
 pass_env() {
-    local var="$1"
-    if [[ -n "${!var:-}" ]]; then
-        EXEC_ENV+=(-e "${var}=${!var}")
-    fi
+  local var="$1"
+  if [[ -n "${!var:-}" ]]; then
+    EXEC_ENV+=(-e "${var}=${!var}")
+  fi
 }
 
 # Terminal
@@ -208,148 +151,102 @@ pass_env OPENAI_API_KEY
 pass_env ANTHROPIC_API_KEY
 pass_env ANTHROPIC_MODEL
 
-# --- Collect env vars from all referenced providers ---
+# --- LM Studio defaults (host reachable from Docker via host.docker.internal) ---
+: "${LMSTUDIO_BASE_URL:=http://host.docker.internal:1234/v1}"
+: "${LMSTUDIO_API_KEY:=lm-studio}"
+export LMSTUDIO_BASE_URL LMSTUDIO_API_KEY
 
-# Find every provider actually used by a model alias, then union their env lists.
-PROVIDER_ENV_VARS=$(jq -r '
-    . as $c |
-    [.models[].provider] | unique | map($c.providers[.].env // []) | add | unique | .[]
-' "${PROVIDERS_FILE}")
-for var in ${PROVIDER_ENV_VARS}; do
-    pass_env "${var}"
+
+# --- Normalize Google Cloud / Vertex AI env vars ---
+# Users may set any of GOOGLE_CLOUD_LOCATION, VERTEX_LOCATION, etc.
+# Normalize to the canonical names that {env:...} templates in opencode.json reference.
+: "${GOOGLE_CLOUD_LOCATION:=${VERTEX_LOCATION:-}}"
+: "${GOOGLE_CLOUD_PROJECT:=${GCP_PROJECT:-${GCLOUD_PROJECT:-}}}"
+export GOOGLE_CLOUD_LOCATION GOOGLE_CLOUD_PROJECT
+
+# --- Provider env vars (update when adding/removing providers in opencode.json) ---
+PROVIDER_ENV_VARS=(
+  AWS_REGION
+  AWS_BEARER_TOKEN_BEDROCK
+  GOOGLE_CLOUD_PROJECT
+  GOOGLE_CLOUD_LOCATION
+  AZURE_RESOURCE_NAME
+  AZURE_API_KEY
+  LMSTUDIO_BASE_URL
+  LMSTUDIO_API_KEY
+)
+for var in "${PROVIDER_ENV_VARS[@]}"; do
+  pass_env "${var}"
 done
 
-# --- Generate configs ---
-
-# oh-my-opencode.json: per-agent and per-category model assignments.
-# For oh-my-opencode, use omo_id if set, otherwise auto-derive from id by
-# stripping cross-region prefix (global.) and throughput tier (:max/:min).
-# Supports both string values (model alias) and object values (model + reasoning fields).
-GENERATED_OMO_JSON=$(jq \
-    --argjson allAgents "${ALL_AGENTS}" \
-    --argjson allCats "${ALL_CATEGORIES}" '
-    . as $c |
-    def omo_id(alias):
-        $c.models[alias] |
-        if .omo_id then .omo_id
-        else .id | gsub("/global\\."; "/") | gsub(":(max|min)$"; "")
-        end;
-    # Resolve a category entry: string → {"model":...}, object → resolve model + extras
-    def resolve_cat(name):
-        ($c.categories // {})[name] as $val |
-        if $val == null then {"model": omo_id($c.default)}
-        elif ($val | type) == "string" then {"model": omo_id($val)}
-        else
-            (($val.model // $c.default) as $alias |
-             {"model": omo_id($alias)} + ($val | del(.model)))
-        end;
-    # Resolve an agent entry: string → {"model":...}, object → resolve model + extras
-    def resolve_agent(name):
-        ($c.agents // {})[name] as $val |
-        if $val == null then {"model": omo_id($c.default)}
-        elif ($val | type) == "string" then {"model": omo_id($val)}
-        else
-            (if $val.model then {"model": omo_id($val.model)} else {} end) +
-            ($val | del(.model))
-        end;
-    {
-        "$schema": "https://raw.githubusercontent.com/code-yeongyu/oh-my-opencode/master/assets/oh-my-opencode.schema.json",
-        "sisyphus_agent": {
-            "planner_enabled": true,
-            "replace_plan": true
-        },
-        "categories": ($allCats | map({(.): resolve_cat(.)}) | add),
-        "agents": ($allAgents | map({(.): resolve_agent(.)}) | add)
-    }
-' "${PROVIDERS_FILE}")
-
-# opencode.json: merge base config with provider definitions, model registrations,
-# and per-model options.  Each model is registered under its provider so opencode
-# can discover it.
-GENERATED_OPENCODE_JSON=$(jq --slurpfile base "${BASE_CONFIG}" '
-    . as $c |
-    # Build provider object: start with each provider opencode config (npm/name),
-    # then add all models grouped under their provider.
-    [
-        $c.providers | to_entries[] | select(.value.opencode != null) |
-        .key as $prov |
-        .value.opencode * {
-            "models": (
-                [ $c.models | to_entries[] | select(.value.provider == $prov) |
-                  # Strip "provider/" prefix to get bare model name
-                  (.value.id | split("/")[1:] | join("/")) as $bare |
-                  # Build model entry: name + options (if present)
-                  { ($bare): (
-                      (if .value.name then {"name": .value.name} else {} end) *
-                      (if .value.options then {"options": .value.options} else {} end)
-                  )}
-                ] | add // {}
-            )
-        } | {($prov): .}
-    ] | add // {} |
-    # Default model id
-    $c.models[$c.default].id as $model |
-    # Merge with base config
-    $base[0] * {"provider": .} | .model = $model
-' "${PROVIDERS_FILE}")
+# Google Cloud ADC — mount credentials file and set container-side path
+GCLOUD_ADC="${GOOGLE_APPLICATION_CREDENTIALS:-${HOME}/.config/gcloud/application_default_credentials.json}"
+GCLOUD_ADC_HOST=""
+if [[ -f "${GCLOUD_ADC}" ]]; then
+  GCLOUD_ADC_HOST="${GCLOUD_ADC}"
+  EXEC_ENV+=(-e "GOOGLE_APPLICATION_CREDENTIALS=/home/overlord/.config/gcloud/application_default_credentials.json")
+fi
 
 # --- Container lifecycle ---
 
 STATE=$(container_state)
 
 ensure_state_dir() {
-    mkdir -p "${OVERLORD_STATE_DIR}/opencode-data" "${OVERLORD_STATE_DIR}/zsh-data"
-    # Ensure .overlord/ is git-ignored in the workspace
-    local gi="$(pwd)/.gitignore"
-    if [[ -f "${gi}" ]]; then
-        grep -qxF '.overlord/' "${gi}" 2>/dev/null || echo '.overlord/' >> "${gi}"
-    else
-        echo '.overlord/' > "${gi}"
-    fi
+  mkdir -p "${OVERLORD_STATE_DIR}/opencode-data" "${OVERLORD_STATE_DIR}/zsh-data"
+  # Ensure .overlord/ is git-ignored in the workspace
+  local gi="$(pwd)/.gitignore"
+  if [[ -f "${gi}" ]]; then
+    grep -qxF '.overlord/' "${gi}" 2>/dev/null || echo '.overlord/' >>"${gi}"
+  else
+    echo '.overlord/' >"${gi}"
+  fi
 }
 
 ensure_running() {
-    case "${STATE}" in
-        missing)
-            echo "Creating container ${CONTAINER_NAME}..."
-            ensure_state_dir
+  case "${STATE}" in
+  missing)
+    echo "Creating container ${CONTAINER_NAME}..."
+    ensure_state_dir
 
-            DOCKER_ARGS=(
-                -d
-                --name "${CONTAINER_NAME}"
-                --security-opt label=disable
-                --security-opt seccomp=unconfined
-                -v "$(pwd):/workspace:rw"
-                -v /var/run/docker.sock:/var/run/docker.sock
-                -v "$(pwd)/.overlord/opencode-data:/home/overlord/.local/share/opencode"
-                -v "$(pwd)/.overlord/zsh-data:/home/overlord/.zsh_data"
-                "${EXEC_ENV[@]}"
-            )
+    DOCKER_ARGS=(
+      -d
+      --name "${CONTAINER_NAME}"
+      --add-host=host.docker.internal:host-gateway
+      --security-opt label=disable
+      --security-opt seccomp=unconfined
+      -v "$(pwd):/workspace:rw"
+      -v /var/run/docker.sock:/var/run/docker.sock
+      -v "$(pwd)/.overlord/opencode-data:/home/overlord/.local/share/opencode"
+      -v "$(pwd)/.overlord/zsh-data:/home/overlord/.zsh_data"
+      "${EXEC_ENV[@]}"
+    )
 
-            if [[ -f "${HOME}/.gitconfig" ]]; then
-                DOCKER_ARGS+=(-v "${HOME}/.gitconfig:/home/overlord/.gitconfig:ro")
-            fi
-            if [[ -d "${HOME}/.ssh" ]]; then
-                DOCKER_ARGS+=(-v "${HOME}/.ssh:/home/overlord/.ssh:ro")
-            fi
+    if [[ -f "${HOME}/.gitconfig" ]]; then
+      DOCKER_ARGS+=(-v "${HOME}/.gitconfig:/home/overlord/.gitconfig:ro")
+    fi
+    if [[ -d "${HOME}/.ssh" ]]; then
+      DOCKER_ARGS+=(-v "${HOME}/.ssh:/home/overlord/.ssh:ro")
+    fi
+    if [[ -n "${GCLOUD_ADC_HOST}" ]]; then
+      DOCKER_ARGS+=(-v "${GCLOUD_ADC_HOST}:/home/overlord/.config/gcloud/application_default_credentials.json:ro")
+    fi
 
-            docker run "${DOCKER_ARGS[@]}" "${IMAGE_NAME}" sleep infinity >/dev/null
-            ;;
+    docker run "${DOCKER_ARGS[@]}" "${IMAGE_NAME}" sleep infinity >/dev/null
+    ;;
 
-        exited)
-            echo "Starting container ${CONTAINER_NAME}..."
-            docker start "${CONTAINER_NAME}" >/dev/null
-            ;;
+  exited)
+    echo "Starting container ${CONTAINER_NAME}..."
+    docker start "${CONTAINER_NAME}" >/dev/null
+    ;;
 
-        running)
-            ;;
+  running) ;;
 
-        *)
-            echo "Error: Container ${CONTAINER_NAME} is in unexpected state: ${STATE}" >&2
-            echo "Try: overlord reset" >&2
-            exit 1
-            ;;
-    esac
+  *)
+    echo "Error: Container ${CONTAINER_NAME} is in unexpected state: ${STATE}" >&2
+    echo "Try: overlord reset" >&2
+    exit 1
+    ;;
+  esac
 }
 
 ensure_running
@@ -366,25 +263,26 @@ chmod -R a+X "$(pwd)" 2>/dev/null || true
 
 # --- Inject configs into container ---
 
-printf '%s\n' "${GENERATED_OPENCODE_JSON}" | \
-    docker exec -i "${CONTAINER_NAME}" sh -c 'cat > /home/overlord/.config/opencode/opencode.json'
-OPENCODE_COMPACT=$(echo "${GENERATED_OPENCODE_JSON}" | jq -c .)
-EXEC_ENV+=(-e "OPENCODE_CONFIG_CONTENT=${OPENCODE_COMPACT}")
-printf 'export OPENCODE_CONFIG_CONTENT=%q\n' "${OPENCODE_COMPACT}" | \
-    docker exec -i "${CONTAINER_NAME}" sh -c 'cat > /home/overlord/.overlord-env'
+cat "${CONFIG_FILE}" |
+  docker exec -i "${CONTAINER_NAME}" sh -c 'cat > /home/overlord/.config/opencode/opencode.json'
+{
+  # Persist forwarded provider env vars so they survive in all container shells
+  for var in "${PROVIDER_ENV_VARS[@]}"; do
+    if [[ -n "${!var:-}" ]]; then
+      printf 'export %s=%q\n' "${var}" "${!var}"
+    fi
+  done
+} | docker exec -i "${CONTAINER_NAME}" sh -c 'cat > /home/overlord/.overlord-env'
 docker exec "${CONTAINER_NAME}" sh -c \
-    'grep -q overlord-env /home/overlord/.zshrc 2>/dev/null || echo "[ -f ~/.overlord-env ] && . ~/.overlord-env" >> /home/overlord/.zshrc'
+  'grep -q overlord-env /home/overlord/.zshrc 2>/dev/null || echo "[ -f ~/.overlord-env ] && . ~/.overlord-env" >> /home/overlord/.zshrc'
 docker exec "${CONTAINER_NAME}" sh -c \
-    'grep -q zsh_data /home/overlord/.zshrc 2>/dev/null || echo "export HISTFILE=~/.zsh_data/.zsh_history" >> /home/overlord/.zshrc'
+  'grep -q zsh_data /home/overlord/.zshrc 2>/dev/null || echo "export HISTFILE=~/.zsh_data/.zsh_history" >> /home/overlord/.zshrc'
 
-OMO_DIR=/home/overlord/.config/opencode
-for ext in json jsonc; do
-    printf '%s\n' "${GENERATED_OMO_JSON}" | \
-        docker exec -i "${CONTAINER_NAME}" sh -c "cat > ${OMO_DIR}/oh-my-opencode.${ext}"
-done
+cat "${OVERLORD_DIR}/config/oh-my-opencode.jsonc" |
+  docker exec -i "${CONTAINER_NAME}" sh -c 'cat > /home/overlord/.config/opencode/oh-my-opencode.jsonc'
 
-cat "${OVERLORD_DIR}/config/zellij-config.kdl" | \
-    docker exec -i "${CONTAINER_NAME}" sh -c 'cat > /home/overlord/.config/zellij/config.kdl'
+cat "${OVERLORD_DIR}/config/zellij-config.kdl" |
+  docker exec -i "${CONTAINER_NAME}" sh -c 'cat > /home/overlord/.config/zellij/config.kdl'
 
 # --- Fix permissions (single pass for all injected configs + volumes) ---
 # chown sets ownership; chmod a+rwX is the fallback for rootless Podman
@@ -423,20 +321,20 @@ docker exec -u "${EXEC_USER}" "${CONTAINER_NAME}" bash -c '
 
 # --- Ensure zellij cache dir is writable (rootless Podman UID mapping can break chown) ---
 docker exec "${CONTAINER_NAME}" sh -c \
-    'mkdir -p /home/overlord/.cache/zellij && chown -R overlord:overlord /home/overlord/.cache/zellij; chmod -R a+rwX /home/overlord/.cache'
+  'mkdir -p /home/overlord/.cache/zellij && chown -R overlord:overlord /home/overlord/.cache/zellij; chmod -R a+rwX /home/overlord/.cache'
 
 # --- Launch ---
 case "${COMMAND}" in
-    opencode)
-        docker exec -it -w /workspace -u "${EXEC_USER}" "${EXEC_ENV[@]}" "${CONTAINER_NAME}" \
-            opencode
-        ;;
-    shell)
-        docker exec -it -w /workspace -u "${EXEC_USER}" "${EXEC_ENV[@]}" "${CONTAINER_NAME}" \
-            zsh -il
-        ;;
-    zellij)
-        docker exec -it -u "${EXEC_USER}" "${EXEC_ENV[@]}" "${CONTAINER_NAME}" \
-            zellij attach "${ZELLIJ_SESSION}" --create
-        ;;
+opencode)
+  docker exec -it -w /workspace -u "${EXEC_USER}" "${EXEC_ENV[@]}" "${CONTAINER_NAME}" \
+    opencode
+  ;;
+shell)
+  docker exec -it -w /workspace -u "${EXEC_USER}" "${EXEC_ENV[@]}" "${CONTAINER_NAME}" \
+    zsh -il
+  ;;
+zellij)
+  docker exec -it -u "${EXEC_USER}" "${EXEC_ENV[@]}" "${CONTAINER_NAME}" \
+    zellij attach "${ZELLIJ_SESSION}" --create
+  ;;
 esac

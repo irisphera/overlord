@@ -5,7 +5,7 @@
 
 ## OVERVIEW
 
-Overlord — Dockerized AI coding environment wrapping OpenCode + Oh-My-OpenCode + Zellij. Bash CLI tool that manages container lifecycle, generates runtime configs from `providers.json`, and forwards host credentials. No application code — pure infrastructure/DevOps. Lightweight multi-arch (amd64 + arm64) container based on ubuntu:24.04.
+Overlord — Dockerized AI coding environment wrapping OpenCode + Oh-My-OpenCode + Zellij. Bash CLI tool that manages container lifecycle, copies configs into the container, and forwards host credentials. No application code — pure infrastructure/DevOps. Lightweight multi-arch (amd64 + arm64) container based on ubuntu:24.04.
 
 ## STRUCTURE
 
@@ -13,9 +13,8 @@ Overlord — Dockerized AI coding environment wrapping OpenCode + Oh-My-OpenCode
 overlord/
 ├── Dockerfile              # Lightweight multi-arch container (ubuntu:24.04 + dev tools + LSPs)
 ├── config/
-│   ├── providers.json      # SOURCE OF TRUTH: providers, models, agent/category assignments
-│   ├── opencode.json       # Base opencode config (merged at runtime with providers.json)
-│   ├── oh-my-opencode.json # Base OMO config (overwritten at runtime by generated version)
+│   ├── opencode.json       # SOURCE OF TRUTH: providers, models, plugins, MCP servers
+│   ├── oh-my-opencode.jsonc # Oh-My-OpenCode config (agent/category model assignments)
 │   ├── entrypoint.sh       # Container ENTRYPOINT — UID/GID remapping, Docker socket setup, then exec "$@"
 │   ├── zellij-config.kdl   # Keybinds (Tab=Ctrl+b, Ctrl+t freed for apps)
 │   └── zellij-opencode.kdl # Layout (single zsh pane)
@@ -27,23 +26,20 @@ overlord/
 
 | Task | Location | Notes |
 |------|----------|-------|
-| Add/change AI models | `config/providers.json` | Add to `models`, assign in `agents`/`categories` |
-| Add a new provider | `config/providers.json` | Add to `providers` with `env` array and `opencode` SDK config |
-| Change agent model assignments | `config/providers.json` → `agents` | Values are model alias names, not raw IDs |
-| Change category model assignments | `config/providers.json` → `categories` | Same as agents |
+| Add/change AI models | `config/opencode.json` | Add under `provider.<name>.models` |
+| Add a new provider | `config/opencode.json` | Add to `provider` with `npm`, `name`, `options`, `models` |
+| Change agent model assignments | `config/oh-my-opencode.jsonc` → `agents` | Values are full model IDs |
+| Change category model assignments | `config/oh-my-opencode.jsonc` → `categories` | Values are full model IDs |
 | Modify container tooling | `Dockerfile` | Rebuild with `overlord --build` |
 | Change zellij keybindings | `config/zellij-config.kdl` | Apply with `overlord --reset` |
 | Container startup behavior | `config/entrypoint.sh` | Runs as root (UID/GID remap + docker socket), then exec to CMD |
-| Config generation logic | `scripts/overlord` lines 224-296 | `jq` transforms providers.json → runtime configs |
-| Config validation logic | `scripts/overlord` lines 106-163 | Validates model/provider/agent references |
-| Container lifecycle | `scripts/overlord` lines 298-345 | Create, start, reattach |
-| Env var forwarding | `scripts/overlord` lines 188-222 | Dynamic from providers + always-forwarded set |
+| Container lifecycle | `scripts/overlord` | Create, start, reattach |
+| Env var forwarding | `scripts/overlord` | Hardcoded list + always-forwarded set |
 
 ## CONVENTIONS
 
-- **Config generation**: `opencode.json` and `oh-my-opencode.json` in `config/` are BASE templates. The `overlord` script generates FINAL versions at runtime by merging with `providers.json`. Editing the base files directly works only for fields NOT overridden by generation.
-- **Model IDs**: `id` = full opencode string (supports `global.`, `:max`). `omo_id` = optional sanitized version (auto-derived by stripping `global.` and `:max/:min` if omitted).
-- **Agent/category config values**: Can be a string (model alias) OR an object (`{model: "alias", ...extra_fields}`).
+- **Config files**: `opencode.json` and `oh-my-opencode.jsonc` in `config/` are copied directly into the container at runtime. Edit them in-place.
+- **Model IDs**: Full opencode format in `opencode.json` (e.g. `amazon-bedrock/global.anthropic.claude-opus-4-5-20251101-v1:0:max`). Oh-my-opencode uses its own IDs in `oh-my-opencode.jsonc`.
 - **Shell style**: `set -euo pipefail`, functions, local vars, `${}` brace expansion. No bashisms beyond bash 4.
 - **Container user**: Image builds as root, switches to `overlord` (UID 33333). Entrypoint runs as root (UID/GID remapping), zellij session runs as overlord.
 - **Multi-arch**: Dockerfile uses `ARG TARGETARCH` for architecture-aware downloads (JDK, zellij). Builds natively on amd64 and arm64.
@@ -54,9 +50,8 @@ overlord/
 ## ANTI-PATTERNS (THIS PROJECT)
 
 - **NEVER bake credentials into Docker image** — All API keys forwarded via env vars at runtime
-- **NEVER edit generated configs inside container** — They're overwritten on every `overlord` invocation. Edit `providers.json` instead.
-- **NEVER reference model IDs directly in agent/category assignments** — Use model alias names defined in `models` section
-- **`opencode.json` in root `.gitignore`** — This file is generated; local copies are throwaway
+- **NEVER edit configs inside container** — They're overwritten on every `overlord` invocation. Edit `config/opencode.json` or `config/oh-my-opencode.jsonc` instead.
+- **Update env var list in script when adding providers** — `PROVIDER_ENV_VARS` array in `scripts/overlord` must list env vars needed by providers
 
 ## COMMANDS
 
@@ -72,5 +67,5 @@ overlord --reset-hard         # Destroy container, start fresh
 - **No tests, no CI/CD** — Infrastructure-only project. Validate manually with `overlord --build --reset-hard`.
 - **Cross-platform**: UID/GID remapping in entrypoint handles Linux, macOS Docker Desktop, and rootless Podman.
 - **Zellij keybind change**: Tab mode = `Ctrl+b` (not default `Ctrl+t`). `Ctrl+t` freed for passthrough.
-- **jq required on host** — Config generation and validation depend on it.
+- **No jq required on host** — Configs are copied directly, no generation step.
 - **Default shell is zsh** — The `overlord` user's shell and zellij's default shell are both zsh.

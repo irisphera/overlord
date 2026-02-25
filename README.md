@@ -112,7 +112,7 @@ The launcher forwards provider env vars listed in the `PROVIDER_ENV_VARS` array 
 - `AZURE_RESOURCE_NAME`, `AZURE_API_KEY`
 - `LMSTUDIO_BASE_URL`, `LMSTUDIO_API_KEY`
 
-`CONTEXT7_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, and `ANTHROPIC_MODEL` are always forwarded.
+`CONTEXT7_API_KEY` is always forwarded (used by the Context7 MCP server).
 
 Google Cloud ADC credentials are automatically injected if found at `~/.config/gcloud/application_default_credentials.json` or `$GOOGLE_APPLICATION_CREDENTIALS`.
 

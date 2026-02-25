@@ -170,11 +170,8 @@ pass_env TERM_PROGRAM_VERSION
 pass_env LANG
 pass_env LC_ALL
 
-# Common credentials (always forwarded)
+# MCP credentials
 pass_env CONTEXT7_API_KEY
-pass_env OPENAI_API_KEY
-pass_env ANTHROPIC_API_KEY
-pass_env ANTHROPIC_MODEL
 
 # --- LM Studio defaults (host reachable from Docker via host.docker.internal) ---
 : "${LMSTUDIO_BASE_URL:=http://host.docker.internal:1234/v1}"

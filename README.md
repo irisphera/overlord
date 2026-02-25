@@ -26,18 +26,29 @@ First run builds the image and creates a container. After that, `overlord` reatt
 overlord              Launch zellij (default)
 overlord opencode     Launch opencode directly
 overlord shell        Open a zsh shell in the container
-overlord build        Rebuild the Docker image
-overlord reset        Remove the container (next launch starts fresh)
+overlord fresh        Remove the container (next launch starts from clean image)
+overlord purge        Remove the container and image (next launch rebuilds everything)
 overlord help         Show help
 ```
+
+### Provider Override
+
+Pass a provider name as a second argument to override all oh-my-opencode agent models:
+
+```bash
+overlord opencode azure    # All agents use azure/gpt-5.3-codex
+overlord zellij azure      # Same override, with zellij
+```
+
+Available providers: `azure`
 
 ## How It Works
 
 Each workspace directory gets its own persistent container. The container stays alive in the background — detach from zellij with `Ctrl+q` and come back anytime with `overlord`.
 
-Conversations, memory, and shell history are stored in `.overlord/` inside your project directory and survive resets.
+Conversations, memory, and shell history are stored in `.overlord/` inside your project directory and survive `fresh` and `purge`.
 
-Anything you install inside the container (apt packages, pip packages, etc.) persists until you run `overlord reset`.
+Anything you install inside the container (apt packages, pip packages, etc.) persists until you run `overlord fresh`. Running `overlord purge` also removes the image, so the next launch rebuilds everything.
 
 ### What's Mounted
 
@@ -75,6 +86,15 @@ Comes with [oh-my-opencode](https://github.com/code-yeongyu/oh-my-opencode) pre-
 
 All model/provider configuration lives in `config/opencode.json` (native opencode format). Agent and category model assignments live in `config/oh-my-opencode.jsonc`.
 
+### Configured Providers
+
+| Provider | Models |
+|---|---|
+| **AWS Bedrock** | Claude Opus 4.5, Claude Haiku 4.5 |
+| **Google Vertex AI** | Gemini 3.1 Pro, Gemini 3 Flash |
+| **Azure OpenAI** | GPT-5.3 Codex |
+| **LM Studio** | Local models via OpenAI-compatible API |
+
 ### Credentials
 
 API keys are passed at runtime via environment variables, never baked into the image:
@@ -85,17 +105,26 @@ export AWS_SECRET_ACCESS_KEY="..."
 overlord
 ```
 
-The launcher forwards provider env vars listed in the `PROVIDER_ENV_VARS` array in `scripts/overlord`. `CONTEXT7_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, and `ANTHROPIC_MODEL` are always forwarded.
+The launcher forwards provider env vars listed in the `PROVIDER_ENV_VARS` array in `scripts/overlord`:
+
+- `AWS_REGION`, `AWS_BEARER_TOKEN_BEDROCK`
+- `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`
+- `AZURE_RESOURCE_NAME`, `AZURE_API_KEY`
+- `LMSTUDIO_BASE_URL`, `LMSTUDIO_API_KEY`
+
+`CONTEXT7_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, and `ANTHROPIC_MODEL` are always forwarded.
+
+Google Cloud ADC credentials are automatically injected if found at `~/.config/gcloud/application_default_credentials.json` or `$GOOGLE_APPLICATION_CREDENTIALS`.
 
 ## Troubleshooting
 
 **Permission denied:**
 ```bash
-overlord reset && overlord
+overlord fresh && overlord
 ```
 
 **Config validation errors:**
-Check that `default` references a valid model, and all agents/categories reference valid model aliases.
+Check that all agents/categories in `oh-my-opencode.jsonc` reference models defined in `opencode.json`.
 
 **Can't reach API:**
 Ensure credentials are exported in your shell before running `overlord`.

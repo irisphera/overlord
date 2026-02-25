@@ -20,7 +20,7 @@ show_help() {
   cat <<'USAGE'
 overlord - Launch isolated opencode container
 
-USAGE: overlord <command>
+USAGE: overlord <command> [provider]
 
 COMMANDS:
     zellij         Launch zellij terminal multiplexer (default)
@@ -29,9 +29,15 @@ COMMANDS:
     fresh          Remove the container (next launch starts from clean image)
     purge          Remove the container and image (next launch rebuilds everything)
     help           Show this help
+
+PROVIDERS (optional, overrides oh-my-opencode agent models):
+    azure          Use azure/gpt-5.3-codex for all agents
+
 EXAMPLES:
-    overlord                         # Launch zellij
+    overlord                         # Launch zellij (default config)
     overlord opencode                # Launch opencode directly
+    overlord opencode azure          # Launch opencode with Azure models
+    overlord zellij azure            # Launch zellij with Azure models
     overlord shell                   # Open a shell
     overlord fresh && overlord       # Fresh container, then launch
     overlord purge && overlord       # Full rebuild, then launch
@@ -87,6 +93,25 @@ container_state() {
 # --- Parse command ---
 
 COMMAND="${1:-zellij}"
+PROVIDER="${2:-}"
+
+# --- Provider → model mapping ---
+# Add new providers here: provider_name → "provider/model-id"
+resolve_provider_model() {
+  case "$1" in
+    azure) echo "azure/gpt-5.3-codex" ;;
+    *)
+      echo "Error: unknown provider '$1'" >&2
+      echo "Available providers: azure" >&2
+      exit 1
+      ;;
+  esac
+}
+
+if [[ -n "${PROVIDER}" ]]; then
+  PROVIDER_MODEL="$(resolve_provider_model "${PROVIDER}")"
+  echo "Provider override: all oh-my-opencode agents → ${PROVIDER_MODEL}"
+fi
 
 case "${COMMAND}" in
 help | -h | --help)
@@ -227,9 +252,8 @@ ensure_running() {
     if [[ -d "${HOME}/.ssh" ]]; then
       DOCKER_ARGS+=(-v "${HOME}/.ssh:/home/overlord/.ssh:ro")
     fi
-    if [[ -n "${GCLOUD_ADC_HOST}" ]]; then
-      DOCKER_ARGS+=(-v "${GCLOUD_ADC_HOST}:/home/overlord/.config/gcloud/application_default_credentials.json:ro")
-    fi
+    # gcloud ADC is injected after startup (not bind-mounted) so that
+    # chown/chmod can fix permissions regardless of host file ownership.
 
     docker run "${DOCKER_ARGS[@]}" "${IMAGE_NAME}" sleep infinity >/dev/null
     ;;
@@ -243,7 +267,7 @@ ensure_running() {
 
   *)
     echo "Error: Container ${CONTAINER_NAME} is in unexpected state: ${STATE}" >&2
-    echo "Try: overlord reset" >&2
+    echo "Try: overlord fresh" >&2
     exit 1
     ;;
   esac
@@ -272,14 +296,31 @@ cat "${CONFIG_FILE}" |
       printf 'export %s=%q\n' "${var}" "${!var}"
     fi
   done
+  # Persist GOOGLE_APPLICATION_CREDENTIALS if gcloud ADC was injected
+  if [[ -n "${GCLOUD_ADC_HOST}" ]]; then
+    printf 'export GOOGLE_APPLICATION_CREDENTIALS=/home/overlord/.config/gcloud/application_default_credentials.json\n'
+  fi
 } | docker exec -i "${CONTAINER_NAME}" sh -c 'cat > /home/overlord/.overlord-env'
 docker exec "${CONTAINER_NAME}" sh -c \
   'grep -q overlord-env /home/overlord/.zshrc 2>/dev/null || echo "[ -f ~/.overlord-env ] && . ~/.overlord-env" >> /home/overlord/.zshrc'
 docker exec "${CONTAINER_NAME}" sh -c \
   'grep -q zsh_data /home/overlord/.zshrc 2>/dev/null || echo "export HISTFILE=~/.zsh_data/.zsh_history" >> /home/overlord/.zshrc'
 
-cat "${OVERLORD_DIR}/config/oh-my-opencode.jsonc" |
-  docker exec -i "${CONTAINER_NAME}" sh -c 'cat > /home/overlord/.config/opencode/oh-my-opencode.jsonc'
+if [[ -n "${PROVIDER:-}" ]]; then
+  # Replace all "model" values in oh-my-opencode config with the provider model
+  sed 's|"model": ".*"|"model": "'"${PROVIDER_MODEL}"'"|g' "${OVERLORD_DIR}/config/oh-my-opencode.jsonc" |
+    docker exec -i "${CONTAINER_NAME}" sh -c 'cat > /home/overlord/.config/opencode/oh-my-opencode.jsonc'
+else
+  cat "${OVERLORD_DIR}/config/oh-my-opencode.jsonc" |
+    docker exec -i "${CONTAINER_NAME}" sh -c 'cat > /home/overlord/.config/opencode/oh-my-opencode.jsonc'
+fi
+
+# Inject gcloud ADC credentials (copied, not bind-mounted, so permissions can be fixed)
+if [[ -n "${GCLOUD_ADC_HOST}" ]]; then
+  docker exec "${CONTAINER_NAME}" sh -c 'mkdir -p /home/overlord/.config/gcloud'
+  cat "${GCLOUD_ADC_HOST}" |
+    docker exec -i "${CONTAINER_NAME}" sh -c 'cat > /home/overlord/.config/gcloud/application_default_credentials.json'
+fi
 
 cat "${OVERLORD_DIR}/config/zellij-config.kdl" |
   docker exec -i "${CONTAINER_NAME}" sh -c 'cat > /home/overlord/.config/zellij/config.kdl'

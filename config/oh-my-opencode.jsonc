@@ -6,30 +6,37 @@
   },
   "categories": {
     "visual-engineering": {
-      "model": "gemini-pro/gemini-3.1-pro"
+      "model": "gemini-pro/gemini-3.1-pro",
+      "reasoningEffort": "high"
     },
     "ultrabrain": {
-      "model": "amazon-bedrock/anthropic.claude-opus-4-6-v1:0:max"
+      "model": "amazon-bedrock/anthropic.claude-opus-4-6-v1:0",
+      "reasoningEffort": "high"
     },
     "artistry": {
-      "model": "amazon-bedrock/anthropic.claude-opus-4-5-20251101-v1:0"
+      "model": "google-vertex/gemini-3.1-pro-preview",
+      "reasoningEffort": "high"
     },
     "quick": {
-      "model": "amazon-bedrock/anthropic.claude-opus-4-5-20251101-v1:0"
+      "model": "amazon-bedrock/anthropic.claude-opus-4-5-20251101-v1:0",
+      "reasoningEffort": "low"
     },
     "unspecified-low": {
-      "model": "amazon-bedrock/anthropic.claude-haiku-4-5-20251001-v1:0"
+      "model": "amazon-bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
+      "reasoningEffort": "low"
     },
     "unspecified-high": {
-      "model": "amazon-bedrock/anthropic.claude-opus-4-5-20251101-v1:0"
+      "model": "amazon-bedrock/anthropic.claude-opus-4-5-20251101-v1:0",
+      "reasoningEffort": "high"
     },
     "writing": {
-      "model": "amazon-bedrock/anthropic.claude-opus-4-5-20251101-v1:0"
+      "model": "amazon-bedrock/anthropic.claude-opus-4-5-20251101-v1:0",
+      "reasoningEffort": "high"
     }
   },
   "agents": {
     "sisyphus": {
-      "model": "amazon-bedrock/anthropic.claude-opus-4-5-20251101-v1:0:max"
+      "model": "amazon-bedrock/anthropic.claude-opus-4-5-20251101-v1:0"
     },
     "sisyphus-junior": {
       "model": "amazon-bedrock/anthropic.claude-opus-4-5-20251101-v1:0"
@@ -53,7 +60,8 @@
       "model": "amazon-bedrock/anthropic.claude-opus-4-5-20251101-v1:0"
     },
     "explore": {
-      "model": "amazon-bedrock/anthropic.claude-opus-4-5-20251101-v1:0"
+      "model": "amazon-bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
+      "category": "unspecified-low"
     },
     "multimodal-looker": {
       "model": "amazon-bedrock/anthropic.claude-opus-4-5-20251101-v1:0"
@@ -65,6 +73,9 @@
       "model": "amazon-bedrock/anthropic.claude-opus-4-5-20251101-v1:0"
     },
     "momus": {
+      "model": "amazon-bedrock/anthropic.claude-opus-4-5-20251101-v1:0"
+    },
+    "hephaestus": {
       "model": "amazon-bedrock/anthropic.claude-opus-4-5-20251101-v1:0"
     }
   }

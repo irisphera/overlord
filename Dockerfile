@@ -87,9 +87,6 @@ RUN apt-get update && apt-get install -y \
   shfmt \
   && rm -rf /var/lib/apt/lists/*
 
-# uv - fast Python package manager
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh
-
 # zellij (architecture-aware)
 ARG ZELLIJ_VERSION=0.43.1
 RUN ZELLIJ_ARCH=$([ "$TARGETARCH" = "arm64" ] && echo "aarch64" || echo "x86_64") \
@@ -110,6 +107,10 @@ RUN mkdir -p /home/overlord/.config/opencode /home/overlord/.config/zellij/layou
   && chown -R overlord:overlord /home/overlord/.config /home/overlord/.bun /home/overlord/.cache /home/overlord/.local
 
 USER overlord
+
+# uv - fast Python package manager (installed as overlord so it lands in ~/.local/bin)
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
+  && /home/overlord/.local/bin/uv python install
 
 RUN sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended \
   && git clone https://github.com/zsh-users/zsh-autosuggestions ${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/plugins/zsh-autosuggestions \

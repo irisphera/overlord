@@ -32,11 +32,13 @@ COMMANDS:
 
 PROVIDERS (optional, overrides oh-my-opencode agent models):
     azure          Use azure/gpt-5.3-codex for all agents
+    gemini         Use google-vertex/gemini-3.1-pro-preview for all agents
 
 EXAMPLES:
     overlord                         # Launch zellij (default config)
     overlord opencode                # Launch opencode directly
     overlord opencode azure          # Launch opencode with Azure models
+    overlord opencode gemini         # Launch opencode with Gemini models
     overlord zellij azure            # Launch zellij with Azure models
     overlord shell                   # Open a shell
     overlord fresh && overlord       # Fresh container, then launch
@@ -100,9 +102,10 @@ PROVIDER="${2:-}"
 resolve_provider_model() {
   case "$1" in
     azure) echo "azure/gpt-5.3-codex" ;;
+    gemini) echo "google-vertex/gemini-3.1-pro-preview" ;;
     *)
       echo "Error: unknown provider '$1'" >&2
-      echo "Available providers: azure" >&2
+      echo "Available providers: azure, gemini" >&2
       exit 1
       ;;
   esac

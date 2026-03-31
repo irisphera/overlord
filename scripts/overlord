@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+RESOLVED_SCRIPT="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || realpath "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(cd "$(dirname "${RESOLVED_SCRIPT}")" && pwd)"
 OVERLORD_DIR="$(dirname "${SCRIPT_DIR}")"
 IMAGE_NAME="overlord-opencode"
 DEFAULT_CONFIG_NAME="opencode.json"

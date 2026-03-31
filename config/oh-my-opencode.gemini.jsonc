@@ -7,97 +7,96 @@
   "categories": {
     // HIGH reasoning — deep logical work, complex problem-solving
     "ultrabrain": {
-      "model": "azure/gpt-5.4",
+      "model": "google-vertex/gemini-3.1-pro-preview",
       "reasoningEffort": "high"
     },
     "unspecified-high": {
-      "model": "azure/gpt-5.4",
+      "model": "google-vertex/gemini-3.1-pro-preview",
       "reasoningEffort": "high"
     },
     // MEDIUM reasoning — balanced effort for creative, visual, and writing tasks
     "visual-engineering": {
-      "model": "azure/gpt-5.4",
+      "model": "google-vertex/gemini-3.1-pro-preview",
       "reasoningEffort": "medium"
     },
     "artistry": {
-      "model": "azure/gpt-5.4",
+      "model": "google-vertex/gemini-3.1-pro-preview",
       "reasoningEffort": "medium"
     },
     "writing": {
-      "model": "azure/gpt-5.4",
+      "model": "google-vertex/gemini-3.1-pro-preview",
       "reasoningEffort": "medium"
     },
     // LOW reasoning — trivial, fast tasks
     "quick": {
-      "model": "azure/gpt-5.4",
+      "model": "google-vertex/gemini-3.1-pro-preview",
       "reasoningEffort": "low"
     },
     "unspecified-low": {
-      "model": "azure/gpt-5.4",
+      "model": "google-vertex/gemini-3.1-pro-preview",
       "reasoningEffort": "low"
     }
   },
   "agents": {
     // HIGH reasoning — orchestration, architecture, planning, deep execution
     "sisyphus": {
-      "model": "azure/gpt-5.4",
+      "model": "google-vertex/gemini-3.1-pro-preview",
       "reasoningEffort": "high"
     },
     "atlas": {
-      "model": "azure/gpt-5.4",
+      "model": "google-vertex/gemini-3.1-pro-preview",
       "reasoningEffort": "high"
     },
     "oracle": {
-      "model": "azure/gpt-5.4",
+      "model": "google-vertex/gemini-3.1-pro-preview",
       "reasoningEffort": "high"
     },
     "prometheus": {
-      "model": "azure/gpt-5.4",
+      "model": "google-vertex/gemini-3.1-pro-preview",
       "reasoningEffort": "high"
     },
     "hephaestus": {
-      "model": "azure/gpt-5.4",
+      "model": "google-vertex/gemini-3.1-pro-preview",
       "reasoningEffort": "high"
     },
     "plan": {
-      "model": "azure/gpt-5.4",
+      "model": "google-vertex/gemini-3.1-pro-preview",
       "reasoningEffort": "high"
     },
     // MEDIUM reasoning — validation, building, general work
     "sisyphus-junior": {
-      "model": "azure/gpt-5.4",
+      "model": "google-vertex/gemini-3.1-pro-preview",
       "reasoningEffort": "medium"
     },
     "OpenCode-Builder": {
-      "model": "azure/gpt-5.4",
+      "model": "google-vertex/gemini-3.1-pro-preview",
       "reasoningEffort": "medium"
     },
     "build": {
-      "model": "azure/gpt-5.4",
+      "model": "google-vertex/gemini-3.1-pro-preview",
       "reasoningEffort": "medium"
     },
     "metis": {
-      "model": "azure/gpt-5.4",
+      "model": "google-vertex/gemini-3.1-pro-preview",
       "reasoningEffort": "medium"
     },
     "momus": {
-      "model": "azure/gpt-5.4",
+      "model": "google-vertex/gemini-3.1-pro-preview",
       "reasoningEffort": "medium"
     },
     "multimodal-looker": {
-      "model": "azure/gpt-5.4",
+      "model": "google-vertex/gemini-3.1-pro-preview",
       "reasoningEffort": "medium"
     },
     // LOW reasoning — search, lookup, exploration (speed over depth)
     "explore": {
-      "model": "azure/gpt-5.4",
+      "model": "google-vertex/gemini-3.1-pro-preview",
       "reasoningEffort": "low",
       "category": "unspecified-low"
     },
     "librarian": {
-      "model": "azure/gpt-5.4",
-      "reasoningEffort": "low",
-      "category": "unspecified-low"
+      "model": "google-vertex/gemini-3.1-pro-preview",
+      "reasoningEffort": "low"
     }
   }
 }

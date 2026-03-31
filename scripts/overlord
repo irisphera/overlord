@@ -4,9 +4,21 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OVERLORD_DIR="$(dirname "${SCRIPT_DIR}")"
 IMAGE_NAME="overlord-opencode"
-CONFIG_FILE="${OVERLORD_DIR}/config/opencode.json"
+DEFAULT_CONFIG_NAME="opencode.json"
+DEFAULT_OH_MY_CONFIG_NAME="oh-my-opencode.jsonc"
+OPENCODE_CONFIG_SCHEMA='"$schema": "https://opencode.ai/config.json"'
 
-# Container name: one per workspace directory (sanitized for docker)
+# Detect container engine (podman preferred, docker fallback)
+if command -v podman &>/dev/null; then
+  ENGINE=podman
+elif command -v docker &>/dev/null; then
+  ENGINE=docker
+else
+  echo "Error: neither podman nor docker found in PATH" >&2
+  exit 1
+fi
+
+# Container name: one per workspace directory (sanitized for container names)
 WORKSPACE_SLUG="$(basename "$(pwd)" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9._-]/-/g')"
 CONTAINER_NAME="overlord-${WORKSPACE_SLUG}"
 
@@ -20,7 +32,10 @@ show_help() {
   cat <<'USAGE'
 overlord - Launch isolated opencode container
 
-USAGE: overlord <command> [provider]
+USAGE: overlord [--config [filename]] <command> [provider]
+
+OPTIONS:
+    --config [FILE]  List available OpenCode configs, or load config/FILE as opencode.json
 
 COMMANDS:
     zellij         Launch zellij terminal multiplexer (default)
@@ -31,15 +46,20 @@ COMMANDS:
     help           Show this help
 
 PROVIDERS (optional, overrides oh-my-opencode agent models):
-    azure          Use azure/gpt-5.3-codex for all agents
+    bedrock        Use amazon-bedrock/claude-opus-4-6 for all agents
     gemini         Use google-vertex/gemini-3.1-pro-preview for all agents
+    lms <model>    Use LM Studio with a specific model for all agents
 
 EXAMPLES:
+    overlord --config                # List available OpenCode config files
     overlord                         # Launch zellij (default config)
+    overlord --config opencode.json  # Launch zellij with an explicit config file
+    OPENAI_API_KEY=... overlord      # Launch with the default GPT 5.4 routing
     overlord opencode                # Launch opencode directly
-    overlord opencode azure          # Launch opencode with Azure models
+    overlord opencode bedrock        # Launch opencode with Bedrock models
     overlord opencode gemini         # Launch opencode with Gemini models
-    overlord zellij azure            # Launch zellij with Azure models
+    overlord opencode lms qwen3-8b   # Launch opencode with LM Studio model
+    overlord zellij bedrock          # Launch zellij with Bedrock models
     overlord shell                   # Open a shell
     overlord fresh && overlord       # Fresh container, then launch
     overlord purge && overlord       # Full rebuild, then launch
@@ -49,7 +69,7 @@ EXAMPLES:
     Use 'fresh' to destroy the container and start from a clean image.
     Use 'purge' to also remove the image (full rebuild on next launch).
     .overlord/ inside the workspace and survive fresh/purge.
-    Configuration lives in config/opencode.json.
+    Configuration lives in config/opencode.json by default.
 ZELLIJ:
     Ctrl+q         Detach from session (container stays alive)
     Ctrl+b         Tab mode
@@ -60,60 +80,172 @@ USAGE
 
 build_image() {
   echo "Building overlord image from ${OVERLORD_DIR}..."
-  docker build -t "${IMAGE_NAME}" "${OVERLORD_DIR}"
+  "${ENGINE}" build -t "${IMAGE_NAME}" "${OVERLORD_DIR}"
 }
 
 # Backup session data from a running/stopped container before removal.
 # If .overlord/opencode-data already has data (volume mount was active),
-# docker cp is redundant but harmless.  If the container was created
+# Container cp is redundant but harmless.  If the container was created
 # without the volume mount, this saves sessions that would otherwise
-# be lost on docker rm.
+# be lost on container rm.
 backup_container_data() {
-  if ! docker inspect "${CONTAINER_NAME}" &>/dev/null; then
+  if ! "${ENGINE}" inspect "${CONTAINER_NAME}" &>/dev/null; then
     return
   fi
   mkdir -p "${OVERLORD_STATE_DIR}/opencode-data" "${OVERLORD_STATE_DIR}/zsh-data"
   echo "Backing up session data..."
-  docker cp "${CONTAINER_NAME}:/home/overlord/.local/share/opencode/." \
+  "${ENGINE}" cp "${CONTAINER_NAME}:/home/overlord/.local/share/opencode/." \
     "${OVERLORD_STATE_DIR}/opencode-data/" 2>/dev/null || true
-  docker cp "${CONTAINER_NAME}:/home/overlord/.zsh_data/." \
+  "${ENGINE}" cp "${CONTAINER_NAME}:/home/overlord/.zsh_data/." \
     "${OVERLORD_STATE_DIR}/zsh-data/" 2>/dev/null || true
 }
 
 ensure_image() {
-  if ! docker image inspect "${IMAGE_NAME}" &>/dev/null; then
+  if ! "${ENGINE}" image inspect "${IMAGE_NAME}" &>/dev/null; then
     build_image
   fi
 }
 
 container_state() {
   local state
-  state=$(docker inspect --format '{{.State.Status}}' "${CONTAINER_NAME}" 2>/dev/null) || true
+  state=$("${ENGINE}" inspect --format '{{.State.Status}}' "${CONTAINER_NAME}" 2>/dev/null) || true
   echo "${state:-missing}"
+}
+
+is_opencode_config_file() {
+  local file_path="$1"
+  local file_name
+
+  file_name="$(basename "${file_path}")"
+  [[ -f "${file_path}" ]] || return 1
+  [[ "${file_name}" == opencode*.json ]] || return 1
+  grep -Fq "${OPENCODE_CONFIG_SCHEMA}" "${file_path}"
+}
+
+print_available_configs() {
+  local path
+  local found=0
+
+  echo "Available OpenCode configs:"
+  for path in "${OVERLORD_DIR}"/config/opencode*.json; do
+    if is_opencode_config_file "${path}"; then
+      printf '  %s\n' "$(basename "${path}")"
+      found=1
+    fi
+  done
+
+  if [[ "${found}" -eq 0 ]]; then
+    echo "  (none found)"
+  fi
 }
 
 # --- Parse command ---
 
+CONFIG_NAME="${DEFAULT_CONFIG_NAME}"
+CONFIG_EXPLICIT=0
+POSITIONAL_ARGS=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --config)
+      if [[ $# -lt 2 ]]; then
+        print_available_configs
+        exit 0
+      fi
+      if [[ "$2" == -* ]]; then
+        echo "Error: --config requires a filename" >&2
+        echo "Run 'overlord --config' to list available configs." >&2
+        exit 1
+      fi
+      CONFIG_NAME="$2"
+      CONFIG_EXPLICIT=1
+      shift 2
+      ;;
+    -h | --help)
+      POSITIONAL_ARGS+=("help")
+      shift
+      ;;
+    *)
+      POSITIONAL_ARGS+=("$1")
+      shift
+      ;;
+  esac
+done
+
+if [[ "${CONFIG_NAME}" == */* ]]; then
+  echo "Error: --config expects a filename from config/, not a path" >&2
+  exit 1
+fi
+
+CONFIG_FILE="${OVERLORD_DIR}/config/${CONFIG_NAME}"
+if [[ ! -f "${CONFIG_FILE}" ]]; then
+  echo "Error: config file '${CONFIG_NAME}' not found in ${OVERLORD_DIR}/config" >&2
+  exit 1
+fi
+if ! is_opencode_config_file "${CONFIG_FILE}"; then
+  echo "Error: config file '${CONFIG_NAME}' is not a valid OpenCode config from config/" >&2
+  echo "Run 'overlord --config' to list available configs." >&2
+  exit 1
+fi
+
+if [[ ${#POSITIONAL_ARGS[@]} -gt 0 ]]; then
+  set -- "${POSITIONAL_ARGS[@]}"
+else
+  set --
+fi
+
 COMMAND="${1:-zellij}"
 PROVIDER="${2:-}"
+LMS_MODEL="${3:-}"
 
 # --- Provider → model mapping ---
 # Add new providers here: provider_name → "provider/model-id"
 resolve_provider_model() {
   case "$1" in
-    azure) echo "azure/gpt-5.3-codex" ;;
+    bedrock) echo "amazon-bedrock/global.anthropic.claude-opus-4-6-v1" ;;
     gemini) echo "google-vertex/gemini-3.1-pro-preview" ;;
+    lms)
+      if [[ -z "${LMS_MODEL}" ]]; then
+        echo "Error: 'lms' provider requires a model name" >&2
+        echo "Usage: overlord <command> lms <model-name>" >&2
+        echo "Example: overlord opencode lms nanbeige4.1-3b-mlx" >&2
+        exit 1
+      fi
+      echo "lmstudio/${LMS_MODEL}"
+      ;;
     *)
       echo "Error: unknown provider '$1'" >&2
-      echo "Available providers: azure, gemini" >&2
+      echo "Available providers: bedrock, gemini, lms" >&2
       exit 1
       ;;
   esac
 }
 
+resolve_oh_my_config_file() {
+  case "$1" in
+    "") echo "${OVERLORD_DIR}/config/${DEFAULT_OH_MY_CONFIG_NAME}" ;;
+    bedrock) echo "${OVERLORD_DIR}/config/${DEFAULT_OH_MY_CONFIG_NAME}" ;;
+    gemini) echo "${OVERLORD_DIR}/config/oh-my-opencode.gemini.jsonc" ;;
+    lms) echo "${OVERLORD_DIR}/config/${DEFAULT_OH_MY_CONFIG_NAME}" ;;
+    *)
+      echo "Error: unknown provider '$1'" >&2
+      exit 1
+      ;;
+  esac
+}
+
+if [[ "${CONFIG_EXPLICIT}" -eq 1 && -n "${PROVIDER}" ]]; then
+  echo "Error: --config cannot be combined with provider overrides" >&2
+  echo "Choose either an explicit config file or a provider override." >&2
+  exit 1
+fi
+
 if [[ -n "${PROVIDER}" ]]; then
   PROVIDER_MODEL="$(resolve_provider_model "${PROVIDER}")"
+  OH_MY_CONFIG_FILE="$(resolve_oh_my_config_file "${PROVIDER}")"
   echo "Provider override: all oh-my-opencode agents → ${PROVIDER_MODEL}"
+else
+  OH_MY_CONFIG_FILE="${OVERLORD_DIR}/config/${DEFAULT_OH_MY_CONFIG_NAME}"
 fi
 
 case "${COMMAND}" in
@@ -124,21 +256,21 @@ help | -h | --help)
 fresh)
   backup_container_data
   echo "Removing container ${CONTAINER_NAME}..."
-  docker stop "${CONTAINER_NAME}" 2>/dev/null || true
-  docker rm "${CONTAINER_NAME}" 2>/dev/null || true
+  "${ENGINE}" stop "${CONTAINER_NAME}" 2>/dev/null || true
+  "${ENGINE}" rm "${CONTAINER_NAME}" 2>/dev/null || true
   echo "Done. Run 'overlord' to start fresh."
   exit 0
   ;;
 purge)
   backup_container_data
   echo "==> Removing container ${CONTAINER_NAME}..."
-  docker stop "${CONTAINER_NAME}" 2>/dev/null || true
-  docker rm "${CONTAINER_NAME}" 2>/dev/null || true
+  "${ENGINE}" stop "${CONTAINER_NAME}" 2>/dev/null || true
+  "${ENGINE}" rm "${CONTAINER_NAME}" 2>/dev/null || true
 
   echo "==> Removing image ${IMAGE_NAME}..."
-  docker rmi "${IMAGE_NAME}" 2>/dev/null || true
+  "${ENGINE}" rmi "${IMAGE_NAME}" 2>/dev/null || true
   echo "==> Pruning dangling images..."
-  docker image prune -f --filter "dangling=true" 2>/dev/null || true
+  "${ENGINE}" image prune -f --filter "dangling=true" 2>/dev/null || true
   echo "==> Done. Run 'overlord' to rebuild and launch."
   exit 0
   ;;
@@ -167,6 +299,7 @@ pass_env() {
 
 # Terminal
 EXEC_ENV+=(-e "TERM=${TERM:-xterm-256color}")
+EXEC_ENV+=(-e "OVERLORD_WORKSPACE=${ZELLIJ_SESSION}")
 pass_env COLORTERM
 pass_env TERM_PROGRAM
 pass_env TERM_PROGRAM_VERSION
@@ -175,6 +308,16 @@ pass_env LC_ALL
 
 # MCP credentials
 pass_env CONTEXT7_API_KEY
+
+# Docker / Testcontainers runtime envs
+: "${DOCKER_HOST:=unix:///var/run/docker.sock}"
+: "${TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE:=/var/run/docker.sock}"
+: "${TESTCONTAINERS_HOST_OVERRIDE:=host.docker.internal}"
+export DOCKER_HOST TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE TESTCONTAINERS_HOST_OVERRIDE
+
+# uv defaults for bind mounts and cache persistence
+: "${UV_CACHE_DIR:=/home/overlord/.cache/uv}"
+export UV_CACHE_DIR
 
 # --- LM Studio defaults (host reachable from Docker via host.docker.internal) ---
 : "${LMSTUDIO_BASE_URL:=http://host.docker.internal:1234/v1}"
@@ -191,14 +334,23 @@ export GOOGLE_CLOUD_LOCATION GOOGLE_CLOUD_PROJECT
 
 # --- Provider env vars (update when adding/removing providers in opencode.json) ---
 PROVIDER_ENV_VARS=(
+  OPENAI_API_KEY
   AWS_REGION
   AWS_BEARER_TOKEN_BEDROCK
   GOOGLE_CLOUD_PROJECT
   GOOGLE_CLOUD_LOCATION
   AZURE_RESOURCE_NAME
   AZURE_API_KEY
+  OPENROUTER_API_KEY
   LMSTUDIO_BASE_URL
   LMSTUDIO_API_KEY
+  DOCKER_HOST
+  DOCKER_TLS_VERIFY
+  DOCKER_CERT_PATH
+  TESTCONTAINERS_HOST_OVERRIDE
+  TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE
+  TESTCONTAINERS_RYUK_DISABLED
+  UV_CACHE_DIR
 )
 for var in "${PROVIDER_ENV_VARS[@]}"; do
   pass_env "${var}"
@@ -255,12 +407,12 @@ ensure_running() {
     # gcloud ADC is injected after startup (not bind-mounted) so that
     # chown/chmod can fix permissions regardless of host file ownership.
 
-    docker run "${DOCKER_ARGS[@]}" "${IMAGE_NAME}" sleep infinity >/dev/null
+    "${ENGINE}" run "${DOCKER_ARGS[@]}" "${IMAGE_NAME}" sleep infinity >/dev/null
     ;;
 
   exited)
     echo "Starting container ${CONTAINER_NAME}..."
-    docker start "${CONTAINER_NAME}" >/dev/null
+    "${ENGINE}" start "${CONTAINER_NAME}" >/dev/null
     ;;
 
   running) ;;
@@ -287,8 +439,17 @@ chmod -R a+X "$(pwd)" 2>/dev/null || true
 
 # --- Inject configs into container ---
 
-cat "${CONFIG_FILE}" |
-  docker exec -i "${CONTAINER_NAME}" sh -c 'cat > /home/overlord/.config/opencode/opencode.json'
+if [[ "${PROVIDER:-}" == "lms" ]]; then
+  # LM Studio model IDs are user-supplied at runtime, so this override still
+  # needs a targeted rewrite of the default model key/value pair.
+  sed -e 's/"lm-studio"/"'"${LMS_MODEL}"'"/g' \
+      -e 's/"LM Studio (Local)"/"'"${LMS_MODEL}"'"/g' \
+    "${CONFIG_FILE}" |
+    "${ENGINE}" exec -i "${CONTAINER_NAME}" sh -c 'cat > /home/overlord/.config/opencode/opencode.json'
+else
+  cat "${CONFIG_FILE}" |
+    "${ENGINE}" exec -i "${CONTAINER_NAME}" sh -c 'cat > /home/overlord/.config/opencode/opencode.json'
+fi
 {
   # Persist forwarded provider env vars so they survive in all container shells
   for var in "${PROVIDER_ENV_VARS[@]}"; do
@@ -300,35 +461,45 @@ cat "${CONFIG_FILE}" |
   if [[ -n "${GCLOUD_ADC_HOST}" ]]; then
     printf 'export GOOGLE_APPLICATION_CREDENTIALS=/home/overlord/.config/gcloud/application_default_credentials.json\n'
   fi
-} | docker exec -i "${CONTAINER_NAME}" sh -c 'cat > /home/overlord/.overlord-env'
-docker exec "${CONTAINER_NAME}" sh -c \
+  # Terminal title: always show workspace name instead of "podman" or "opencode"
+  printf 'export OVERLORD_WORKSPACE=%q\n' "${ZELLIJ_SESSION}"
+  cat <<'TITLE_HOOKS'
+export DISABLE_AUTO_TITLE=true
+_overlord_title() { printf "\033]0;%s\007" "${OVERLORD_WORKSPACE:-${PWD##*/}}" }
+autoload -Uz add-zsh-hook 2>/dev/null
+add-zsh-hook precmd _overlord_title 2>/dev/null
+add-zsh-hook preexec _overlord_title 2>/dev/null
+TITLE_HOOKS
+} | "${ENGINE}" exec -i "${CONTAINER_NAME}" sh -c 'cat > /home/overlord/.overlord-env'
+"${ENGINE}" exec "${CONTAINER_NAME}" sh -c \
   'grep -q overlord-env /home/overlord/.zshrc 2>/dev/null || echo "[ -f ~/.overlord-env ] && . ~/.overlord-env" >> /home/overlord/.zshrc'
-docker exec "${CONTAINER_NAME}" sh -c \
+"${ENGINE}" exec "${CONTAINER_NAME}" sh -c \
   'grep -q zsh_data /home/overlord/.zshrc 2>/dev/null || echo "export HISTFILE=~/.zsh_data/.zsh_history" >> /home/overlord/.zshrc'
 
-if [[ -n "${PROVIDER:-}" ]]; then
-  # Replace all "model" values in oh-my-opencode config with the provider model
-  sed 's|"model": ".*"|"model": "'"${PROVIDER_MODEL}"'"|g' "${OVERLORD_DIR}/config/oh-my-opencode.jsonc" |
-    docker exec -i "${CONTAINER_NAME}" sh -c 'cat > /home/overlord/.config/opencode/oh-my-opencode.jsonc'
+if [[ "${PROVIDER:-}" == "lms" ]]; then
+  # LM Studio model IDs are user-supplied at runtime, so this override still
+  # needs a targeted rewrite of model references in the agent routing config.
+  sed 's|"model": ".*"|"model": "'"${PROVIDER_MODEL}"'"|g' "${OH_MY_CONFIG_FILE}" |
+    "${ENGINE}" exec -i "${CONTAINER_NAME}" sh -c 'cat > /home/overlord/.config/opencode/oh-my-opencode.jsonc'
 else
-  cat "${OVERLORD_DIR}/config/oh-my-opencode.jsonc" |
-    docker exec -i "${CONTAINER_NAME}" sh -c 'cat > /home/overlord/.config/opencode/oh-my-opencode.jsonc'
+  cat "${OH_MY_CONFIG_FILE}" |
+    "${ENGINE}" exec -i "${CONTAINER_NAME}" sh -c 'cat > /home/overlord/.config/opencode/oh-my-opencode.jsonc'
 fi
 
 # Inject gcloud ADC credentials (copied, not bind-mounted, so permissions can be fixed)
 if [[ -n "${GCLOUD_ADC_HOST}" ]]; then
-  docker exec "${CONTAINER_NAME}" sh -c 'mkdir -p /home/overlord/.config/gcloud'
+  "${ENGINE}" exec "${CONTAINER_NAME}" sh -c 'mkdir -p /home/overlord/.config/gcloud'
   cat "${GCLOUD_ADC_HOST}" |
-    docker exec -i "${CONTAINER_NAME}" sh -c 'cat > /home/overlord/.config/gcloud/application_default_credentials.json'
+    "${ENGINE}" exec -i "${CONTAINER_NAME}" sh -c 'cat > /home/overlord/.config/gcloud/application_default_credentials.json'
 fi
 
 cat "${OVERLORD_DIR}/config/zellij-config.kdl" |
-  docker exec -i "${CONTAINER_NAME}" sh -c 'cat > /home/overlord/.config/zellij/config.kdl'
+  "${ENGINE}" exec -i "${CONTAINER_NAME}" sh -c 'cat > /home/overlord/.config/zellij/config.kdl'
 
 # --- Fix permissions (single pass for all injected configs + volumes) ---
 # chown sets ownership; chmod a+rwX is the fallback for rootless Podman
 # where UID namespace mapping makes chown ineffective.
-docker exec "${CONTAINER_NAME}" sh -c '
+"${ENGINE}" exec "${CONTAINER_NAME}" sh -c '
     chmod 755 /home/overlord
     chown -R overlord:overlord \
         /home/overlord/.config \
@@ -347,7 +518,7 @@ docker exec "${CONTAINER_NAME}" sh -c '
 '
 
 # --- Fix cross-platform native modules ---
-docker exec -u "${EXEC_USER}" "${CONTAINER_NAME}" bash -c '
+"${ENGINE}" exec -u "${EXEC_USER}" "${CONTAINER_NAME}" bash -c '
     if [ -d /workspace/node_modules ] && [ -f /workspace/package.json ]; then
         MARKER=/workspace/node_modules/.overlord-platform
         CURRENT="linux-$(uname -m)"
@@ -361,21 +532,26 @@ docker exec -u "${EXEC_USER}" "${CONTAINER_NAME}" bash -c '
 '
 
 # --- Ensure zellij cache dir is writable (rootless Podman UID mapping can break chown) ---
-docker exec "${CONTAINER_NAME}" sh -c \
+"${ENGINE}" exec "${CONTAINER_NAME}" sh -c \
   'mkdir -p /home/overlord/.cache/zellij && chown -R overlord:overlord /home/overlord/.cache/zellij; chmod -R a+rwX /home/overlord/.cache'
 
 # --- Launch ---
+
+# Set terminal title to the workspace directory name so the tab/title bar
+# shows the folder instead of "podman" (the foreground process name).
+printf '\033]0;%s\007' "${ZELLIJ_SESSION}"
+
 case "${COMMAND}" in
 opencode)
-  docker exec -it -w /workspace -u "${EXEC_USER}" "${EXEC_ENV[@]}" "${CONTAINER_NAME}" \
+  "${ENGINE}" exec -it -w /workspace -u "${EXEC_USER}" "${EXEC_ENV[@]}" "${CONTAINER_NAME}" \
     opencode
   ;;
 shell)
-  docker exec -it -w /workspace -u "${EXEC_USER}" "${EXEC_ENV[@]}" "${CONTAINER_NAME}" \
+  "${ENGINE}" exec -it -w /workspace -u "${EXEC_USER}" "${EXEC_ENV[@]}" "${CONTAINER_NAME}" \
     zsh -il
   ;;
 zellij)
-  docker exec -it -u "${EXEC_USER}" "${EXEC_ENV[@]}" "${CONTAINER_NAME}" \
+  "${ENGINE}" exec -it -u "${EXEC_USER}" "${EXEC_ENV[@]}" "${CONTAINER_NAME}" \
     zellij attach "${ZELLIJ_SESSION}" --create
   ;;
 esac

@@ -36,11 +36,35 @@ overlord help         Show help
 Pass a provider name as a second argument to override all oh-my-opencode agent models:
 
 ```bash
-overlord opencode azure    # All agents use azure/gpt-5.3-codex
-overlord zellij azure      # Same override, with zellij
+overlord opencode bedrock            # All agents use Bedrock Claude Opus 4.6
+overlord zellij bedrock              # Same override, with zellij
+overlord opencode gemini             # All agents use Gemini model mapping
+overlord opencode lms qwen3-8b       # All agents use a specific LM Studio model
 ```
 
-Available providers: `azure`
+Available providers: `bedrock`, `gemini`, `lms <model>`
+
+`bedrock` and `gemini` now select checked-in agent-routing config files. `lms <model>` remains dynamic because the model name is supplied at runtime.
+
+### Config Selection
+
+Pass `--config` to list available OpenCode config files, or `--config <filename>` to load one from `config/` as the runtime OpenCode config:
+
+```bash
+overlord --config
+overlord --config opencode.json
+export OPENROUTER_API_KEY="..." && overlord --config opencode.openrouter-minimax-m2.5-free.json
+overlord --config my-custom-opencode.json opencode
+```
+
+Bare `--config` lists the checked-in OpenCode config candidates. Today that includes:
+
+- `opencode.json`
+- `opencode.openrouter-minimax-m2.5-free.json`
+
+`--config <filename>` only accepts valid OpenCode config files from `config/`, and it cannot be combined with provider overrides.
+
+The checked-in `opencode.openrouter-minimax-m2.5-free.json` config selects OpenRouter's `minimax/minimax-m2.5:free` model and requires `OPENROUTER_API_KEY` in your shell before launch.
 
 ## How It Works
 
@@ -86,13 +110,15 @@ Comes with [oh-my-opencode](https://github.com/code-yeongyu/oh-my-opencode) pre-
 
 All model/provider configuration lives in `config/opencode.json` (native opencode format). Agent and category model assignments live in `config/oh-my-opencode.jsonc`.
 
+The current default agent/category routing is controlled by `config/oh-my-opencode.jsonc`, and the checked-in default now points to `openai/gpt-5.4`. That routing only works if `OPENAI_API_KEY` is available in your shell before launch.
+
 ### Configured Providers
 
 | Provider | Models |
 |---|---|
-| **AWS Bedrock** | Claude Opus 4.5, Claude Haiku 4.5 |
+| **OpenAI** | GPT 5.4 |
+| **AWS Bedrock** | Claude Opus 4.6, Claude Haiku 4.5 |
 | **Google Vertex AI** | Gemini 3.1 Pro, Gemini 3 Flash |
-| **Azure OpenAI** | GPT-5.3 Codex |
 | **LM Studio** | Local models via OpenAI-compatible API |
 
 ### Credentials
@@ -100,6 +126,7 @@ All model/provider configuration lives in `config/opencode.json` (native opencod
 API keys are passed at runtime via environment variables, never baked into the image:
 
 ```bash
+export OPENAI_API_KEY="..."
 export AWS_ACCESS_KEY_ID="..."
 export AWS_SECRET_ACCESS_KEY="..."
 overlord
@@ -107,10 +134,15 @@ overlord
 
 The launcher forwards provider env vars listed in the `PROVIDER_ENV_VARS` array in `scripts/overlord`:
 
+- `OPENAI_API_KEY`
 - `AWS_REGION`, `AWS_BEARER_TOKEN_BEDROCK`
 - `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`
 - `AZURE_RESOURCE_NAME`, `AZURE_API_KEY`
+- `OPENROUTER_API_KEY`
 - `LMSTUDIO_BASE_URL`, `LMSTUDIO_API_KEY`
+- `DOCKER_HOST`, `DOCKER_TLS_VERIFY`, `DOCKER_CERT_PATH`
+- `TESTCONTAINERS_HOST_OVERRIDE`, `TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE`, `TESTCONTAINERS_RYUK_DISABLED`
+- `UV_CACHE_DIR`
 
 `CONTEXT7_API_KEY` is always forwarded (used by the Context7 MCP server).
 
@@ -132,3 +164,21 @@ Ensure credentials are exported in your shell before running `overlord`.
 ## License
 
 MIT
+
+## Devbox Toolchain
+
+The image ships with a polyglot toolchain for application and plugin development:
+
+- **Java**: JDK 24, Maven, JDTLS, Lombok-enabled `jdtls` launcher
+- **TypeScript/Bun**: Node.js 22, Bun, TypeScript LSP stack, Biome CLI
+- **PHP**: `php-cli`, Composer, and common extensions for WordPress/PrestaShop plugin workflows
+- **Python**: Python 3 plus `uv` (with `UV_LINK_MODE=copy` and cache support)
+- **Containers**: Docker CLI + Compose plugin with Testcontainers-oriented env forwarding
+
+For Testcontainers in this Docker-socket setup, defaults are preconfigured:
+
+- `DOCKER_HOST=unix:///var/run/docker.sock`
+- `TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock`
+- `TESTCONTAINERS_HOST_OVERRIDE=host.docker.internal`
+
+Set `TESTCONTAINERS_RYUK_DISABLED=true` only if your daemon policy blocks Ryuk.

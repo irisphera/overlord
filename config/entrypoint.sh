@@ -72,6 +72,17 @@ fi
 # Errors on read-only mounts (.gitconfig, .ssh) are expected and ignored.
 chown -R "$(id -u overlord):$(id -g overlord)" /home/overlord 2>/dev/null || true
 
+# --- Fix platform-mismatched native modules (e.g. Rollup) ---
+# When node_modules is installed on macOS and volume-mounted into this Linux
+# container, platform-specific native binaries (like @rollup/rollup-linux-*)
+# will be missing. Detect and fix by running npm rebuild in affected projects.
+for pkg_dir in $(find /workspace -maxdepth 3 -name "package.json" -not -path "*/node_modules/*" -exec dirname {} \; 2>/dev/null); do
+	if [ -d "${pkg_dir}/node_modules/rollup" ] && [ ! -d "${pkg_dir}/node_modules/@rollup/rollup-linux-$(uname -m | sed 's/aarch64/arm64/;s/x86_64/x64/')-gnu" ]; then
+		echo "[entrypoint] fixing platform-mismatched native modules in ${pkg_dir}"
+		gosu overlord npm install --prefer-offline --no-audit --no-fund --prefix "${pkg_dir}" 2>/dev/null || true
+	fi
+done
+
 # Drop privileges to overlord — ensures the process runs with the
 # remapped UID/GID that matches the workspace file ownership.
 exec gosu overlord "$@"

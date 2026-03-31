@@ -49,6 +49,21 @@ RUN apt-get update && apt-get install -y \
   python3-venv \
   && rm -rf /var/lib/apt/lists/*
 
+# PHP CLI + Composer + common extensions for WordPress/PrestaShop plugin development
+RUN apt-get update && apt-get install -y \
+  php-cli \
+  composer \
+  php-curl \
+  php-mbstring \
+  php-xml \
+  php-zip \
+  php-intl \
+  php-gd \
+  php-mysql \
+  php-sqlite3 \
+  php-opcache \
+  && rm -rf /var/lib/apt/lists/*
+
 # JDK 24 (architecture-aware)
 RUN ADOPTIUM_ARCH=$([ "$TARGETARCH" = "arm64" ] && echo "aarch64" || echo "x64") \
   && curl -fsSL "https://api.adoptium.net/v3/binary/latest/24/ga/linux/${ADOPTIUM_ARCH}/jdk/hotspot/normal/eclipse" -o /tmp/jdk.tar.gz \
@@ -70,6 +85,7 @@ RUN JDTLS_TIMESTAMP=202601291528 \
 
 # LSPs via npm
 RUN npm install -g \
+  @biomejs/biome \
   intelephense \
   typescript-language-server \
   typescript \
@@ -122,6 +138,8 @@ ENV BUN_INSTALL=/home/overlord/.bun
 ENV PATH="/home/overlord/.bun/bin:/home/overlord/.local/bin:/opt/jdk-24/bin:$PATH"
 ENV JAVA_HOME=/opt/jdk-24
 ENV JDTLS_HOME=/opt/jdtls
+ENV UV_LINK_MODE=copy
+ENV UV_CACHE_DIR=/home/overlord/.cache/uv
 ENV LANG=en_US.UTF-8
 
 RUN echo 'export JAVA_HOME=/opt/jdk-24' >> /home/overlord/.zshrc \
@@ -134,7 +152,7 @@ RUN bun add -g opencode-ai@latest
 COPY --chown=overlord:overlord config/opencode.json /home/overlord/.config/opencode/opencode.json
 COPY --chown=overlord:overlord config/oh-my-opencode.jsonc /home/overlord/.config/opencode/oh-my-opencode.jsonc
 COPY --chown=overlord:overlord config/zellij-config.kdl /home/overlord/.config/zellij/config.kdl
-RUN cd /home/overlord/.config/opencode && bun init -y > /dev/null 2>&1 && bun add oh-my-opencode@latest
+RUN cd /home/overlord/.config/opencode && bun init -y > /dev/null 2>&1 && bun add oh-my-openagent@latest
 
 # Git safe directory
 RUN git config --global --add safe.directory /workspace

@@ -1,0 +1,113 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": [
+    "oh-my-opencode@latest"
+  ],
+  "mcp": {
+    "context7": {
+      "type": "remote",
+      "url": "https://mcp.context7.com/mcp",
+      "headers": {
+        "CONTEXT7_API_KEY": "{env:CONTEXT7_API_KEY}"
+      }
+    }
+  },
+  "provider": {
+    "openai": {
+      "options": {
+        "apiKey": "{env:OPENAI_API_KEY}"
+      },
+      "models": {
+        "gpt-5.4": {
+          "name": "GPT 5.4"
+        }
+      }
+    },
+    "amazon-bedrock": {
+      "npm": "@ai-sdk/amazon-bedrock",
+      "name": "AWS Bedrock",
+      "models": {
+        "global.anthropic.claude-opus-4-6-v1": {
+          "name": "Claude Opus 4.6",
+          "reasoning": true,
+          "tool_call": true,
+          "attachment": true,
+          "modalities": {
+            "input": [
+              "text",
+              "image"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 200000,
+            "output": 32000
+          }
+        },
+        "global.anthropic.claude-haiku-4-5-20251001-v1:0": {
+          "name": "Claude Haiku 4.5",
+          "tool_call": true,
+          "attachment": true,
+          "modalities": {
+            "input": [
+              "text",
+              "image"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 200000,
+            "output": 8192
+          }
+        }
+      }
+    },
+    "google-vertex": {
+      "npm": "@ai-sdk/google-vertex",
+      "name": "Google Vertex AI",
+      "options": {
+        "project": "{env:GOOGLE_CLOUD_PROJECT}",
+        "location": "global"
+      },
+      "models": {
+        "gemini-3.1-pro-preview": {
+          "name": "Gemini 3.1 Pro"
+        },
+        "gemini-3-flash-preview": {
+          "name": "Gemini 3 Flash"
+        }
+      }
+    },
+    "lmstudio": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "LM Studio",
+      "options": {
+        "baseURL": "{env:LMSTUDIO_BASE_URL}",
+        "apiKey": "{env:LMSTUDIO_API_KEY}"
+      },
+      "models": {
+        "lm-studio": {
+          "name": "LM Studio (Local)"
+        }
+      }
+    },
+    "openrouter": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "OpenRouter",
+      "options": {
+        "baseURL": "https://openrouter.ai/api/v1",
+        "apiKey": "{env:OPENROUTER_API_KEY}"
+      },
+      "models": {
+        "minimax/minimax-m2.5:free": {
+          "name": "MiniMax M2.5 (free)"
+        }
+      }
+    }
+  },
+  "model": "openrouter/minimax/minimax-m2.5:free"
+}

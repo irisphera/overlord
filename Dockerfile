@@ -148,11 +148,10 @@ RUN echo 'export JAVA_HOME=/opt/jdk-24' >> /home/overlord/.zshrc \
 # Install opencode-ai
 RUN bun add -g opencode-ai@latest
 
-# Config files
-COPY --chown=overlord:overlord config/opencode.json /home/overlord/.config/opencode/opencode.json
-COPY --chown=overlord:overlord config/oh-my-opencode.jsonc /home/overlord/.config/opencode/oh-my-opencode.jsonc
-COPY --chown=overlord:overlord config/zellij-config.kdl /home/overlord/.config/zellij/config.kdl
-RUN cd /home/overlord/.config/opencode && bun init -y > /dev/null 2>&1 && bun add oh-my-openagent@latest
+RUN mkdir -p /home/overlord/.config/opencode \
+  && cd /home/overlord/.config/opencode \
+  && bun init -y > /dev/null 2>&1 \
+  && bun add oh-my-openagent@latest
 
 # Git safe directory
 RUN git config --global --add safe.directory /workspace

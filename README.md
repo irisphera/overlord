@@ -110,6 +110,8 @@ Comes with [oh-my-opencode](https://github.com/code-yeongyu/oh-my-opencode) pre-
 
 All model/provider configuration lives in `config/opencode.json` (native opencode format). Agent and category model assignments live in `config/oh-my-opencode.jsonc`.
 
+Those checked-in files are the only authoritative config inputs. At launch, `scripts/overlord` copies the selected repo config into `/home/overlord/.config/opencode/*` inside the container because that is the runtime location OpenCode expects. Treat the in-container `~/.config/opencode/*` files as generated compatibility output, not as source of truth.
+
 The current default agent/category routing is controlled by `config/oh-my-opencode.jsonc`, and the checked-in default now points to `openai/gpt-5.4`. That routing only works if `OPENAI_API_KEY` is available in your shell before launch.
 
 ### Configured Providers

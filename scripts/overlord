@@ -8,6 +8,14 @@ IMAGE_NAME="overlord-opencode"
 DEFAULT_CONFIG_NAME="opencode.json"
 DEFAULT_OH_MY_CONFIG_NAME="oh-my-opencode.jsonc"
 OPENCODE_CONFIG_SCHEMA='"$schema": "https://opencode.ai/config.json"'
+RUNTIME_CONFIG_DIR="/home/overlord/.config"
+RUNTIME_OPENCODE_CONFIG_DIR="${RUNTIME_CONFIG_DIR}/opencode"
+RUNTIME_OPENCODE_CONFIG_FILE="${RUNTIME_OPENCODE_CONFIG_DIR}/opencode.json"
+RUNTIME_OH_MY_CONFIG_FILE="${RUNTIME_OPENCODE_CONFIG_DIR}/oh-my-opencode.jsonc"
+RUNTIME_ZELLIJ_CONFIG_DIR="${RUNTIME_CONFIG_DIR}/zellij"
+RUNTIME_ZELLIJ_CONFIG_FILE="${RUNTIME_ZELLIJ_CONFIG_DIR}/config.kdl"
+RUNTIME_GCLOUD_CONFIG_DIR="${RUNTIME_CONFIG_DIR}/gcloud"
+RUNTIME_GCLOUD_ADC_FILE="${RUNTIME_GCLOUD_CONFIG_DIR}/application_default_credentials.json"
 
 # Detect container engine (podman preferred, docker fallback)
 if command -v podman &>/dev/null; then
@@ -430,6 +438,13 @@ ensure_running
 
 EXEC_USER="overlord"
 
+ensure_runtime_config_dirs() {
+  "${ENGINE}" exec "${CONTAINER_NAME}" sh -c "mkdir -p \
+    ${RUNTIME_OPENCODE_CONFIG_DIR} \
+    ${RUNTIME_ZELLIJ_CONFIG_DIR} \
+    ${RUNTIME_GCLOUD_CONFIG_DIR}"
+}
+
 # --- Fix workspace permissions for rootless Podman ---
 # Rootless Podman maps host UID to container UID 0 (root).
 # The overlord user (UID 33333) sees mounted files as "others".
@@ -440,16 +455,18 @@ chmod -R a+X "$(pwd)" 2>/dev/null || true
 
 # --- Inject configs into container ---
 
+ensure_runtime_config_dirs
+
 if [[ "${PROVIDER:-}" == "lms" ]]; then
   # LM Studio model IDs are user-supplied at runtime, so this override still
   # needs a targeted rewrite of the default model key/value pair.
   sed -e 's/"lm-studio"/"'"${LMS_MODEL}"'"/g' \
       -e 's/"LM Studio (Local)"/"'"${LMS_MODEL}"'"/g' \
     "${CONFIG_FILE}" |
-    "${ENGINE}" exec -i "${CONTAINER_NAME}" sh -c 'cat > /home/overlord/.config/opencode/opencode.json'
+    "${ENGINE}" exec -i "${CONTAINER_NAME}" sh -c 'cat > '"${RUNTIME_OPENCODE_CONFIG_FILE}"
 else
   cat "${CONFIG_FILE}" |
-    "${ENGINE}" exec -i "${CONTAINER_NAME}" sh -c 'cat > /home/overlord/.config/opencode/opencode.json'
+    "${ENGINE}" exec -i "${CONTAINER_NAME}" sh -c 'cat > '"${RUNTIME_OPENCODE_CONFIG_FILE}"
 fi
 {
   # Persist forwarded provider env vars so they survive in all container shells
@@ -460,7 +477,7 @@ fi
   done
   # Persist GOOGLE_APPLICATION_CREDENTIALS if gcloud ADC was injected
   if [[ -n "${GCLOUD_ADC_HOST}" ]]; then
-    printf 'export GOOGLE_APPLICATION_CREDENTIALS=/home/overlord/.config/gcloud/application_default_credentials.json\n'
+    printf 'export GOOGLE_APPLICATION_CREDENTIALS=%s\n' "${RUNTIME_GCLOUD_ADC_FILE}"
   fi
   # Terminal title: always show workspace name instead of "podman" or "opencode"
   printf 'export OVERLORD_WORKSPACE=%q\n' "${ZELLIJ_SESSION}"
@@ -481,21 +498,20 @@ if [[ "${PROVIDER:-}" == "lms" ]]; then
   # LM Studio model IDs are user-supplied at runtime, so this override still
   # needs a targeted rewrite of model references in the agent routing config.
   sed 's|"model": ".*"|"model": "'"${PROVIDER_MODEL}"'"|g' "${OH_MY_CONFIG_FILE}" |
-    "${ENGINE}" exec -i "${CONTAINER_NAME}" sh -c 'cat > /home/overlord/.config/opencode/oh-my-opencode.jsonc'
+    "${ENGINE}" exec -i "${CONTAINER_NAME}" sh -c 'cat > '"${RUNTIME_OH_MY_CONFIG_FILE}"
 else
   cat "${OH_MY_CONFIG_FILE}" |
-    "${ENGINE}" exec -i "${CONTAINER_NAME}" sh -c 'cat > /home/overlord/.config/opencode/oh-my-opencode.jsonc'
+    "${ENGINE}" exec -i "${CONTAINER_NAME}" sh -c 'cat > '"${RUNTIME_OH_MY_CONFIG_FILE}"
 fi
 
 # Inject gcloud ADC credentials (copied, not bind-mounted, so permissions can be fixed)
 if [[ -n "${GCLOUD_ADC_HOST}" ]]; then
-  "${ENGINE}" exec "${CONTAINER_NAME}" sh -c 'mkdir -p /home/overlord/.config/gcloud'
   cat "${GCLOUD_ADC_HOST}" |
-    "${ENGINE}" exec -i "${CONTAINER_NAME}" sh -c 'cat > /home/overlord/.config/gcloud/application_default_credentials.json'
+    "${ENGINE}" exec -i "${CONTAINER_NAME}" sh -c 'cat > '"${RUNTIME_GCLOUD_ADC_FILE}"
 fi
 
 cat "${OVERLORD_DIR}/config/zellij-config.kdl" |
-  "${ENGINE}" exec -i "${CONTAINER_NAME}" sh -c 'cat > /home/overlord/.config/zellij/config.kdl'
+  "${ENGINE}" exec -i "${CONTAINER_NAME}" sh -c 'cat > '"${RUNTIME_ZELLIJ_CONFIG_FILE}"
 
 # --- Fix permissions (single pass for all injected configs + volumes) ---
 # chown sets ownership; chmod a+rwX is the fallback for rootless Podman

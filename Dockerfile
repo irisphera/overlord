@@ -93,7 +93,8 @@ RUN npm install -g \
   @tailwindcss/language-server \
   yaml-language-server \
   dockerfile-language-server-nodejs \
-  bash-language-server
+  bash-language-server \
+  basedpyright
 
 # LSPs + tools via apt (NO tigervnc-tools)
 RUN apt-get update && apt-get install -y \

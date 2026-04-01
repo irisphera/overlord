@@ -343,7 +343,6 @@ export GOOGLE_CLOUD_LOCATION GOOGLE_CLOUD_PROJECT
 
 # --- Provider env vars (update when adding/removing providers in opencode.json) ---
 PROVIDER_ENV_VARS=(
-  OPENAI_API_KEY
   AWS_REGION
   AWS_BEARER_TOKEN_BEDROCK
   GOOGLE_CLOUD_PROJECT

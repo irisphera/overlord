@@ -6,12 +6,13 @@ SCRIPT_DIR="$(cd "$(dirname "${RESOLVED_SCRIPT}")" && pwd)"
 OVERLORD_DIR="$(dirname "${SCRIPT_DIR}")"
 IMAGE_NAME="overlord-opencode"
 DEFAULT_CONFIG_NAME="opencode.json"
-DEFAULT_OH_MY_CONFIG_NAME="oh-my-opencode.jsonc"
+DEFAULT_OH_MY_CONFIG_NAME="oh-my-openagent.jsonc"
 OPENCODE_CONFIG_SCHEMA='"$schema": "https://opencode.ai/config.json"'
 RUNTIME_CONFIG_DIR="/home/overlord/.config"
 RUNTIME_OPENCODE_CONFIG_DIR="${RUNTIME_CONFIG_DIR}/opencode"
 RUNTIME_OPENCODE_CONFIG_FILE="${RUNTIME_OPENCODE_CONFIG_DIR}/opencode.json"
-RUNTIME_OH_MY_CONFIG_FILE="${RUNTIME_OPENCODE_CONFIG_DIR}/oh-my-opencode.jsonc"
+RUNTIME_OH_MY_OPENCODE_CONFIG_FILE="${RUNTIME_OPENCODE_CONFIG_DIR}/oh-my-opencode.jsonc"
+RUNTIME_OH_MY_OPENAGENT_CONFIG_FILE="${RUNTIME_OPENCODE_CONFIG_DIR}/oh-my-openagent.jsonc"
 RUNTIME_ZELLIJ_CONFIG_DIR="${RUNTIME_CONFIG_DIR}/zellij"
 RUNTIME_ZELLIJ_CONFIG_FILE="${RUNTIME_ZELLIJ_CONFIG_DIR}/config.kdl"
 RUNTIME_GCLOUD_CONFIG_DIR="${RUNTIME_CONFIG_DIR}/gcloud"
@@ -54,7 +55,7 @@ COMMANDS:
     purge          Remove the container and image (next launch rebuilds everything)
     help           Show this help
 
-PROVIDERS (optional, overrides oh-my-opencode agent models):
+PROVIDERS (optional, overrides oh-my-openagent agent models):
     bedrock        Use amazon-bedrock/claude-opus-4-6 for all agents
     gemini         Use google-vertex/gemini-3.1-pro-preview for all agents
     lms <model>    Use LM Studio with a specific model for all agents
@@ -230,19 +231,6 @@ resolve_provider_model() {
   esac
 }
 
-resolve_oh_my_config_file() {
-  case "$1" in
-    "") echo "${OVERLORD_DIR}/config/${DEFAULT_OH_MY_CONFIG_NAME}" ;;
-    bedrock) echo "${OVERLORD_DIR}/config/${DEFAULT_OH_MY_CONFIG_NAME}" ;;
-    gemini) echo "${OVERLORD_DIR}/config/oh-my-opencode.gemini.jsonc" ;;
-    lms) echo "${OVERLORD_DIR}/config/${DEFAULT_OH_MY_CONFIG_NAME}" ;;
-    *)
-      echo "Error: unknown provider '$1'" >&2
-      exit 1
-      ;;
-  esac
-}
-
 if [[ "${CONFIG_EXPLICIT}" -eq 1 && -n "${PROVIDER}" ]]; then
   echo "Error: --config cannot be combined with provider overrides" >&2
   echo "Choose either an explicit config file or a provider override." >&2
@@ -251,11 +239,10 @@ fi
 
 if [[ -n "${PROVIDER}" ]]; then
   PROVIDER_MODEL="$(resolve_provider_model "${PROVIDER}")"
-  OH_MY_CONFIG_FILE="$(resolve_oh_my_config_file "${PROVIDER}")"
-  echo "Provider override: all oh-my-opencode agents → ${PROVIDER_MODEL}"
-else
-  OH_MY_CONFIG_FILE="${OVERLORD_DIR}/config/${DEFAULT_OH_MY_CONFIG_NAME}"
+  echo "Provider override: all oh-my-openagent agents → ${PROVIDER_MODEL}"
 fi
+
+OH_MY_CONFIG_FILE="${OVERLORD_DIR}/config/${DEFAULT_OH_MY_CONFIG_NAME}"
 
 case "${COMMAND}" in
 help | -h | --help)
@@ -437,6 +424,13 @@ ensure_running
 
 EXEC_USER="overlord"
 
+# --- Setup (skip when re-attaching to a running container) ---
+# When the container was already running (from a prior 'overlord' invocation),
+# configs and permissions are already in place.  Re-running setup is slow and
+# can disrupt active sessions by overwriting configs mid-use.
+# To force re-injection after config changes, use 'overlord fresh'.
+if [[ "${STATE}" != "running" ]]; then
+
 ensure_runtime_config_dirs() {
   "${ENGINE}" exec "${CONTAINER_NAME}" sh -c "mkdir -p \
     ${RUNTIME_OPENCODE_CONFIG_DIR} \
@@ -493,14 +487,17 @@ TITLE_HOOKS
 "${ENGINE}" exec "${CONTAINER_NAME}" sh -c \
   'grep -q zsh_data /home/overlord/.zshrc 2>/dev/null || echo "export HISTFILE=~/.zsh_data/.zsh_history" >> /home/overlord/.zshrc'
 
-if [[ "${PROVIDER:-}" == "lms" ]]; then
-  # LM Studio model IDs are user-supplied at runtime, so this override still
-  # needs a targeted rewrite of model references in the agent routing config.
+if [[ -n "${PROVIDER:-}" ]]; then
+  # Provider override active — rewrite all model references to the resolved model.
   sed 's|"model": ".*"|"model": "'"${PROVIDER_MODEL}"'"|g' "${OH_MY_CONFIG_FILE}" |
-    "${ENGINE}" exec -i "${CONTAINER_NAME}" sh -c 'cat > '"${RUNTIME_OH_MY_CONFIG_FILE}"
+    "${ENGINE}" exec -i "${CONTAINER_NAME}" sh -c 'cat > '"${RUNTIME_OH_MY_OPENCODE_CONFIG_FILE}"
+  sed 's|"model": ".*"|"model": "'"${PROVIDER_MODEL}"'"|g' "${OH_MY_CONFIG_FILE}" |
+    "${ENGINE}" exec -i "${CONTAINER_NAME}" sh -c 'cat > '"${RUNTIME_OH_MY_OPENAGENT_CONFIG_FILE}"
 else
   cat "${OH_MY_CONFIG_FILE}" |
-    "${ENGINE}" exec -i "${CONTAINER_NAME}" sh -c 'cat > '"${RUNTIME_OH_MY_CONFIG_FILE}"
+    "${ENGINE}" exec -i "${CONTAINER_NAME}" sh -c 'cat > '"${RUNTIME_OH_MY_OPENCODE_CONFIG_FILE}"
+  cat "${OH_MY_CONFIG_FILE}" |
+    "${ENGINE}" exec -i "${CONTAINER_NAME}" sh -c 'cat > '"${RUNTIME_OH_MY_OPENAGENT_CONFIG_FILE}"
 fi
 
 # Inject gcloud ADC credentials (copied, not bind-mounted, so permissions can be fixed)
@@ -550,6 +547,8 @@ cat "${OVERLORD_DIR}/config/zellij-config.kdl" |
 # --- Ensure zellij cache dir is writable (rootless Podman UID mapping can break chown) ---
 "${ENGINE}" exec "${CONTAINER_NAME}" sh -c \
   'mkdir -p /home/overlord/.cache/zellij && chown -R overlord:overlord /home/overlord/.cache/zellij; chmod -R a+rwX /home/overlord/.cache'
+
+fi  # end setup (STATE != running)
 
 # --- Launch ---
 

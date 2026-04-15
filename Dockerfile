@@ -64,6 +64,7 @@ RUN apt-get update && apt-get install -y \
   php-opcache \
   && rm -rf /var/lib/apt/lists/*
 
+
 # JDK 24 (architecture-aware)
 RUN ADOPTIUM_ARCH=$([ "$TARGETARCH" = "arm64" ] && echo "aarch64" || echo "x64") \
   && curl -fsSL "https://api.adoptium.net/v3/binary/latest/24/ga/linux/${ADOPTIUM_ARCH}/jdk/hotspot/normal/eclipse" -o /tmp/jdk.tar.gz \

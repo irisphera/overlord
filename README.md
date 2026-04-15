@@ -1,6 +1,6 @@
 # Overlord
 
-Isolated Docker environment for [OpenCode](https://opencode.ai) + [Oh My OpenCode](https://github.com/code-yeongyu/oh-my-opencode) with [zellij](https://zellij.dev) terminal multiplexing. Run multiple AI coding agents side by side in a persistent container.
+Isolated Docker environment for [OpenCode](https://opencode.ai) + [Oh My OpenCode](https://github.com/code-yeongyu/oh-my-openagent) with [zellij](https://zellij.dev) terminal multiplexing. Run multiple AI coding agents side by side in a persistent container.
 
 ## Quick Start
 
@@ -33,7 +33,7 @@ overlord help         Show help
 
 ### Provider Override
 
-Pass a provider name as a second argument to override all oh-my-opencode agent models:
+Pass a provider name as a second argument to override all oh-my-openagent agent models:
 
 ```bash
 overlord opencode bedrock            # All agents use Bedrock Claude Opus 4.6
@@ -94,9 +94,9 @@ Anything you install inside the container (apt packages, pip packages, etc.) per
 | `Alt+f` | Toggle floating pane |
 | `Ctrl+b` | Tab mode |
 
-## Oh My OpenCode
+## Oh My OpenAgent
 
-Comes with [oh-my-opencode](https://github.com/code-yeongyu/oh-my-opencode) pre-installed. Type `ultrawork` (or `ulw`) in your prompt to activate parallel agents, deep exploration, and relentless execution.
+Comes with [oh-my-openagent](https://github.com/code-yeongyu/oh-my-openagent) pre-installed. Type `ultrawork` (or `ulw`) in your prompt to activate parallel agents, deep exploration, and relentless execution.
 
 | Feature | Description |
 |---|---|
@@ -108,11 +108,11 @@ Comes with [oh-my-opencode](https://github.com/code-yeongyu/oh-my-opencode) pre-
 
 ## Model Configuration
 
-All model/provider configuration lives in `config/opencode.json` (native opencode format). Agent and category model assignments live in `config/oh-my-opencode.jsonc`.
+All model/provider configuration lives in `config/opencode.json` (native opencode format). Agent and category model assignments live in `config/oh-my-openagent.jsonc`.
 
 Those checked-in files are the only authoritative config inputs. At launch, `scripts/overlord` copies the selected repo config into `/home/overlord/.config/opencode/*` inside the container because that is the runtime location OpenCode expects. Treat the in-container `~/.config/opencode/*` files as generated compatibility output, not as source of truth.
 
-The current default agent/category routing is controlled by `config/oh-my-opencode.jsonc`, and the checked-in default now points to `openai/gpt-5.4`. That routing only works if `OPENAI_API_KEY` is available in your shell before launch.
+The current default agent/category routing is controlled by `config/oh-my-openagent.jsonc`, and the checked-in default now points to `openai/gpt-5.4`. That routing only works if `OPENAI_API_KEY` is available in your shell before launch.
 
 ### Configured Providers
 
@@ -158,7 +158,7 @@ overlord fresh && overlord
 ```
 
 **Config validation errors:**
-Check that all agents/categories in `oh-my-opencode.jsonc` reference models defined in `opencode.json`.
+Check that all agents/categories in `oh-my-openagent.jsonc` reference models defined in `opencode.json`.
 
 **Can't reach API:**
 Ensure credentials are exported in your shell before running `overlord`.

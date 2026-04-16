@@ -13,7 +13,7 @@ OPENCODE_WEB_HOSTNAME="0.0.0.0"
 OPENCODE_WEB_PORT="4090"
 OPENCODE_WEB_PID_FILE="/home/overlord/.local/share/opencode/overlord-serve.pid"
 OPENCODE_WEB_LOG_FILE="/home/overlord/.local/share/opencode/overlord-serve.log"
-OPENCODE_WEB_WAIT_SECONDS=30
+OPENCODE_WEB_WAIT_SECONDS=90
 OPENCODE_HOST_PROXY_BIND_HOST="0.0.0.0"
 RUNTIME_CONFIG_DIR="/home/overlord/.config"
 RUNTIME_OPENCODE_CONFIG_DIR="${RUNTIME_CONFIG_DIR}/opencode"
@@ -44,7 +44,7 @@ ZELLIJ_SESSION="$(basename "$(pwd)")"
 
 # Persistent state directory inside the workspace
 OVERLORD_STATE_DIR="$(pwd)/.overlord"
-OPENCODE_HOST_PROXY_SCRIPT="${OVERLORD_STATE_DIR}/opencode-web-proxy.js"
+OPENCODE_HOST_PROXY_SCRIPT="${OVERLORD_STATE_DIR}/opencode-web-proxy.cjs"
 OPENCODE_HOST_PROXY_PID_FILE="${OVERLORD_STATE_DIR}/opencode-web-proxy.pid"
 OPENCODE_HOST_PROXY_PORT_FILE="${OVERLORD_STATE_DIR}/opencode-web-proxy.port"
 OPENCODE_HOST_PROXY_LOG_FILE="${OVERLORD_STATE_DIR}/opencode-web-proxy.log"
@@ -201,6 +201,30 @@ wait_for_opencode_web() {
 	exit 1
 }
 
+wait_for_opencode_web_ui() {
+	local host_port="$1"
+	local root_url="http://127.0.0.1:${host_port}/"
+	local curl_args=(--silent --fail --max-time 10)
+	local attempt
+	local response
+
+	if [[ -n "${OPENCODE_SERVER_PASSWORD:-}" ]]; then
+		curl_args+=(-u "opencode:${OPENCODE_SERVER_PASSWORD}")
+	fi
+
+	for ((attempt = 1; attempt <= OPENCODE_WEB_WAIT_SECONDS; attempt += 1)); do
+		response=$(curl "${curl_args[@]}" "${root_url}" 2>/dev/null || true)
+		if [[ "${response}" == *"<!doctype html>"* ]]; then
+			return 0
+		fi
+		sleep 1
+	done
+
+	echo "Error: OpenCode web UI root did not become ready at ${root_url}" >&2
+	echo "Check ${OPENCODE_WEB_LOG_FILE} inside ${CONTAINER_NAME} for startup errors." >&2
+	exit 1
+}
+
 write_host_web_proxy_script() {
 	cat >"${OPENCODE_HOST_PROXY_SCRIPT}" <<'EOF'
 const fs = require("fs")
@@ -282,17 +306,17 @@ wait_for_host_web_proxy() {
 	for ((attempt = 1; attempt <= OPENCODE_WEB_WAIT_SECONDS; attempt += 1)); do
 		if [[ -s "${OPENCODE_HOST_PROXY_PORT_FILE}" ]]; then
 			proxy_port=$(<"${OPENCODE_HOST_PROXY_PORT_FILE}")
-			if curl --silent --fail --max-time 5 "http://localhost:${proxy_port}/global/health" >/dev/null; then
-				printf '%s\n' "${proxy_port}"
-				return 0
-			fi
+		if curl --silent --fail --max-time 10 "http://localhost:${proxy_port}/" | grep -q '<!doctype html>'; then
+			printf '%s\n' "${proxy_port}"
+			return 0
+		fi
 		fi
 		sleep 1
 	done
 
-	echo "Error: local OpenCode host proxy did not become healthy." >&2
-	echo "Check ${OPENCODE_HOST_PROXY_LOG_FILE} for proxy startup errors." >&2
-	exit 1
+		echo "Error: local OpenCode host proxy did not become healthy." >&2
+		echo "Check ${OPENCODE_HOST_PROXY_LOG_FILE} for proxy startup errors." >&2
+		return 1
 }
 
 ensure_host_web_proxy() {
@@ -302,7 +326,7 @@ ensure_host_web_proxy() {
 
 	if ! command -v node >/dev/null 2>&1; then
 		echo "Error: node is required on the host to proxy OpenCode web traffic from Podman." >&2
-		exit 1
+		return 1
 	fi
 
 	ensure_state_dir
@@ -319,7 +343,7 @@ ensure_host_web_proxy() {
 	nohup node "${OPENCODE_HOST_PROXY_SCRIPT}" "${upstream_port}" "${OPENCODE_HOST_PROXY_BIND_HOST}" "${OPENCODE_HOST_PROXY_PORT_FILE}" >"${OPENCODE_HOST_PROXY_LOG_FILE}" 2>&1 &
 	echo $! >"${OPENCODE_HOST_PROXY_PID_FILE}"
 
-	proxy_port="$(wait_for_host_web_proxy)"
+	proxy_port="$(wait_for_host_web_proxy)" || return 1
 	printf '%s\n' "${proxy_port}"
 }
 
@@ -357,10 +381,10 @@ if [ -s "${PID_FILE}" ]; then
   if [ -n "${PID}" ] && kill -0 "${PID}" 2>/dev/null && [ -r "/proc/${PID}/cmdline" ]; then
     CMDLINE=$(tr '\000' ' ' < "/proc/${PID}/cmdline")
     case "${CMDLINE}" in
-	  *"opencode web --pure --hostname ${HOST} --port ${PORT}"*)
+	  *"opencode web --hostname ${HOST} --port ${PORT}"*)
         exit 0
         ;;
-      *"opencode web --hostname ${HOST} --port ${PORT}"*|\
+      *"opencode web --pure --hostname ${HOST} --port ${PORT}"*|\
       *"opencode serve --hostname ${HOST} --port ${PORT}"*)
         kill "${PID}" 2>/dev/null || true
         for _ in 1 2 3 4 5; do
@@ -376,18 +400,25 @@ if [ -s "${PID_FILE}" ]; then
 fi
 
 	mkdir -p "$(dirname "${PID_FILE}")"
-nohup opencode web --pure --hostname "${HOST}" --port "${PORT}" >"${LOG_FILE}" 2>&1 &
+nohup opencode web --hostname "${HOST}" --port "${PORT}" >"${LOG_FILE}" 2>&1 &
 echo $! >"${PID_FILE}"
 EOF
 
 	wait_for_opencode_web "${host_port}"
+	wait_for_opencode_web_ui "${host_port}"
 	access_port="${host_port}"
 	if [[ "${ENGINE}" == "podman" ]]; then
-		access_port="$(ensure_host_web_proxy "${host_port}")"
+		access_port="$(ensure_host_web_proxy "${host_port}")" || return 1
+	fi
+	if [[ "${access_port}" != "${host_port}" ]]; then
+		printf 'Published port: http://localhost:%s\n' "${host_port}"
 	fi
 	printf 'Local access:   http://localhost:%s\n' "${access_port}"
 	network_ip="$(resolve_network_host_ip)"
 	if [[ -n "${network_ip}" ]]; then
+		if [[ "${access_port}" != "${host_port}" ]]; then
+			printf 'Published LAN:  http://%s:%s\n' "${network_ip}" "${host_port}"
+		fi
 		printf 'Network access: http://%s:%s\n' "${network_ip}" "${access_port}"
 	fi
 }

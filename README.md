@@ -1,6 +1,6 @@
 # Overlord
 
-Isolated Docker environment for [OpenCode](https://opencode.ai) + [Oh My OpenCode](https://github.com/code-yeongyu/oh-my-openagent) with [zellij](https://zellij.dev) terminal multiplexing. Run multiple AI coding agents side by side in a persistent container.
+Isolated container environment for [OpenCode](https://opencode.ai) + [Oh My OpenCode](https://github.com/code-yeongyu/oh-my-openagent) with a web-first launcher and optional [zellij](https://zellij.dev) terminal escape hatch. Run multiple AI coding agents side by side in a persistent container.
 
 ## Quick Start
 
@@ -18,14 +18,16 @@ cd ~/my-project
 overlord
 ```
 
-First run builds the image and creates a container. After that, `overlord` reattaches instantly.
+First run builds the image, creates a container, starts the OpenCode web server, and prints local and network URLs. After that, `overlord` reuses the same container and web server.
 
 ## Commands
 
 ```
-overlord              Launch zellij (default)
-overlord opencode     Launch opencode directly
+overlord              Start/reuse OpenCode web mode (default)
+overlord web          Start/reuse OpenCode web mode explicitly
+overlord opencode     Alias for `overlord web`
 overlord shell        Open a zsh shell in the container
+overlord zellij       Launch zellij explicitly
 overlord fresh        Remove the container (next launch starts from clean image)
 overlord purge        Remove the container and image (next launch rebuilds everything)
 overlord help         Show help
@@ -36,10 +38,10 @@ overlord help         Show help
 Pass a provider name as a second argument to override all oh-my-openagent agent models:
 
 ```bash
-overlord opencode bedrock            # All agents use Bedrock Claude Opus 4.6
+overlord web bedrock                 # All agents use Bedrock Claude Opus 4.6
 overlord zellij bedrock              # Same override, with zellij
-overlord opencode gemini             # All agents use Gemini model mapping
-overlord opencode lms qwen3-8b       # All agents use a specific LM Studio model
+overlord opencode gemini             # Same web mode, with Gemini model mapping
+overlord opencode lms qwen3-8b       # Same web mode, with a specific LM Studio model
 ```
 
 Available providers: `bedrock`, `gemini`, `lms <model>`
@@ -54,7 +56,8 @@ Pass `--config` to list available OpenCode config files, or `--config <filename>
 overlord --config
 overlord --config opencode.json
 export OPENROUTER_API_KEY="..." && overlord --config opencode.openrouter-minimax-m2.5-free.json
-overlord --config my-custom-opencode.json opencode
+overlord --config my-custom-opencode.json
+overlord --config my-custom-opencode.json zellij
 ```
 
 Bare `--config` lists the checked-in OpenCode config candidates. Today that includes:
@@ -68,7 +71,11 @@ The checked-in `opencode.openrouter-minimax-m2.5-free.json` config selects OpenR
 
 ## How It Works
 
-Each workspace directory gets its own persistent container. The container stays alive in the background — detach from zellij with `Ctrl+q` and come back anytime with `overlord`.
+Each workspace directory gets its own persistent container. `overlord` keeps that container alive in the background, starts or reuses a single OpenCode web server process inside it, publishes the fixed container port to an ephemeral host port on all host interfaces, and prints both the local `http://localhost:<port>` URL and a LAN-accessible `http://<host-ip>:<port>` URL when it can resolve the host IP.
+
+If you want to require authentication for the web UI, export `OPENCODE_SERVER_PASSWORD` before launch. The launcher forwards it to the container and uses it for health checks.
+
+Use `overlord zellij` or `overlord shell` when you want an explicit terminal entrypoint into the same container.
 
 Conversations, memory, and shell history are stored in `.overlord/` inside your project directory and survive `fresh` and `purge`.
 
@@ -155,6 +162,12 @@ Google Cloud ADC credentials are automatically injected if found at `~/.config/g
 **Permission denied:**
 ```bash
 overlord fresh && overlord
+```
+
+**Existing container does not expose the web port:**
+```bash
+overlord fresh
+overlord
 ```
 
 **Config validation errors:**

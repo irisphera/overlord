@@ -148,7 +148,7 @@ RUN echo 'export JAVA_HOME=/opt/jdk-24' >> /home/overlord/.zshrc \
   && echo 'export PATH="/opt/jdk-24/bin:$PATH"' >> /home/overlord/.zshrc
 
 # Install opencode-ai
-RUN bun add -g opencode-ai@latest
+RUN bun add -g opencode-ai@1.4.6
 
 RUN mkdir -p /home/overlord/.config/opencode \
   && cd /home/overlord/.config/opencode \

@@ -50,8 +50,10 @@ overlord/
 ## COMMANDS
 
 ```bash
-overlord                # Launch zellij in the persistent workspace container
-overlord opencode       # Launch OpenCode directly in the running container
+overlord                # Start/reuse OpenCode web mode and print local/network URLs
+overlord web            # Explicit web-mode alias
+overlord opencode       # Alias for the web-mode launcher
+overlord zellij         # Open zellij explicitly in the persistent container
 overlord shell          # Open an interactive zsh shell in the container
 overlord --config       # List checked-in OpenCode config candidates
 overlord fresh          # Remove container only; keep image and .overlord state
@@ -61,6 +63,6 @@ overlord purge          # Remove container + image; .overlord state remains
 ## NOTES
 
 - **No CI/CD and no automated tests in repo** — verification is manual and lifecycle-based.
-- Canonical manual checks are `overlord`, `overlord shell`, `overlord opencode`, `overlord fresh && overlord`, and `overlord purge && overlord` after image/runtime wiring changes.
+- Canonical manual checks are `overlord`, `overlord web`, `overlord opencode`, `overlord zellij`, `overlord shell`, `overlord --config`, `overlord fresh && overlord`, and `overlord purge && overlord` after image/runtime wiring changes.
 - The launcher supports Podman if available and falls back to Docker; README Docker wording is not the full runtime story.
 - `config/zellij-opencode.kdl` is checked in but is not part of the currently wired runtime config injection path.

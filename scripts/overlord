@@ -4,11 +4,11 @@ set -euo pipefail
 RESOLVED_SCRIPT="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || realpath "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")"
 SCRIPT_DIR="$(cd "$(dirname "${RESOLVED_SCRIPT}")" && pwd)"
 OVERLORD_DIR="$(dirname "${SCRIPT_DIR}")"
-IMAGE_NAME="overlord-opencode"
-DEFAULT_CONFIG_NAME="opencode.json"
+OPENCODE_CONFIG_NAME="opencode.json"
 DEFAULT_OH_MY_CONFIG_NAME="oh-my-openagent.jsonc"
 OPENCODE_CONFIG_SCHEMA="\"\$schema\": \"https://opencode.ai/config.json\""
-OPENCODE_REQUIRED_VERSION="1.4.6"
+OH_MY_CONFIG_SCHEMA="\"\$schema\": \"https://raw.githubusercontent.com/code-yeongyu/oh-my-openagent/dev/assets/oh-my-opencode.schema.json\""
+OPENCODE_REQUIRED_VERSION="latest"
 OPENCODE_WEB_HOSTNAME="0.0.0.0"
 OPENCODE_WEB_PORT="4090"
 OPENCODE_WEB_PID_FILE="/home/overlord/.local/share/opencode/overlord-serve.pid"
@@ -35,8 +35,9 @@ else
 	exit 1
 fi
 
-# Container name: one per workspace directory (sanitized for container names)
+# Container/image identity: one per workspace directory (sanitized for container/image names)
 WORKSPACE_SLUG="$(basename "$(pwd)" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9._-]/-/g')"
+IMAGE_NAME="overlord-opencode-${WORKSPACE_SLUG}"
 CONTAINER_NAME="overlord-${WORKSPACE_SLUG}"
 
 # Zellij session name: just the directory basename (no prefix needed)
@@ -53,10 +54,12 @@ show_help() {
 	cat <<'USAGE'
 overlord - Launch isolated OpenCode workspace container
 
-USAGE: overlord [--config [filename]] [command] [provider]
+USAGE: overlord [--list-configs | --config PRESET | --lms-model MODEL] [command]
 
 OPTIONS:
-    --config [FILE]  List available OpenCode configs, or load config/FILE as opencode.json
+	--list-configs     List available oh-my-openagent routing presets
+	--config PRESET    Use an oh-my-openagent routing preset with config/opencode.json
+	--lms-model MODEL  Rewrite all oh-my-openagent routes to lmstudio/MODEL
 
 COMMANDS:
     web            Start/reuse OpenCode web mode and print local/network URLs (default)
@@ -67,22 +70,18 @@ COMMANDS:
     purge          Remove the container and image (next launch rebuilds everything)
     help           Show this help
 
-PROVIDERS (optional, overrides oh-my-openagent agent models):
-    bedrock        Use amazon-bedrock/claude-opus-4-6 for all agents
-    gemini         Use google-vertex/gemini-3.1-pro-preview for all agents
-    lms <model>    Use LM Studio with a specific model for all agents
-
 EXAMPLES:
-    overlord --config                # List available OpenCode config files
-    overlord                         # Start/reuse the OpenCode web UI (default config)
-    overlord --config opencode.json  # Start web UI with an explicit config file
-    OPENAI_API_KEY=... overlord      # Start web UI with the default GPT 5.4 routing
+	    overlord --list-configs          # List available agent routing presets
+	    overlord                         # Start/reuse the OpenCode web UI (default config)
+	    overlord --config default        # Use config/oh-my-openagent.jsonc
+	AZURE_API_KEY=... AZURE_RESOURCE_NAME=... overlord  # Start web UI with the default Azure routing
     overlord web                     # Start/reuse the OpenCode web UI explicitly
     overlord opencode                # Alias for 'overlord web'
-    overlord web bedrock             # Start web UI with Bedrock models
-    overlord opencode gemini         # Start web UI with Gemini models
-    overlord opencode lms qwen3-8b   # Start web UI with LM Studio model
-    overlord zellij bedrock          # Launch zellij with Bedrock models
+	    overlord --config pro                   # Use config/oh-my-openagent.pro.jsonc
+	    overlord --config gemini                # Use config/oh-my-openagent.gemini.jsonc
+	    overlord --config opus                  # Use config/oh-my-openagent.opus.jsonc
+	    overlord --lms-model qwen3-8b web       # Use LM Studio with an explicit runtime model
+	    overlord --lms-model qwen3-8b zellij    # Same runtime model, with zellij
     overlord shell                   # Open a shell
     overlord fresh && overlord       # Fresh container, then launch
     overlord purge && overlord       # Full rebuild, then launch
@@ -121,6 +120,13 @@ backup_container_data() {
 		"${OVERLORD_STATE_DIR}/opencode-data/" 2>/dev/null || true
 	"${ENGINE}" cp "${CONTAINER_NAME}:/home/overlord/.zsh_data/." \
 		"${OVERLORD_STATE_DIR}/zsh-data/" 2>/dev/null || true
+}
+
+clear_persisted_opencode_server_state() {
+	mkdir -p "${OVERLORD_STATE_DIR}/opencode-data"
+	rm -f \
+		"${OVERLORD_STATE_DIR}/opencode-data/$(basename "${OPENCODE_WEB_PID_FILE}")" \
+		"${OVERLORD_STATE_DIR}/opencode-data/$(basename "${OPENCODE_WEB_LOG_FILE}")"
 }
 
 ensure_image() {
@@ -393,10 +399,10 @@ if [ -s "${PID_FILE}" ]; then
           fi
           sleep 1
         done
-        rm -f "${PID_FILE}"
         ;;
     esac
   fi
+  rm -f "${PID_FILE}"
 fi
 
 	mkdir -p "$(dirname "${PID_FILE}")"
@@ -425,14 +431,33 @@ EOF
 
 ensure_opencode_runtime_version() {
 	local current_version
+	local installed_version
 
 	current_version=$("${ENGINE}" exec -u "${EXEC_USER}" "${CONTAINER_NAME}" opencode --version 2>/dev/null || true)
 	if [[ "${current_version}" == "${OPENCODE_REQUIRED_VERSION}" ]]; then
 		return 0
 	fi
 
-	echo "Updating OpenCode to ${OPENCODE_REQUIRED_VERSION} in ${CONTAINER_NAME}..."
-	"${ENGINE}" exec -u "${EXEC_USER}" "${CONTAINER_NAME}" bun add -g "opencode-ai@${OPENCODE_REQUIRED_VERSION}"
+	echo "Ensuring OpenCode CLI package opencode-ai@${OPENCODE_REQUIRED_VERSION} in ${CONTAINER_NAME}..."
+	"${ENGINE}" exec -u "${EXEC_USER}" "${CONTAINER_NAME}" sh -s -- "${OPENCODE_REQUIRED_VERSION}" <<'EOF'
+set -e
+
+required_version="$1"
+install_log="$(mktemp)"
+
+cleanup() {
+	rm -f "${install_log}"
+}
+
+trap cleanup EXIT
+
+if ! bun add -g "opencode-ai@${required_version}" >"${install_log}" 2>&1; then
+	cat "${install_log}" >&2
+	exit 1
+fi
+EOF
+	installed_version=$("${ENGINE}" exec -u "${EXEC_USER}" "${CONTAINER_NAME}" opencode --version 2>/dev/null || true)
+	printf 'OpenCode CLI version: %s\n' "${installed_version:-unknown}"
 }
 
 is_opencode_config_file() {
@@ -445,14 +470,29 @@ is_opencode_config_file() {
 	grep -Fq "${OPENCODE_CONFIG_SCHEMA}" "${file_path}"
 }
 
+is_oh_my_config_file() {
+	local file_path="$1"
+	local file_name
+
+	file_name="$(basename "${file_path}")"
+	[[ -f "${file_path}" ]] || return 1
+	[[ "${file_name}" == oh-my-openagent*.jsonc ]] || return 1
+	grep -Fq "${OH_MY_CONFIG_SCHEMA}" "${file_path}"
+}
+
 print_available_configs() {
 	local path
+	local name
 	local found=0
 
-	echo "Available OpenCode configs:"
-	for path in "${OVERLORD_DIR}"/config/opencode*.json; do
-		if is_opencode_config_file "${path}"; then
-			printf '  %s\n' "$(basename "${path}")"
+	echo "Available oh-my-openagent routing presets:"
+	for path in "${OVERLORD_DIR}"/config/oh-my-openagent*.jsonc; do
+		if is_oh_my_config_file "${path}"; then
+			name="$(basename "${path}")"
+			name="${name#oh-my-openagent}"
+			name="${name%.jsonc}"
+			name="${name#.}"
+			printf '  %s (%s)\n' "${name:-default}" "$(basename "${path}")"
 			found=1
 		fi
 	done
@@ -464,24 +504,45 @@ print_available_configs() {
 
 # --- Parse command ---
 
-CONFIG_NAME="${DEFAULT_CONFIG_NAME}"
+CONFIG_NAME="${DEFAULT_OH_MY_CONFIG_NAME}"
 CONFIG_EXPLICIT=0
+LIST_CONFIGS=0
+LMS_MODEL=""
 POSITIONAL_ARGS=()
 
 while [[ $# -gt 0 ]]; do
 	case "$1" in
+	--list-configs)
+		LIST_CONFIGS=1
+		shift
+		;;
 	--config)
 		if [[ $# -lt 2 ]]; then
-			print_available_configs
-			exit 0
+			echo "Error: --config requires a routing preset" >&2
+			echo "Run 'overlord --list-configs' to list available routing presets." >&2
+			exit 1
 		fi
 		if [[ "$2" == -* ]]; then
-			echo "Error: --config requires a filename" >&2
-			echo "Run 'overlord --config' to list available configs." >&2
+			echo "Error: --config requires a routing preset" >&2
+			echo "Run 'overlord --list-configs' to list available routing presets." >&2
 			exit 1
 		fi
 		CONFIG_NAME="$2"
 		CONFIG_EXPLICIT=1
+		shift 2
+		;;
+	--lms-model)
+		if [[ $# -lt 2 ]]; then
+			echo "Error: --lms-model requires a model name" >&2
+			echo "Example: overlord --lms-model nanbeige4.1-3b-mlx web" >&2
+			exit 1
+		fi
+		if [[ "$2" == -* ]]; then
+			echo "Error: --lms-model requires a model name" >&2
+			echo "Example: overlord --lms-model nanbeige4.1-3b-mlx web" >&2
+			exit 1
+		fi
+		LMS_MODEL="$2"
 		shift 2
 		;;
 	-h | --help)
@@ -495,19 +556,18 @@ while [[ $# -gt 0 ]]; do
 	esac
 done
 
-if [[ "${CONFIG_NAME}" == */* ]]; then
-	echo "Error: --config expects a filename from config/, not a path" >&2
-	exit 1
+if [[ "${LIST_CONFIGS}" -eq 1 ]]; then
+	if [[ "${CONFIG_EXPLICIT}" -eq 1 || -n "${LMS_MODEL}" || ${#POSITIONAL_ARGS[@]} -gt 0 ]]; then
+		echo "Error: --list-configs cannot be combined with commands or overrides" >&2
+		exit 1
+	fi
+	print_available_configs
+	exit 0
 fi
 
-CONFIG_FILE="${OVERLORD_DIR}/config/${CONFIG_NAME}"
-if [[ ! -f "${CONFIG_FILE}" ]]; then
-	echo "Error: config file '${CONFIG_NAME}' not found in ${OVERLORD_DIR}/config" >&2
-	exit 1
-fi
+CONFIG_FILE="${OVERLORD_DIR}/config/${OPENCODE_CONFIG_NAME}"
 if ! is_opencode_config_file "${CONFIG_FILE}"; then
-	echo "Error: config file '${CONFIG_NAME}' is not a valid OpenCode config from config/" >&2
-	echo "Run 'overlord --config' to list available configs." >&2
+	echo "Error: ${OPENCODE_CONFIG_NAME} is not a valid OpenCode provider catalog from config/" >&2
 	exit 1
 fi
 
@@ -518,57 +578,88 @@ else
 fi
 
 COMMAND="${1:-web}"
-PROVIDER="${2:-}"
-LMS_MODEL="${3:-}"
 
-# --- Provider → model mapping ---
-# Add new providers here: provider_name → "provider/model-id"
-resolve_provider_model() {
-	case "$1" in
-	bedrock) echo "amazon-bedrock/global.anthropic.claude-opus-4-6-v1" ;;
-	gemini) echo "google-vertex/gemini-3.1-pro-preview" ;;
-	lms)
-		if [[ -z "${LMS_MODEL}" ]]; then
-			echo "Error: 'lms' provider requires a model name" >&2
-			echo "Usage: overlord <command> lms <model-name>" >&2
-			echo "Example: overlord opencode lms nanbeige4.1-3b-mlx" >&2
-			exit 1
-		fi
-		echo "lmstudio/${LMS_MODEL}"
+if [[ $# -gt 1 ]]; then
+	case "${2}" in
+	bedrock | gemini | lms)
+		echo "Error: positional provider overrides were removed" >&2
+		echo "Use '--config <routing-preset>' for reviewed agent routing, or '--lms-model <model>' for ad hoc LM Studio models." >&2
+		exit 1
 		;;
 	*)
-		echo "Error: unknown provider '$1'" >&2
-		echo "Available providers: bedrock, gemini, lms" >&2
+		echo "Error: unexpected extra arguments: ${*:2}" >&2
+		echo "Usage: overlord [--list-configs | --config PRESET | --lms-model MODEL] [command]" >&2
 		exit 1
 		;;
 	esac
+fi
+
+resolve_oh_my_config_file() {
+	local config_name="$1"
+	local candidate
+
+	if [[ "${config_name}" == */* ]]; then
+		echo "Error: --config expects a preset name or filename from config/, not a path" >&2
+		exit 1
+	fi
+
+	case "${config_name}" in
+	default | "${DEFAULT_OH_MY_CONFIG_NAME}")
+		candidate="${OVERLORD_DIR}/config/${DEFAULT_OH_MY_CONFIG_NAME}"
+		;;
+	opencode*.json)
+		echo "Error: --config now selects oh-my-openagent routing presets, not OpenCode catalogs" >&2
+		echo "Use '--config pro', '--config gemini', '--config opus', or '--config default'." >&2
+		exit 1
+		;;
+	oh-my-openagent*.jsonc)
+		candidate="${OVERLORD_DIR}/config/${config_name}"
+		;;
+	*)
+		candidate="${OVERLORD_DIR}/config/oh-my-openagent.${config_name}.jsonc"
+		;;
+	esac
+
+	if ! is_oh_my_config_file "${candidate}"; then
+		echo "Error: routing preset '${config_name}' not found or invalid in ${OVERLORD_DIR}/config" >&2
+		echo "Run 'overlord --list-configs' to list available routing presets." >&2
+		exit 1
+	fi
+
+	printf '%s\n' "${candidate}"
 }
 
-if [[ "${CONFIG_EXPLICIT}" -eq 1 && -n "${PROVIDER}" ]]; then
-	echo "Error: --config cannot be combined with provider overrides" >&2
-	echo "Choose either an explicit config file or a provider override." >&2
+if [[ "${CONFIG_EXPLICIT}" -eq 1 && -n "${LMS_MODEL}" ]]; then
+	echo "Error: --config cannot be combined with --lms-model" >&2
+	echo "Choose either a checked-in routing preset or an explicit LM Studio model." >&2
 	exit 1
 fi
 
-if [[ -n "${PROVIDER}" ]]; then
-	PROVIDER_MODEL="$(resolve_provider_model "${PROVIDER}")"
-	echo "Provider override: all oh-my-openagent agents → ${PROVIDER_MODEL}"
+MODEL_OVERRIDE=""
+if [[ -n "${LMS_MODEL}" ]]; then
+	MODEL_OVERRIDE="lmstudio/${LMS_MODEL}"
+	echo "LM Studio override: all oh-my-openagent agents → ${MODEL_OVERRIDE}"
 fi
 
-OH_MY_CONFIG_FILE="${OVERLORD_DIR}/config/${DEFAULT_OH_MY_CONFIG_NAME}"
+OH_MY_CONFIG_FILE="$(resolve_oh_my_config_file "${CONFIG_NAME}")"
+if [[ ! -f "${OH_MY_CONFIG_FILE}" ]]; then
+	echo "Error: required routing config file '$(basename "${OH_MY_CONFIG_FILE}")' not found in ${OVERLORD_DIR}/config" >&2
+	exit 1
+fi
 
 case "${COMMAND}" in
 help | -h | --help)
 	show_help
 	exit 0
 	;;
-fresh)
-	stop_host_web_proxy
-	backup_container_data
-	echo "Removing container ${CONTAINER_NAME}..."
-	"${ENGINE}" stop "${CONTAINER_NAME}" 2>/dev/null || true
-	"${ENGINE}" rm "${CONTAINER_NAME}" 2>/dev/null || true
-	echo "Done. Run 'overlord' to start fresh."
+	fresh)
+		stop_host_web_proxy
+		backup_container_data
+		clear_persisted_opencode_server_state
+		echo "Removing container ${CONTAINER_NAME}..."
+		"${ENGINE}" stop "${CONTAINER_NAME}" 2>/dev/null || true
+		"${ENGINE}" rm "${CONTAINER_NAME}" 2>/dev/null || true
+		echo "Done. Run 'overlord' to start fresh."
 	exit 0
 	;;
 purge)
@@ -578,8 +669,20 @@ purge)
 	"${ENGINE}" stop "${CONTAINER_NAME}" 2>/dev/null || true
 	"${ENGINE}" rm "${CONTAINER_NAME}" 2>/dev/null || true
 
-	echo "==> Removing image ${IMAGE_NAME}..."
-	"${ENGINE}" rmi "${IMAGE_NAME}" 2>/dev/null || true
+	if "${ENGINE}" image inspect "${IMAGE_NAME}" &>/dev/null; then
+		echo "==> Removing image ${IMAGE_NAME}..."
+		if ! "${ENGINE}" rmi "${IMAGE_NAME}"; then
+			echo "Warning: image removal command reported a failure; verifying final image state..." >&2
+		fi
+
+		if "${ENGINE}" image inspect "${IMAGE_NAME}" &>/dev/null; then
+			echo "Error: image ${IMAGE_NAME} still exists after purge; rebuild is not guaranteed." >&2
+			exit 1
+		fi
+	else
+		echo "==> Image ${IMAGE_NAME} is already absent."
+	fi
+
 	echo "==> Pruning dangling images..."
 	"${ENGINE}" image prune -f --filter "dangling=true" 2>/dev/null || true
 	echo "==> Done. Run 'overlord' to rebuild and launch."
@@ -767,7 +870,7 @@ if [[ "${STATE}" != "running" ]]; then
 
 	ensure_runtime_config_dirs
 
-	if [[ "${PROVIDER:-}" == "lms" ]]; then
+	if [[ -n "${LMS_MODEL}" ]]; then
 		# LM Studio model IDs are user-supplied at runtime, so this override still
 		# needs a targeted rewrite of the default model key/value pair.
 		sed -e 's/"lm-studio"/"'"${LMS_MODEL}"'"/g' \
@@ -803,11 +906,11 @@ TITLE_HOOKS
 	"${ENGINE}" exec "${CONTAINER_NAME}" sh -c \
 		'grep -q zsh_data /home/overlord/.zshrc 2>/dev/null || echo "export HISTFILE=~/.zsh_data/.zsh_history" >> /home/overlord/.zshrc'
 
-	if [[ -n "${PROVIDER:-}" ]]; then
-		# Provider override active — rewrite all model references to the resolved model.
-		sed 's|"model": ".*"|"model": "'"${PROVIDER_MODEL}"'"|g' "${OH_MY_CONFIG_FILE}" |
+	if [[ -n "${MODEL_OVERRIDE}" ]]; then
+		# Explicit LM Studio override active — rewrite all model references to the resolved model.
+		sed 's|"model": ".*"|"model": "'"${MODEL_OVERRIDE}"'"|g' "${OH_MY_CONFIG_FILE}" |
 			"${ENGINE}" exec -i "${CONTAINER_NAME}" sh -c 'cat > '"${RUNTIME_OH_MY_OPENCODE_CONFIG_FILE}"
-		sed 's|"model": ".*"|"model": "'"${PROVIDER_MODEL}"'"|g' "${OH_MY_CONFIG_FILE}" |
+		sed 's|"model": ".*"|"model": "'"${MODEL_OVERRIDE}"'"|g' "${OH_MY_CONFIG_FILE}" |
 			"${ENGINE}" exec -i "${CONTAINER_NAME}" sh -c 'cat > '"${RUNTIME_OH_MY_OPENAGENT_CONFIG_FILE}"
 	else
 		"${ENGINE}" exec -i "${CONTAINER_NAME}" sh -c 'cat > '"${RUNTIME_OH_MY_OPENCODE_CONFIG_FILE}" <"${OH_MY_CONFIG_FILE}"

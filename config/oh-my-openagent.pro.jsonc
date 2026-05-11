@@ -8,11 +8,11 @@
     // HIGH reasoning — deep logical work, complex problem-solving
     "ultrabrain": {
       "model": "azure/gpt-5.4-pro",
-      "reasoningEffort": "high"
+      "reasoningEffort": "xhigh"
     },
     "unspecified-high": {
-      "model": "azure/gpt-5.4-pro",
-      "reasoningEffort": "high"
+      "model": "azure/gpt-5.5",
+      "reasoningEffort": "xhigh"
     },
     // MEDIUM reasoning — balanced effort for creative, visual, and writing tasks
     "visual-engineering": {
@@ -48,7 +48,7 @@
       "reasoningEffort": "high"
     },
     "oracle": {
-      "model": "azure/gpt-5.4-pro",
+      "model": "azure/gpt-5.5",
       "reasoningEffort": "high"
     },
     "prometheus": {
@@ -66,11 +66,11 @@
     // IMPORTANT planning/review roles — use the premium model for consulting and overview work
     "metis": {
       "model": "azure/gpt-5.4-pro",
-      "reasoningEffort": "high"
+      "reasoningEffort": "xhigh"
     },
     "momus": {
       "model": "azure/gpt-5.4-pro",
-      "reasoningEffort": "high"
+      "reasoningEffort": "xhigh"
     },
     // MEDIUM reasoning — validation, building, and general work
     "sisyphus-junior": {
@@ -87,16 +87,16 @@
     },
     "multimodal-looker": {
       "model": "azure/gpt-5.5",
-      "reasoningEffort": "high"
+      "reasoningEffort": "medium"
     },
     // LOW reasoning — search, lookup, exploration (speed over depth)
     "explore": {
-      "model": "azure/gpt-5.4",
+      "model": "azure/gpt-5.5",
       "reasoningEffort": "low",
       "category": "unspecified-low"
     },
     "librarian": {
-      "model": "azure/gpt-5.4",
+      "model": "azure/gpt-5.5",
       "reasoningEffort": "low",
       "category": "unspecified-low"
     }

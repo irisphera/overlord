@@ -1,4 +1,4 @@
-# Overlord - Lightweight multi-arch devbox for OpenCode + Oh-My-OpenCode
+# Overlord - Lightweight multi-arch environment for OpenCode + Oh-My-OpenCode
 # Base: ubuntu:24.04 (amd64 + arm64)
 # No VNC/GUI — pure terminal + dev tools + LSPs
 
@@ -7,6 +7,7 @@ FROM --platform=$TARGETPLATFORM oven/bun:latest AS bun-stage
 FROM ubuntu:24.04
 
 ARG TARGETARCH
+ARG SAFE_CHAIN_VERSION=1.5.3
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -28,6 +29,12 @@ RUN apt-get update && apt-get install -y \
   locales \
   neovim \
   && rm -rf /var/lib/apt/lists/*
+
+# Safe Chain package-manager protection must be available before npm, bun, pip, uv, etc.
+RUN curl -fsSL "https://github.com/AikidoSec/safe-chain/releases/download/${SAFE_CHAIN_VERSION}/install-safe-chain.sh" \
+  | sh -s -- --ci --install-dir /usr/local/.safe-chain
+
+ENV PATH="/usr/local/.safe-chain/shims:/usr/local/.safe-chain/bin:$PATH"
 
 # Generate locale
 RUN locale-gen en_US.UTF-8
@@ -128,7 +135,7 @@ USER overlord
 
 # uv - fast Python package manager (installed as overlord so it lands in ~/.local/bin)
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
-  && /home/overlord/.local/bin/uv python install
+  && PATH="/usr/local/.safe-chain/shims:/usr/local/.safe-chain/bin:/home/overlord/.local/bin:$PATH" uv python install
 
 RUN sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended \
   && git clone https://github.com/zsh-users/zsh-autosuggestions ${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/plugins/zsh-autosuggestions \
@@ -137,7 +144,7 @@ RUN sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master
   && sed -i 's/plugins=(git)/plugins=(git zsh-autosuggestions zsh-syntax-highlighting zsh-completions docker mvn npm)/' ~/.zshrc
 
 ENV BUN_INSTALL=/home/overlord/.bun
-ENV PATH="/home/overlord/.bun/bin:/home/overlord/.local/bin:/opt/jdk-24/bin:$PATH"
+ENV PATH="/usr/local/.safe-chain/shims:/usr/local/.safe-chain/bin:/home/overlord/.bun/bin:/home/overlord/.local/bin:/opt/jdk-24/bin:$PATH"
 ENV JAVA_HOME=/opt/jdk-24
 ENV JDTLS_HOME=/opt/jdtls
 ENV UV_LINK_MODE=copy
@@ -145,7 +152,7 @@ ENV UV_CACHE_DIR=/home/overlord/.cache/uv
 ENV LANG=en_US.UTF-8
 
 RUN echo 'export JAVA_HOME=/opt/jdk-24' >> /home/overlord/.zshrc \
-  && echo 'export PATH="/opt/jdk-24/bin:$PATH"' >> /home/overlord/.zshrc
+  && echo 'export PATH="/usr/local/.safe-chain/shims:/usr/local/.safe-chain/bin:/opt/jdk-24/bin:$PATH"' >> /home/overlord/.zshrc
 
 # Install opencode-ai
 RUN install_log="$(mktemp)" \

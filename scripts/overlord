@@ -17,6 +17,7 @@ OPENCODE_WEB_HOSTNAME="0.0.0.0"
 OPENCODE_WEB_PORT="4090"
 OPENCODE_WEB_PID_FILE="/home/overlord/.local/share/opencode/overlord-serve.pid"
 OPENCODE_WEB_LOG_FILE="/home/overlord/.local/share/opencode/overlord-serve.log"
+OPENCODE_STRUCTURED_LOG_DIR="/home/overlord/.local/share/opencode/log"
 OPENCODE_WEB_WAIT_SECONDS=90
 OPENCODE_HOST_PROXY_BIND_HOST="0.0.0.0"
 CONTAINER_HOME="/home/overlord"
@@ -238,25 +239,68 @@ wait_for_opencode_web_ui() {
 
 verify_oh_my_openagent_loaded() {
 	local attempt
+	local status
 
 	for ((attempt = 1; attempt <= OPENCODE_WEB_WAIT_SECONDS; attempt += 1)); do
-		if "${ENGINE}" exec -i "${CONTAINER_NAME}" sh -s -- "${OPENCODE_WEB_LOG_FILE}" <<'EOF'
+		if "${ENGINE}" exec -i "${CONTAINER_NAME}" sh -s -- \
+			"${OPENCODE_WEB_LOG_FILE}" \
+			"${OPENCODE_STRUCTURED_LOG_DIR}" \
+			"${OPENCODE_WEB_PORT}" <<'EOF'
 log_file="$1"
-test -f "${log_file}" && grep -Fq "path=oh-my-openagent@latest loading plugin" "${log_file}"
+log_dir="$2"
+port="$3"
+success_line="service=plugin path=oh-my-openagent@latest loading plugin"
+failure_pattern='service=plugin .*oh-my-openagent.*(failed|incompatible|no server entrypoint)'
+
+if [ -n "${OPENCODE_SERVER_PASSWORD:-}" ]; then
+	curl --silent --fail --max-time 5 \
+		-u "opencode:${OPENCODE_SERVER_PASSWORD}" \
+		-H "x-opencode-directory: /workspace" \
+		"http://127.0.0.1:${port}/path?directory=/workspace" >/dev/null 2>&1 || true
+else
+	curl --silent --fail --max-time 5 \
+		-H "x-opencode-directory: /workspace" \
+		"http://127.0.0.1:${port}/path?directory=/workspace" >/dev/null 2>&1 || true
+fi
+
+if [ -d "${log_dir}" ] && grep -R -F "${success_line}" "${log_dir}" >/dev/null 2>&1; then
+	exit 0
+fi
+if [ -f "${log_file}" ] && grep -Fq "${success_line}" "${log_file}"; then
+	exit 0
+fi
+if [ -d "${log_dir}" ] && grep -R -E "${failure_pattern}" "${log_dir}" >/dev/null 2>&1; then
+	exit 2
+fi
+if [ -f "${log_file}" ] && grep -E "${failure_pattern}" "${log_file}" >/dev/null 2>&1; then
+	exit 2
+fi
+exit 1
 EOF
 		then
 			return 0
+		fi
+		status=$?
+		if [[ "${status}" -eq 2 ]]; then
+			break
 		fi
 		sleep 1
 	done
 
 	echo "Error: OpenCode web started, but oh-my-openagent did not load as a plugin." >&2
-	echo "Expected to find 'path=oh-my-openagent@latest loading plugin' in ${OPENCODE_WEB_LOG_FILE}." >&2
+	echo "Expected to find 'service=plugin path=oh-my-openagent@latest loading plugin' in ${OPENCODE_STRUCTURED_LOG_DIR}/*.log or ${OPENCODE_WEB_LOG_FILE}." >&2
 	echo "Relevant OpenCode log lines:" >&2
-	"${ENGINE}" exec -i "${CONTAINER_NAME}" sh -s -- "${OPENCODE_WEB_LOG_FILE}" <<'EOF' >&2 || true
+	"${ENGINE}" exec -i "${CONTAINER_NAME}" sh -s -- \
+		"${OPENCODE_WEB_LOG_FILE}" \
+		"${OPENCODE_STRUCTURED_LOG_DIR}" <<'EOF' >&2 || true
 log_file="$1"
+log_dir="$2"
+pattern='oh-my-openagent|oh-my-opencode|service=plugin|plugin|failed|error|cannot find|not found|config path=|path='
+if [ -d "${log_dir}" ]; then
+	grep -R -Ei "${pattern}" "${log_dir}" 2>/dev/null | tail -120 || true
+fi
 if [ -f "${log_file}" ]; then
-	grep -Ei 'oh-my-openagent|oh-my-opencode|plugin|failed|error|cannot find|not found|config path=' "${log_file}" 2>/dev/null | tail -120 || true
+	grep -Ei "${pattern}" "${log_file}" 2>/dev/null | tail -120 || true
 else
 	echo "${log_file} does not exist"
 fi
@@ -691,9 +735,9 @@ request_opencode_web_restart_if_plugin_missing() {
 
 	if "${ENGINE}" exec -i "${CONTAINER_NAME}" sh -s -- \
 		"${OPENCODE_WEB_PID_FILE}" \
-		"${OPENCODE_WEB_LOG_FILE}" <<'EOF'
+		"${CONTAINER_HOME}" <<'EOF'
 pid_file="$1"
-log_file="$2"
+container_home="$2"
 if [ ! -s "${pid_file}" ]; then
 	exit 0
 fi
@@ -701,13 +745,20 @@ pid="$(cat "${pid_file}" 2>/dev/null || true)"
 if [ -z "${pid}" ] || ! kill -0 "${pid}" 2>/dev/null; then
 	exit 0
 fi
-test -f "${log_file}" && grep -Fq "path=oh-my-openagent@latest loading plugin" "${log_file}"
+if [ ! -r "/proc/${pid}/environ" ]; then
+	exit 0
+fi
+tr '\000' '\n' < "/proc/${pid}/environ" | grep -qx "HOME=${container_home}" && \
+	tr '\000' '\n' < "/proc/${pid}/environ" | grep -qx "XDG_CONFIG_HOME=${container_home}/.config" && \
+	tr '\000' '\n' < "/proc/${pid}/environ" | grep -qx "XDG_CACHE_HOME=${container_home}/.cache" && \
+	tr '\000' '\n' < "/proc/${pid}/environ" | grep -qx "XDG_DATA_HOME=${container_home}/.local/share" && \
+	tr '\000' '\n' < "/proc/${pid}/environ" | grep -qx "XDG_STATE_HOME=${container_home}/.local/state"
 EOF
 	then
 		return 0
 	fi
 
-	echo "Restarting existing OpenCode web server because oh-my-openagent is not loaded yet in ${CONTAINER_NAME}..."
+	echo "Restarting existing OpenCode web server because its HOME/XDG environment is not canonical in ${CONTAINER_NAME}..."
 	OPENCODE_WEB_RESTART_REQUIRED=1
 }
 

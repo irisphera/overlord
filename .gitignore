@@ -15,6 +15,7 @@ Thumbs.db
 
 # Local overrides
 opencode.json
+!config/opencode.json
 
 # Per-workspace persistent state (created by overlord script)
 .overlord/

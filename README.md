@@ -7,7 +7,9 @@ Isolated container environment for [OpenCode](https://opencode.ai) + [Oh My Open
 ```bash
 git clone https://github.com/irisphera/overlord.git
 cd overlord
+mkdir -p ~/.local/bin
 ln -s "$(pwd)/scripts/overlord" ~/.local/bin/
+export PATH="$HOME/.local/bin:$PATH"
 ```
 
 Requires Docker.

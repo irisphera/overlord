@@ -133,6 +133,14 @@ RUN mkdir -p /home/overlord/.config/opencode /home/overlord/.config/zellij/layou
 
 USER overlord
 
+ENV HOME=/home/overlord
+ENV USER=overlord
+ENV LOGNAME=overlord
+ENV XDG_CONFIG_HOME=/home/overlord/.config
+ENV XDG_CACHE_HOME=/home/overlord/.cache
+ENV XDG_DATA_HOME=/home/overlord/.local/share
+ENV XDG_STATE_HOME=/home/overlord/.local/state
+
 # uv - fast Python package manager (installed as overlord so it lands in ~/.local/bin)
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
   && PATH="/usr/local/.safe-chain/shims:/usr/local/.safe-chain/bin:/home/overlord/.local/bin:$PATH" uv python install
@@ -163,12 +171,14 @@ RUN install_log="$(mktemp)" \
   && printf 'OpenCode CLI version: %s\n' "${opencode_version:-unknown}"
 
 RUN install_log="$(mktemp)" \
-  && mkdir -p /home/overlord/.config/opencode \
-  && cd /home/overlord/.config/opencode \
+  && helper_cache_dir="/home/overlord/.cache/opencode/packages/oh-my-openagent@latest" \
+  && mkdir -p "${helper_cache_dir}" /home/overlord/.local/bin \
+  && cd "${helper_cache_dir}" \
   && bun init -y > /dev/null 2>&1 \
-  && echo "Installing OpenCode helper package (oh-my-openagent@latest)..." \
+  && echo "Prewarming OpenCode plugin package (oh-my-openagent@latest)..." \
   && if ! bun add oh-my-openagent@latest >"${install_log}" 2>&1; then cat "${install_log}"; rm -f "${install_log}"; exit 1; fi \
   && rm -f "${install_log}" \
+  && ln -sf "${helper_cache_dir}/node_modules/.bin/oh-my-openagent" /home/overlord/.local/bin/oh-my-openagent \
   && helper_version="$(node -p "require('./node_modules/oh-my-openagent/package.json').version" 2>/dev/null || true)" \
   && printf 'oh-my-openagent version: %s\n' "${helper_version:-unknown}"
 

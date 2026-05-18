@@ -9,12 +9,17 @@ DEFAULT_OH_MY_CONFIG_NAME="oh-my-openagent.jsonc"
 OPENCODE_CONFIG_SCHEMA='"$schema":"https://opencode.ai/config.json"'
 OH_MY_CONFIG_SCHEMA="\"\$schema\": \"https://raw.githubusercontent.com/code-yeongyu/oh-my-openagent/dev/assets/oh-my-opencode.schema.json\""
 OPENCODE_REQUIRED_VERSION="latest"
+OH_MY_OPENAGENT_REQUIRED_VERSION="latest"
+OH_MY_OPENAGENT_PACKAGE="oh-my-openagent@${OH_MY_OPENAGENT_REQUIRED_VERSION}"
+OH_MY_OPENAGENT_CACHE_DIR="/home/overlord/.cache/opencode/packages/${OH_MY_OPENAGENT_PACKAGE}"
+OH_MY_OPENAGENT_BIN="/home/overlord/.local/bin/oh-my-openagent"
 OPENCODE_WEB_HOSTNAME="0.0.0.0"
 OPENCODE_WEB_PORT="4090"
 OPENCODE_WEB_PID_FILE="/home/overlord/.local/share/opencode/overlord-serve.pid"
 OPENCODE_WEB_LOG_FILE="/home/overlord/.local/share/opencode/overlord-serve.log"
 OPENCODE_WEB_WAIT_SECONDS=90
 OPENCODE_HOST_PROXY_BIND_HOST="0.0.0.0"
+CONTAINER_HOME="/home/overlord"
 RUNTIME_CONFIG_DIR="/home/overlord/.config"
 RUNTIME_OPENCODE_CONFIG_DIR="${RUNTIME_CONFIG_DIR}/opencode"
 RUNTIME_OPENCODE_CONFIG_FILE="${RUNTIME_OPENCODE_CONFIG_DIR}/opencode.json"
@@ -231,6 +236,34 @@ wait_for_opencode_web_ui() {
 	exit 1
 }
 
+verify_oh_my_openagent_loaded() {
+	local attempt
+
+	for ((attempt = 1; attempt <= OPENCODE_WEB_WAIT_SECONDS; attempt += 1)); do
+		if "${ENGINE}" exec -i "${CONTAINER_NAME}" sh -s -- "${OPENCODE_WEB_LOG_FILE}" <<'EOF'
+log_file="$1"
+test -f "${log_file}" && grep -Fq "path=oh-my-openagent@latest loading plugin" "${log_file}"
+EOF
+		then
+			return 0
+		fi
+		sleep 1
+	done
+
+	echo "Error: OpenCode web started, but oh-my-openagent did not load as a plugin." >&2
+	echo "Expected to find 'path=oh-my-openagent@latest loading plugin' in ${OPENCODE_WEB_LOG_FILE}." >&2
+	echo "Relevant OpenCode log lines:" >&2
+	"${ENGINE}" exec -i "${CONTAINER_NAME}" sh -s -- "${OPENCODE_WEB_LOG_FILE}" <<'EOF' >&2 || true
+log_file="$1"
+if [ -f "${log_file}" ]; then
+	grep -Ei 'oh-my-openagent|oh-my-opencode|plugin|failed|error|cannot find|not found|config path=' "${log_file}" 2>/dev/null | tail -120 || true
+else
+	echo "${log_file} does not exist"
+fi
+EOF
+	exit 1
+}
+
 write_host_web_proxy_script() {
 	cat >"${OPENCODE_HOST_PROXY_SCRIPT}" <<'EOF'
 const fs = require("fs")
@@ -412,6 +445,7 @@ EOF
 
 	wait_for_opencode_web "${host_port}"
 	wait_for_opencode_web_ui "${host_port}"
+	verify_oh_my_openagent_loaded
 	access_port="${host_port}"
 	if [[ "${ENGINE}" == "podman" ]]; then
 		access_port="$(ensure_host_web_proxy "${host_port}")" || return 1
@@ -433,17 +467,25 @@ ensure_opencode_runtime_version() {
 	local current_version
 	local installed_version
 
-	current_version=$("${ENGINE}" exec -u "${EXEC_USER}" "${CONTAINER_NAME}" opencode --version 2>/dev/null || true)
+	current_version=$("${ENGINE}" exec -u "${EXEC_USER}" "${EXEC_ENV[@]}" "${CONTAINER_NAME}" opencode --version 2>/dev/null || true)
+	if [[ "${OPENCODE_REQUIRED_VERSION}" == "latest" && -n "${current_version}" ]]; then
+		return 0
+	fi
 	if [[ "${current_version}" == "${OPENCODE_REQUIRED_VERSION}" ]]; then
 		return 0
 	fi
 
 	echo "Ensuring OpenCode CLI package opencode-ai@${OPENCODE_REQUIRED_VERSION} in ${CONTAINER_NAME}..."
-	"${ENGINE}" exec -u "${EXEC_USER}" "${CONTAINER_NAME}" sh -s -- "${OPENCODE_REQUIRED_VERSION}" <<'EOF'
+	"${ENGINE}" exec -i -u "${EXEC_USER}" "${EXEC_ENV[@]}" "${CONTAINER_NAME}" sh -s -- "${OPENCODE_REQUIRED_VERSION}" <<'EOF'
 set -e
 
 required_version="$1"
 install_log="$(mktemp)"
+bun_bin="/usr/local/bin/bun"
+
+if [ ! -x "${bun_bin}" ]; then
+	bun_bin="bun"
+fi
 
 cleanup() {
 	rm -f "${install_log}"
@@ -451,13 +493,222 @@ cleanup() {
 
 trap cleanup EXIT
 
-if ! bun add -g "opencode-ai@${required_version}" >"${install_log}" 2>&1; then
+if ! "${bun_bin}" add -g "opencode-ai@${required_version}" >"${install_log}" 2>&1; then
 	cat "${install_log}" >&2
 	exit 1
 fi
 EOF
-	installed_version=$("${ENGINE}" exec -u "${EXEC_USER}" "${CONTAINER_NAME}" opencode --version 2>/dev/null || true)
+	installed_version=$("${ENGINE}" exec -u "${EXEC_USER}" "${EXEC_ENV[@]}" "${CONTAINER_NAME}" opencode --version 2>/dev/null || true)
 	printf 'OpenCode CLI version: %s\n' "${installed_version:-unknown}"
+}
+
+ensure_oh_my_openagent_runtime_package() {
+	local installed_version
+
+	if "${ENGINE}" exec -i -u "${EXEC_USER}" "${EXEC_ENV[@]}" "${CONTAINER_NAME}" sh -s -- \
+		"${OH_MY_OPENAGENT_PACKAGE}" \
+		"${OH_MY_OPENAGENT_CACHE_DIR}" \
+		"${OH_MY_OPENAGENT_BIN}" <<'EOF'
+set -e
+
+package_spec="$1"
+cache_dir="$2"
+public_bin="$3"
+package_dir="${cache_dir}/node_modules/oh-my-openagent"
+package_json="${package_dir}/package.json"
+canonical_bin="${cache_dir}/node_modules/.bin/oh-my-openagent"
+fallback_bin="${package_dir}/bin/oh-my-opencode.js"
+
+test -f "${package_json}" && test -x "${public_bin}"
+EOF
+	then
+		return 0
+	fi
+
+	echo "Ensuring OpenCode plugin package ${OH_MY_OPENAGENT_PACKAGE} in ${CONTAINER_NAME}..."
+	"${ENGINE}" exec -i -u "${EXEC_USER}" "${EXEC_ENV[@]}" "${CONTAINER_NAME}" sh -s -- \
+		"${OH_MY_OPENAGENT_PACKAGE}" \
+		"${OH_MY_OPENAGENT_CACHE_DIR}" \
+		"${OH_MY_OPENAGENT_BIN}" <<'EOF'
+set -e
+
+package_spec="$1"
+cache_dir="$2"
+public_bin="$3"
+package_dir="${cache_dir}/node_modules/oh-my-openagent"
+package_json="${package_dir}/package.json"
+canonical_bin="${cache_dir}/node_modules/.bin/oh-my-openagent"
+fallback_bin="${package_dir}/bin/oh-my-opencode.js"
+install_log="$(mktemp)"
+bun_bin="/usr/local/bin/bun"
+
+if [ ! -x "${bun_bin}" ]; then
+	bun_bin="bun"
+fi
+
+cleanup() {
+	rm -f "${install_log}"
+}
+
+trap cleanup EXIT
+
+mkdir -p "${cache_dir}" "$(dirname "${public_bin}")"
+cd "${cache_dir}"
+
+if [ ! -f package.json ]; then
+	"${bun_bin}" init -y >/dev/null 2>&1
+fi
+
+if [ ! -f "${package_json}" ]; then
+	if ! "${bun_bin}" add "${package_spec}" >"${install_log}" 2>&1; then
+		cat "${install_log}" >&2
+		exit 1
+	fi
+fi
+
+if [ -x "${canonical_bin}" ]; then
+	ln -sf "${canonical_bin}" "${public_bin}"
+elif [ -x "${fallback_bin}" ]; then
+	ln -sf "${fallback_bin}" "${public_bin}"
+else
+	echo "Error: ${package_spec} installed without an executable oh-my-openagent entrypoint" >&2
+	exit 1
+fi
+
+test -x "${public_bin}"
+EOF
+	installed_version=$("${ENGINE}" exec -u "${EXEC_USER}" "${EXEC_ENV[@]}" "${CONTAINER_NAME}" node -p \
+		"require('${OH_MY_OPENAGENT_CACHE_DIR}/node_modules/oh-my-openagent/package.json').version" 2>/dev/null || true)
+	printf 'oh-my-openagent version: %s\n' "${installed_version:-unknown}"
+	OPENCODE_WEB_RESTART_REQUIRED=1
+}
+
+ensure_oh_my_openagent_runtime_config() {
+	local repaired=0
+
+	if ! "${ENGINE}" exec -i "${CONTAINER_NAME}" sh -s -- \
+		"${RUNTIME_OPENCODE_CONFIG_FILE}" <<'EOF'
+set -e
+
+config_file="$1"
+test -f "${config_file}" && grep -Fq 'oh-my-openagent' "${config_file}"
+EOF
+	then
+		echo "Ensuring OpenCode plugin config includes ${OH_MY_OPENAGENT_PACKAGE} in ${CONTAINER_NAME}..."
+		"${ENGINE}" exec "${CONTAINER_NAME}" sh -c "mkdir -p ${RUNTIME_OPENCODE_CONFIG_DIR}"
+		if ! "${ENGINE}" exec "${CONTAINER_NAME}" test -f "${RUNTIME_OPENCODE_CONFIG_FILE}"; then
+			if [[ -n "${LMS_MODEL}" ]]; then
+				sed -e 's/"lm-studio"/"'"${LMS_MODEL}"'"/g' \
+					-e 's/"LM Studio (Local)"/"'"${LMS_MODEL}"'"/g' \
+					"${CONFIG_FILE}" |
+					"${ENGINE}" exec -i "${CONTAINER_NAME}" sh -c 'cat > '"${RUNTIME_OPENCODE_CONFIG_FILE}"
+			else
+				"${ENGINE}" exec -i "${CONTAINER_NAME}" sh -c 'cat > '"${RUNTIME_OPENCODE_CONFIG_FILE}" <"${CONFIG_FILE}"
+			fi
+		else
+			"${ENGINE}" exec -i "${CONTAINER_NAME}" sh -s -- \
+				"${RUNTIME_OPENCODE_CONFIG_FILE}" \
+				"${OH_MY_OPENAGENT_PACKAGE}" <<'EOF'
+set -e
+
+config_file="$1"
+package_spec="$2"
+tmp_file="$(mktemp)"
+
+cleanup() {
+	rm -f "${tmp_file}"
+}
+
+trap cleanup EXIT
+
+jq --arg plugin "${package_spec}" '
+  .plugin = ((.plugin // []) | if index($plugin) then . else . + [$plugin] end)
+' "${config_file}" >"${tmp_file}"
+cat "${tmp_file}" >"${config_file}"
+EOF
+		fi
+		repaired=1
+	fi
+
+	if ! "${ENGINE}" exec "${CONTAINER_NAME}" test -f "${RUNTIME_OH_MY_OPENAGENT_CONFIG_FILE}"; then
+		echo "Ensuring oh-my-openagent routing config in ${CONTAINER_NAME}..."
+		if [[ -n "${MODEL_OVERRIDE}" ]]; then
+			sed 's|"model": ".*"|"model": "'"${MODEL_OVERRIDE}"'"|g' "${OH_MY_CONFIG_FILE}" |
+				"${ENGINE}" exec -i "${CONTAINER_NAME}" sh -c 'cat > '"${RUNTIME_OH_MY_OPENAGENT_CONFIG_FILE}"
+		else
+			"${ENGINE}" exec -i "${CONTAINER_NAME}" sh -c 'cat > '"${RUNTIME_OH_MY_OPENAGENT_CONFIG_FILE}" <"${OH_MY_CONFIG_FILE}"
+		fi
+		repaired=1
+	fi
+
+	if ! "${ENGINE}" exec "${CONTAINER_NAME}" test -f "${RUNTIME_OH_MY_OPENCODE_CONFIG_FILE}"; then
+		if [[ -n "${MODEL_OVERRIDE}" ]]; then
+			sed 's|"model": ".*"|"model": "'"${MODEL_OVERRIDE}"'"|g' "${OH_MY_CONFIG_FILE}" |
+				"${ENGINE}" exec -i "${CONTAINER_NAME}" sh -c 'cat > '"${RUNTIME_OH_MY_OPENCODE_CONFIG_FILE}"
+		else
+			"${ENGINE}" exec -i "${CONTAINER_NAME}" sh -c 'cat > '"${RUNTIME_OH_MY_OPENCODE_CONFIG_FILE}" <"${OH_MY_CONFIG_FILE}"
+		fi
+		repaired=1
+	fi
+
+	if [[ "${repaired}" -eq 1 ]]; then
+		"${ENGINE}" exec "${CONTAINER_NAME}" sh -c \
+			"chown -R overlord:overlord ${RUNTIME_OPENCODE_CONFIG_DIR} 2>/dev/null || true"
+		OPENCODE_WEB_RESTART_REQUIRED=1
+	fi
+}
+
+restart_opencode_web_if_needed() {
+	if [[ "${OPENCODE_WEB_RESTART_REQUIRED}" -ne 1 ]]; then
+		return 0
+	fi
+
+	echo "Restarting OpenCode web server so plugin repairs take effect in ${CONTAINER_NAME}..."
+	"${ENGINE}" exec -i "${CONTAINER_NAME}" sh -s -- "${OPENCODE_WEB_PID_FILE}" <<'EOF'
+set -e
+
+pid_file="$1"
+if [ -s "${pid_file}" ]; then
+	pid="$(cat "${pid_file}" 2>/dev/null || true)"
+	if [ -n "${pid}" ] && kill -0 "${pid}" 2>/dev/null; then
+		kill "${pid}" 2>/dev/null || true
+		for _ in 1 2 3 4 5; do
+			if ! kill -0 "${pid}" 2>/dev/null; then
+				break
+			fi
+			sleep 1
+		done
+	fi
+fi
+rm -f "${pid_file}"
+EOF
+}
+
+request_opencode_web_restart_if_plugin_missing() {
+	if [[ "${OPENCODE_WEB_RESTART_REQUIRED}" -eq 1 ]]; then
+		return 0
+	fi
+
+	if "${ENGINE}" exec -i "${CONTAINER_NAME}" sh -s -- \
+		"${OPENCODE_WEB_PID_FILE}" \
+		"${OPENCODE_WEB_LOG_FILE}" <<'EOF'
+pid_file="$1"
+log_file="$2"
+if [ ! -s "${pid_file}" ]; then
+	exit 0
+fi
+pid="$(cat "${pid_file}" 2>/dev/null || true)"
+if [ -z "${pid}" ] || ! kill -0 "${pid}" 2>/dev/null; then
+	exit 0
+fi
+test -f "${log_file}" && grep -Fq "path=oh-my-openagent@latest loading plugin" "${log_file}"
+EOF
+	then
+		return 0
+	fi
+
+	echo "Restarting existing OpenCode web server because oh-my-openagent is not loaded yet in ${CONTAINER_NAME}..."
+	OPENCODE_WEB_RESTART_REQUIRED=1
 }
 
 is_opencode_config_file() {
@@ -712,6 +963,13 @@ pass_env() {
 }
 
 # Terminal
+EXEC_ENV+=(-e "HOME=${CONTAINER_HOME}")
+EXEC_ENV+=(-e "USER=overlord")
+EXEC_ENV+=(-e "LOGNAME=overlord")
+EXEC_ENV+=(-e "XDG_CONFIG_HOME=${CONTAINER_HOME}/.config")
+EXEC_ENV+=(-e "XDG_CACHE_HOME=${CONTAINER_HOME}/.cache")
+EXEC_ENV+=(-e "XDG_DATA_HOME=${CONTAINER_HOME}/.local/share")
+EXEC_ENV+=(-e "XDG_STATE_HOME=${CONTAINER_HOME}/.local/state")
 EXEC_ENV+=(-e "TERM=${TERM:-xterm-256color}")
 EXEC_ENV+=(-e "OVERLORD_WORKSPACE=${ZELLIJ_SESSION}")
 pass_env COLORTERM
@@ -843,6 +1101,7 @@ ensure_running() {
 ensure_running
 
 EXEC_USER="overlord"
+OPENCODE_WEB_RESTART_REQUIRED=0
 
 # --- Setup (skip when re-attaching to a running container) ---
 # When the container was already running (from a prior 'overlord' invocation),
@@ -946,7 +1205,7 @@ TITLE_HOOKS
 '
 
 	# --- Fix cross-platform native modules ---
-	"${ENGINE}" exec -i -u "${EXEC_USER}" "${CONTAINER_NAME}" bash <<'EOF'
+	"${ENGINE}" exec -i -u "${EXEC_USER}" "${EXEC_ENV[@]}" "${CONTAINER_NAME}" bash <<'EOF'
 if [ -d /workspace/node_modules ] && [ -f /workspace/package.json ]; then
     MARKER=/workspace/node_modules/.overlord-platform
     CURRENT="linux-$(uname -m)"
@@ -966,6 +1225,11 @@ EOF
 	ensure_opencode_runtime_version
 
 fi # end setup (STATE != running)
+
+ensure_oh_my_openagent_runtime_config
+ensure_oh_my_openagent_runtime_package
+request_opencode_web_restart_if_plugin_missing
+restart_opencode_web_if_needed
 
 # --- Launch ---
 

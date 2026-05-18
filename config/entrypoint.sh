@@ -85,4 +85,11 @@ done
 
 # Drop privileges to overlord — ensures the process runs with the
 # remapped UID/GID that matches the workspace file ownership.
+export HOME=/home/overlord
+export USER=overlord
+export LOGNAME=overlord
+export XDG_CONFIG_HOME=/home/overlord/.config
+export XDG_CACHE_HOME=/home/overlord/.cache
+export XDG_DATA_HOME=/home/overlord/.local/share
+export XDG_STATE_HOME=/home/overlord/.local/state
 exec gosu overlord "$@"

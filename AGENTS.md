@@ -6,7 +6,7 @@
 
 ## OVERVIEW
 
-Overlord has one documented launcher path for running OpenCode containers: the bind-mounted local `overlord` workflow. The repo has three authored control surfaces: root image/docs, runtime-injected config under `config/`, and launcher/lifecycle logic under `scripts/`.
+Overlord has one documented launcher path for running OpenCode containers: the bind-mounted local `overlord` workflow. It also has a native host installer for users who do not want OpenCode containerized. The repo has three authored control surfaces: root image/docs, runtime-injected config under `config/`, and launcher/lifecycle logic under `scripts/`.
 
 ## STRUCTURE
 
@@ -26,6 +26,7 @@ overlord/
 |------|----------|-------|
 | Change local image/toolchain contents | `Dockerfile` | Rebuild with `overlord purge && overlord` after image-level edits |
 | Change local launcher commands or lifecycle | `scripts/overlord` | Authoritative command surface for the bind-mounted workflow; Podman preferred if present |
+| Change native host install behavior | `scripts/install` | Installs checked-in OpenCode/oh-my-openagent/zellij config and Bun-managed packages directly on the host |
 | Change OpenCode provider/model catalog | `config/opencode.json` | Single checked-in provider catalog copied into runtime config path |
 | Change agent/category routing | `config/oh-my-openagent*.jsonc` | Source-controlled routing presets copied into runtime config path |
 | Change local container bootstrap permissions | `config/entrypoint.sh` | Root bootstrap, UID/GID remap, ownership repair, `gosu` handoff |
@@ -55,6 +56,8 @@ overlord opencode       # Alias for the web-mode launcher
 overlord zellij         # Open zellij explicitly in the persistent container
 overlord shell          # Open an interactive zsh shell in the container
 overlord --list-configs # List checked-in oh-my-openagent routing presets
+scripts/install         # Install OpenCode setup directly on the host
+scripts/install --list-configs
 overlord fresh          # Remove container only; keep image and .overlord state
 overlord purge          # Remove container + image; .overlord state remains
 ```
@@ -62,6 +65,6 @@ overlord purge          # Remove container + image; .overlord state remains
 ## NOTES
 
 - **No CI/CD and no automated tests in repo** — verification is manual and lifecycle-based.
-- Canonical manual checks are `overlord`, `overlord web`, `overlord opencode`, `overlord zellij`, `overlord shell`, `overlord --list-configs`, `overlord fresh && overlord`, and `overlord purge && overlord` after image/runtime wiring changes.
+- Canonical manual checks are `overlord`, `overlord web`, `overlord opencode`, `overlord zellij`, `overlord shell`, `overlord --list-configs`, `scripts/install --list-configs`, isolated `scripts/install --skip-package-install`, `overlord fresh && overlord`, and `overlord purge && overlord` after image/runtime wiring changes.
 - The launcher supports Podman if available and falls back to Docker; README Docker wording is not the full runtime story.
 - `config/zellij-opencode.kdl` is checked in but is not part of the currently wired runtime config injection path.

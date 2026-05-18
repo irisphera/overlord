@@ -5,19 +5,22 @@
 
 ## OVERVIEW
 
-`scripts/` owns the host-side launcher. `overlord` is the bind-mounted local workflow.
+`scripts/` owns the host-side launcher and native installer. `overlord` is the bind-mounted local workflow; `install` configures OpenCode directly on the host for users who do not want containerized OpenCode.
 
 ## PRIMARY COMMAND
 
 - `overlord`
 - Modes: `web` (default), `opencode` (web alias), `zellij`, `shell`, `fresh`, `purge`, `help`
 - Engine selection: Podman preferred, Docker fallback
+- `install`
+- Host-native setup: installs checked-in OpenCode provider config, selected oh-my-openagent routing preset, zellij config, and Bun-managed OpenCode packages directly under the user's home directory
 
 ## WHERE TO LOOK
 
 | Task | Location | Notes |
 |------|----------|-------|
 | Change local CLI command behavior | `overlord` command dispatch | Validates `help`, `fresh`, `purge`, `web`, `opencode`, `shell`, `zellij` |
+| Change native host install behavior | `install` | Validates `--list-configs`, `--config`, `--lms-model`, config injection, and host package setup without Docker/Podman |
 | Change `--config` selection rules | routing preset validation, arg parsing | Selects checked-in `oh-my-openagent*.jsonc` presets; rejects paths and invalid presets |
 | Change provider catalog or env forwarding | `config/opencode.json`, `PROVIDER_ENV_VARS` in `overlord` | Keep single provider catalog and forwarded env vars in sync |
 | Change local persistence/gitignore behavior | `ensure_state_dir`, `backup_container_data` | `.overlord/` creation, backup, and gitignore wiring live here |
@@ -27,6 +30,7 @@
 ## IMPORTANT BEHAVIOR NOTES
 
 - This script is authoritative over `README.md` for the current launcher surface.
+- `install` is an installer/configurator, not a web launcher; it should not create containers, images, `.overlord/` state, or Docker/Podman lifecycle hooks.
 - Lifecycle is wrapper-first: users run `overlord`, not raw `docker`/`podman`, for normal create/start/attach/remove flow.
 - The persistent container is launched detached as `sleep infinity`; interactive modes are entered later with `exec`.
 - Web mode is the default path: `overlord`, `overlord web`, and `overlord opencode` should resolve to the same published OpenCode web-server flow and print local/network URLs.
@@ -41,6 +45,8 @@
 - `overlord opencode` — verify web alias behavior.
 - `overlord zellij` — verify explicit terminal multiplexer entry.
 - `overlord --list-configs` and `overlord --config <preset>` — verify routing preset listing and selection guards.
+- `scripts/install --list-configs` — verify native installer preset listing without host writes.
+- `tmp_home=$(mktemp -d); HOME=$tmp_home XDG_CONFIG_HOME=$tmp_home/.config XDG_CACHE_HOME=$tmp_home/.cache scripts/install --skip-package-install` — verify native config injection in an isolated home.
 - `overlord fresh && overlord` — verify clean-container reset.
 - `overlord purge && overlord` — verify full rebuild after runtime wiring or image-affecting changes.
 

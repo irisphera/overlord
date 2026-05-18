@@ -1,0 +1,480 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+RESOLVED_SCRIPT="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || realpath "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(cd "$(dirname "${RESOLVED_SCRIPT}")" && pwd)"
+OVERLORD_DIR="$(dirname "${SCRIPT_DIR}")"
+
+OPENCODE_CONFIG_NAME="opencode.json"
+DEFAULT_OH_MY_CONFIG_NAME="oh-my-openagent.jsonc"
+OPENCODE_CONFIG_SCHEMA='"$schema":"https://opencode.ai/config.json"'
+OH_MY_CONFIG_SCHEMA="\"\$schema\": \"https://raw.githubusercontent.com/code-yeongyu/oh-my-openagent/dev/assets/oh-my-opencode.schema.json\""
+OPENCODE_REQUIRED_VERSION="latest"
+OH_MY_OPENAGENT_REQUIRED_VERSION="latest"
+OH_MY_OPENAGENT_PACKAGE="oh-my-openagent@${OH_MY_OPENAGENT_REQUIRED_VERSION}"
+
+XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-${HOME}/.config}"
+XDG_CACHE_HOME="${XDG_CACHE_HOME:-${HOME}/.cache}"
+XDG_DATA_HOME="${XDG_DATA_HOME:-${HOME}/.local/share}"
+XDG_STATE_HOME="${XDG_STATE_HOME:-${HOME}/.local/state}"
+BUN_INSTALL="${BUN_INSTALL:-${HOME}/.bun}"
+LOCAL_BIN_DIR="${HOME}/.local/bin"
+
+RUNTIME_OPENCODE_CONFIG_DIR="${XDG_CONFIG_HOME}/opencode"
+RUNTIME_OPENCODE_CONFIG_FILE="${RUNTIME_OPENCODE_CONFIG_DIR}/opencode.json"
+RUNTIME_OH_MY_OPENCODE_CONFIG_FILE="${RUNTIME_OPENCODE_CONFIG_DIR}/oh-my-opencode.jsonc"
+RUNTIME_OH_MY_OPENAGENT_CONFIG_FILE="${RUNTIME_OPENCODE_CONFIG_DIR}/oh-my-openagent.jsonc"
+RUNTIME_ZELLIJ_CONFIG_DIR="${XDG_CONFIG_HOME}/zellij"
+RUNTIME_ZELLIJ_CONFIG_FILE="${RUNTIME_ZELLIJ_CONFIG_DIR}/config.kdl"
+RUNTIME_ENV_FILE="${RUNTIME_OPENCODE_CONFIG_DIR}/overlord-env"
+OH_MY_OPENAGENT_CACHE_DIR="${XDG_CACHE_HOME}/opencode/packages/${OH_MY_OPENAGENT_PACKAGE}"
+OH_MY_OPENAGENT_BIN="${LOCAL_BIN_DIR}/oh-my-openagent"
+
+show_help() {
+	cat <<'USAGE'
+install - Install Overlord's OpenCode setup directly on this machine
+
+USAGE: install [--list-configs | --config PRESET | --lms-model MODEL] [--skip-package-install]
+
+OPTIONS:
+	--list-configs          List available oh-my-openagent routing presets
+	--config PRESET         Use an oh-my-openagent routing preset with config/opencode.json
+	--lms-model MODEL       Rewrite all oh-my-openagent routes to lmstudio/MODEL
+	--skip-package-install  Only install configs and env files; do not install packages
+	-h, --help              Show this help
+
+WRITES:
+	~/.config/opencode/opencode.json
+	~/.config/opencode/oh-my-openagent.jsonc
+	~/.config/opencode/oh-my-opencode.jsonc
+	~/.config/opencode/overlord-env
+	~/.config/zellij/config.kdl
+	~/.cache/opencode/packages/oh-my-openagent@latest/
+	~/.local/bin/opencode
+	~/.local/bin/oh-my-openagent
+
+Existing files are backed up before they are replaced.
+Bun must already be installed and available in PATH.
+USAGE
+}
+
+validate_lms_model() {
+	local model="$1"
+
+	if [[ ! "${model}" =~ ^[A-Za-z0-9._:@/+-]+$ ]]; then
+		echo "Error: --lms-model may only contain letters, numbers, '.', '_', ':', '@', '/', '+', or '-'." >&2
+		exit 1
+	fi
+}
+
+escape_sed_replacement() {
+	local value="$1"
+
+	value="${value//\\/\\\\}"
+	value="${value//&/\\&}"
+	value="${value//|/\\|}"
+	value="${value//\"/\\\"}"
+	printf '%s' "${value}"
+}
+
+is_opencode_config_file() {
+	local file_path="$1"
+	local file_name
+
+	file_name="$(basename "${file_path}")"
+	[[ -f "${file_path}" ]] || return 1
+	[[ "${file_name}" == opencode*.json ]] || return 1
+	tr -d '[:space:]' <"${file_path}" | grep -Fq "${OPENCODE_CONFIG_SCHEMA}"
+}
+
+is_oh_my_config_file() {
+	local file_path="$1"
+	local file_name
+
+	file_name="$(basename "${file_path}")"
+	[[ -f "${file_path}" ]] || return 1
+	[[ "${file_name}" == oh-my-openagent*.jsonc ]] || return 1
+	grep -Fq "${OH_MY_CONFIG_SCHEMA}" "${file_path}"
+}
+
+print_available_configs() {
+	local path
+	local name
+	local found=0
+
+	echo "Available oh-my-openagent routing presets:"
+	for path in "${OVERLORD_DIR}"/config/oh-my-openagent*.jsonc; do
+		if is_oh_my_config_file "${path}"; then
+			name="$(basename "${path}")"
+			name="${name#oh-my-openagent}"
+			name="${name%.jsonc}"
+			name="${name#.}"
+			printf '  %s (%s)\n' "${name:-default}" "$(basename "${path}")"
+			found=1
+		fi
+	done
+
+	if [[ "${found}" -eq 0 ]]; then
+		echo "  (none found)"
+	fi
+}
+
+resolve_oh_my_config_file() {
+	local config_name="$1"
+	local candidate
+
+	if [[ "${config_name}" == */* ]]; then
+		echo "Error: --config expects a preset name or filename from config/, not a path" >&2
+		exit 1
+	fi
+
+	case "${config_name}" in
+	default | "${DEFAULT_OH_MY_CONFIG_NAME}")
+		candidate="${OVERLORD_DIR}/config/${DEFAULT_OH_MY_CONFIG_NAME}"
+		;;
+	opencode*.json)
+		echo "Error: --config selects oh-my-openagent routing presets, not OpenCode catalogs" >&2
+		echo "Run 'scripts/install --list-configs' to list available routing presets." >&2
+		exit 1
+		;;
+	oh-my-openagent*.jsonc)
+		candidate="${OVERLORD_DIR}/config/${config_name}"
+		;;
+	*)
+		candidate="${OVERLORD_DIR}/config/oh-my-openagent.${config_name}.jsonc"
+		;;
+	esac
+
+	if ! is_oh_my_config_file "${candidate}"; then
+		echo "Error: routing preset '${config_name}' not found or invalid in ${OVERLORD_DIR}/config" >&2
+		echo "Run 'scripts/install --list-configs' to list available routing presets." >&2
+		exit 1
+	fi
+
+	printf '%s\n' "${candidate}"
+}
+
+timestamp() {
+	date +%Y%m%d%H%M%S
+}
+
+install_file() {
+	local source_file="$1"
+	local dest_file="$2"
+	local mode="${3:-600}"
+	local backup_file
+	local temp_file
+
+	mkdir -p "$(dirname "${dest_file}")"
+	if [[ -e "${dest_file}" || -L "${dest_file}" ]]; then
+		if [[ -f "${dest_file}" && ! -L "${dest_file}" ]] && cmp -s "${source_file}" "${dest_file}"; then
+			chmod "${mode}" "${dest_file}" 2>/dev/null || true
+			printf 'Unchanged: %s\n' "${dest_file}"
+			return 0
+		fi
+
+		backup_file="${dest_file}.backup.$(timestamp)"
+		if [[ -L "${dest_file}" ]]; then
+			mv "${dest_file}" "${backup_file}"
+		elif [[ -f "${dest_file}" ]]; then
+			cp "${dest_file}" "${backup_file}"
+			chmod 600 "${backup_file}" 2>/dev/null || true
+		else
+			mv "${dest_file}" "${backup_file}"
+		fi
+		printf 'Backed up: %s\n' "${backup_file}"
+	fi
+
+	temp_file="$(mktemp "$(dirname "${dest_file}")/.install.XXXXXX")"
+	cp "${source_file}" "${temp_file}"
+	chmod "${mode}" "${temp_file}" 2>/dev/null || true
+	mv "${temp_file}" "${dest_file}"
+	printf 'Installed: %s\n' "${dest_file}"
+}
+
+safe_symlink() {
+	local target="$1"
+	local link_path="$2"
+	local backup_file
+	local current_target
+
+	mkdir -p "$(dirname "${link_path}")"
+	if [[ -L "${link_path}" ]]; then
+		current_target="$(readlink "${link_path}" 2>/dev/null || true)"
+		if [[ "${current_target}" == "${target}" ]]; then
+			printf 'Unchanged: %s -> %s\n' "${link_path}" "${target}"
+			return 0
+		fi
+		backup_file="${link_path}.backup.$(timestamp)"
+		mv "${link_path}" "${backup_file}"
+		printf 'Backed up: %s\n' "${backup_file}"
+	elif [[ -e "${link_path}" ]]; then
+		backup_file="${link_path}.backup.$(timestamp)"
+		mv "${link_path}" "${backup_file}"
+		printf 'Backed up: %s\n' "${backup_file}"
+	fi
+	ln -s "${target}" "${link_path}"
+	printf 'Linked: %s -> %s\n' "${link_path}" "${target}"
+}
+
+write_opencode_config() {
+	local tmp_file
+	local escaped_model
+
+	tmp_file="$(mktemp)"
+	if [[ -n "${LMS_MODEL}" ]]; then
+		escaped_model="$(escape_sed_replacement "${LMS_MODEL}")"
+		sed -e 's|"lm-studio"|"'"${escaped_model}"'"|g' \
+			-e 's|"LM Studio (Local)"|"'"${escaped_model}"'"|g' \
+			"${CONFIG_FILE}" >"${tmp_file}"
+	else
+		cp "${CONFIG_FILE}" "${tmp_file}"
+	fi
+	install_file "${tmp_file}" "${RUNTIME_OPENCODE_CONFIG_FILE}" 600
+	rm -f "${tmp_file}"
+}
+
+write_oh_my_config() {
+	local tmp_file
+	local escaped_override
+
+	tmp_file="$(mktemp)"
+	if [[ -n "${MODEL_OVERRIDE}" ]]; then
+		escaped_override="$(escape_sed_replacement "${MODEL_OVERRIDE}")"
+		sed 's|"model": ".*"|"model": "'"${escaped_override}"'"|g' "${OH_MY_CONFIG_FILE}" >"${tmp_file}"
+	else
+		cp "${OH_MY_CONFIG_FILE}" "${tmp_file}"
+	fi
+	install_file "${tmp_file}" "${RUNTIME_OH_MY_OPENAGENT_CONFIG_FILE}" 600
+	install_file "${tmp_file}" "${RUNTIME_OH_MY_OPENCODE_CONFIG_FILE}" 600
+	rm -f "${tmp_file}"
+}
+
+write_zellij_config() {
+	install_file "${OVERLORD_DIR}/config/zellij-config.kdl" "${RUNTIME_ZELLIJ_CONFIG_FILE}" 644
+}
+
+write_env_file() {
+	local tmp_file
+	local var
+	local gcloud_adc
+	local provider_env_vars=(
+		AWS_REGION
+		AWS_BEARER_TOKEN_BEDROCK
+		GOOGLE_CLOUD_PROJECT
+		GOOGLE_CLOUD_LOCATION
+		AZURE_RESOURCE_NAME
+		AZURE_API_KEY
+		OPENROUTER_API_KEY
+		LMSTUDIO_BASE_URL
+		LMSTUDIO_API_KEY
+		UV_CACHE_DIR
+		CONTEXT7_API_KEY
+		OPENCODE_SERVER_PASSWORD
+	)
+
+	: "${LMSTUDIO_BASE_URL:=http://localhost:1234/v1}"
+	: "${LMSTUDIO_API_KEY:=lm-studio}"
+	: "${UV_CACHE_DIR:=${XDG_CACHE_HOME}/uv}"
+	: "${GOOGLE_CLOUD_LOCATION:=${VERTEX_LOCATION:-}}"
+	: "${GOOGLE_CLOUD_PROJECT:=${GCP_PROJECT:-${GCLOUD_PROJECT:-}}}"
+	export LMSTUDIO_BASE_URL LMSTUDIO_API_KEY UV_CACHE_DIR GOOGLE_CLOUD_LOCATION GOOGLE_CLOUD_PROJECT
+
+	mkdir -p "${RUNTIME_OPENCODE_CONFIG_DIR}"
+	chmod 700 "${RUNTIME_OPENCODE_CONFIG_DIR}" 2>/dev/null || true
+	tmp_file="$(mktemp)"
+	{
+		printf '# Source this file before running opencode if your shell does not already export these variables.\n'
+		printf 'export BUN_INSTALL=%q\n' "${BUN_INSTALL}"
+		printf 'export XDG_CONFIG_HOME=%q\n' "${XDG_CONFIG_HOME}"
+		printf 'export XDG_CACHE_HOME=%q\n' "${XDG_CACHE_HOME}"
+		printf 'export XDG_DATA_HOME=%q\n' "${XDG_DATA_HOME}"
+		printf 'export XDG_STATE_HOME=%q\n' "${XDG_STATE_HOME}"
+		printf 'export PATH=%q:%q:$PATH\n' "${LOCAL_BIN_DIR}" "${BUN_INSTALL}/bin"
+		for var in "${provider_env_vars[@]}"; do
+			if [[ -n "${!var:-}" ]]; then
+				printf 'export %s=%q\n' "${var}" "${!var}"
+			fi
+		done
+
+		gcloud_adc="${GOOGLE_APPLICATION_CREDENTIALS:-${HOME}/.config/gcloud/application_default_credentials.json}"
+		if [[ -f "${gcloud_adc}" ]]; then
+			printf 'export GOOGLE_APPLICATION_CREDENTIALS=%q\n' "${gcloud_adc}"
+		fi
+	} >"${tmp_file}"
+	install_file "${tmp_file}" "${RUNTIME_ENV_FILE}" 600
+	rm -f "${tmp_file}"
+}
+
+ensure_bun() {
+	export BUN_INSTALL
+	export PATH="${LOCAL_BIN_DIR}:${BUN_INSTALL}/bin:${PATH}"
+
+	if command -v bun >/dev/null 2>&1; then
+		return 0
+	fi
+	echo "Error: bun is required to install OpenCode packages directly on this machine." >&2
+	echo "Install Bun from https://bun.sh, ensure it is in PATH, then rerun scripts/install." >&2
+	exit 1
+}
+
+ensure_opencode_package() {
+	local opencode_bin
+	local installed_version
+
+	echo "Ensuring OpenCode CLI package opencode-ai@${OPENCODE_REQUIRED_VERSION}..."
+	bun add -g "opencode-ai@${OPENCODE_REQUIRED_VERSION}"
+	opencode_bin="${BUN_INSTALL}/bin/opencode"
+	if [[ -x "${opencode_bin}" ]]; then
+		safe_symlink "${opencode_bin}" "${LOCAL_BIN_DIR}/opencode"
+	fi
+	installed_version="$(opencode --version 2>/dev/null || true)"
+	printf 'OpenCode CLI version: %s\n' "${installed_version:-unknown}"
+}
+
+ensure_oh_my_openagent_package() {
+	local package_dir
+	local package_json
+	local canonical_bin
+	local fallback_bin
+	local installed_version
+
+	package_dir="${OH_MY_OPENAGENT_CACHE_DIR}/node_modules/oh-my-openagent"
+	package_json="${package_dir}/package.json"
+	canonical_bin="${OH_MY_OPENAGENT_CACHE_DIR}/node_modules/.bin/oh-my-openagent"
+	fallback_bin="${package_dir}/bin/oh-my-opencode.js"
+
+	echo "Ensuring OpenCode plugin package ${OH_MY_OPENAGENT_PACKAGE}..."
+	mkdir -p "${OH_MY_OPENAGENT_CACHE_DIR}" "${LOCAL_BIN_DIR}"
+	cd "${OH_MY_OPENAGENT_CACHE_DIR}"
+	if [[ ! -f package.json ]]; then
+		bun init -y >/dev/null 2>&1
+	fi
+	bun add "${OH_MY_OPENAGENT_PACKAGE}"
+
+	if [[ -x "${canonical_bin}" ]]; then
+		safe_symlink "${canonical_bin}" "${OH_MY_OPENAGENT_BIN}"
+	elif [[ -x "${fallback_bin}" ]]; then
+		safe_symlink "${fallback_bin}" "${OH_MY_OPENAGENT_BIN}"
+	else
+		echo "Error: ${OH_MY_OPENAGENT_PACKAGE} installed without an executable oh-my-openagent entrypoint" >&2
+		exit 1
+	fi
+
+	installed_version="$(node -p "require('${package_json}').version" 2>/dev/null || true)"
+	printf 'oh-my-openagent version: %s\n' "${installed_version:-unknown}"
+}
+
+warn_path() {
+	case ":${PATH}:" in
+	*":${LOCAL_BIN_DIR}:"*) ;;
+	*)
+		echo "Warning: ${LOCAL_BIN_DIR} is not in PATH. Add it before running opencode or oh-my-openagent." >&2
+		;;
+	esac
+}
+
+main() {
+	CONFIG_NAME="${DEFAULT_OH_MY_CONFIG_NAME}"
+	CONFIG_EXPLICIT=0
+	LIST_CONFIGS=0
+	LMS_MODEL=""
+	SKIP_PACKAGE_INSTALL=0
+
+	while [[ $# -gt 0 ]]; do
+		case "$1" in
+		--list-configs)
+			LIST_CONFIGS=1
+			shift
+			;;
+		--config)
+			if [[ $# -lt 2 || "$2" == -* ]]; then
+				echo "Error: --config requires a routing preset" >&2
+				echo "Run 'scripts/install --list-configs' to list available routing presets." >&2
+				exit 1
+			fi
+			CONFIG_NAME="$2"
+			CONFIG_EXPLICIT=1
+			shift 2
+			;;
+		--lms-model)
+			if [[ $# -lt 2 || "$2" == -* ]]; then
+				echo "Error: --lms-model requires a model name" >&2
+				echo "Example: scripts/install --lms-model qwen3-8b" >&2
+				exit 1
+			fi
+			validate_lms_model "$2"
+			LMS_MODEL="$2"
+			shift 2
+			;;
+		--skip-package-install)
+			SKIP_PACKAGE_INSTALL=1
+			shift
+			;;
+		-h | --help)
+			show_help
+			exit 0
+			;;
+		*)
+			echo "Error: unknown argument '$1'" >&2
+			echo "Run 'scripts/install --help' for usage." >&2
+			exit 1
+			;;
+		esac
+	done
+
+	if [[ "${LIST_CONFIGS}" -eq 1 ]]; then
+		if [[ "${CONFIG_EXPLICIT}" -eq 1 || -n "${LMS_MODEL}" || "${SKIP_PACKAGE_INSTALL}" -eq 1 ]]; then
+			echo "Error: --list-configs cannot be combined with install options" >&2
+			exit 1
+		fi
+		print_available_configs
+		exit 0
+	fi
+
+	CONFIG_FILE="${OVERLORD_DIR}/config/${OPENCODE_CONFIG_NAME}"
+	if ! is_opencode_config_file "${CONFIG_FILE}"; then
+		echo "Error: ${CONFIG_FILE} is not a valid OpenCode provider catalog from config/" >&2
+		exit 1
+	fi
+
+	if [[ "${CONFIG_EXPLICIT}" -eq 1 && -n "${LMS_MODEL}" ]]; then
+		echo "Error: --config cannot be combined with --lms-model" >&2
+		echo "Choose either a checked-in routing preset or an explicit LM Studio model." >&2
+		exit 1
+	fi
+
+	MODEL_OVERRIDE=""
+	if [[ -n "${LMS_MODEL}" ]]; then
+		MODEL_OVERRIDE="lmstudio/${LMS_MODEL}"
+		echo "LM Studio override: all oh-my-openagent agents -> ${MODEL_OVERRIDE}"
+	fi
+
+	OH_MY_CONFIG_FILE="$(resolve_oh_my_config_file "${CONFIG_NAME}")"
+
+	write_opencode_config
+	write_oh_my_config
+	write_zellij_config
+	write_env_file
+
+	if [[ "${SKIP_PACKAGE_INSTALL}" -eq 0 ]]; then
+		ensure_bun
+		ensure_opencode_package
+		ensure_oh_my_openagent_package
+		if ! command -v zellij >/dev/null 2>&1 && [[ ! -x "${LOCAL_BIN_DIR}/zellij" ]]; then
+			echo "Warning: zellij is not installed. Install it separately if you want the zellij escape hatch." >&2
+		fi
+	else
+		mkdir -p "${OH_MY_OPENAGENT_CACHE_DIR}" "${LOCAL_BIN_DIR}"
+		echo "Skipped package installation."
+	fi
+
+	warn_path
+	echo "Host OpenCode install complete."
+	echo "Runtime config: ${RUNTIME_OPENCODE_CONFIG_DIR}"
+	echo "Env file:       ${RUNTIME_ENV_FILE}"
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+	main "$@"
+fi

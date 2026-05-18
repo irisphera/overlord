@@ -22,6 +22,26 @@ overlord
 
 First run builds the image, creates a container, starts the OpenCode web server, and prints local and network URLs. After that, `overlord` reuses the same container and web server.
 
+### Native Host Install
+
+If you do not want to containerize OpenCode, use the native installer instead:
+
+```bash
+./scripts/install
+```
+
+This installs the checked-in OpenCode provider catalog, selected `oh-my-openagent` routing preset, zellij config, and Bun-managed OpenCode packages directly under your user config/cache/bin directories. Bun must already be installed and available in `PATH`. The native installer backs up existing target files before replacing them and does not use Docker or Podman.
+
+Use the same routing options as the launcher:
+
+```bash
+./scripts/install --list-configs
+./scripts/install --config pro
+./scripts/install --lms-model qwen3-8b
+```
+
+The installer writes an optional env file at `~/.config/opencode/overlord-env`; source it before running `opencode` if your shell does not already export the needed provider credentials and defaults.
+
 ## Commands
 
 ```
@@ -33,6 +53,7 @@ overlord zellij       Launch zellij explicitly
 overlord fresh        Remove the container (next launch starts from clean image)
 overlord purge        Remove the container and image (next launch rebuilds everything)
 overlord help         Show help
+scripts/install       Install OpenCode setup directly on the host
 ```
 
 ### Agent Routing Presets

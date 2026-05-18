@@ -21,6 +21,7 @@
 | `oh-my-openagent.jsonc` | Default agent/category routing preset | Copied to `/home/overlord/.config/opencode/oh-my-openagent.jsonc` by default |
 | `oh-my-openagent.gemini.jsonc` | Gemini-specific routing preset | Selectable via `overlord --config gemini` |
 | `oh-my-openagent.opus.jsonc` | Bedrock Opus routing preset | Selectable via `overlord --config opus` |
+| `oh-my-openagent.deepseek.jsonc` | DeepSeek V4 medium/low routing preset with GPT 5.5 high-thinking routes | Selectable via `overlord --config deepseek` |
 | `oh-my-openagent.openrouter-minimax-m2.5-free.jsonc` | OpenRouter MiniMax routing preset | Selectable via `overlord --config openrouter-minimax-m2.5-free` |
 | `oh-my-openagent.pro.jsonc` | GPT 5.4 Pro high-reasoning routing preset | Selectable via `overlord --config pro` |
 | `entrypoint.sh` | Container bootstrap entrypoint | Root startup, permission repair, privilege drop |

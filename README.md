@@ -45,6 +45,7 @@ overlord --config default
 overlord --config pro
 overlord --config gemini
 overlord --config opus
+overlord --config deepseek
 export OPENROUTER_API_KEY="..." && overlord --config openrouter-minimax-m2.5-free
 overlord --lms-model qwen3-8b web
 ```
@@ -55,11 +56,12 @@ Available routing presets include:
 - `pro` (`oh-my-openagent.pro.jsonc`)
 - `gemini` (`oh-my-openagent.gemini.jsonc`)
 - `opus` (`oh-my-openagent.opus.jsonc`)
+- `deepseek` (`oh-my-openagent.deepseek.jsonc`)
 - `openrouter-minimax-m2.5-free` (`oh-my-openagent.openrouter-minimax-m2.5-free.jsonc`)
 
 `--config <preset>` cannot be combined with `--lms-model`. LM Studio remains a separate dynamic escape hatch because the local model name is supplied at runtime.
 
-The checked-in `pro` routing preset upgrades high-reasoning and review/planning routes to Azure's `gpt-5.4-pro` while using the shared provider catalog from `config/opencode.json`. The OpenRouter preset selects `minimax/minimax-m2.5:free` and requires `OPENROUTER_API_KEY` in your shell before launch.
+The checked-in `pro` routing preset upgrades high-reasoning and review/planning routes to Azure's `gpt-5.4-pro` while using the shared provider catalog from `config/opencode.json`. The `deepseek` preset keeps high-thinking routes on Azure `gpt-5.5`, sends medium-thinking routes to Azure `deepseek-v4-pro`, and sends low-thinking routes to Azure `deepseek-v4-flash`. The OpenRouter preset selects `minimax/minimax-m2.5:free` and requires `OPENROUTER_API_KEY` in your shell before launch.
 
 ```bash
 export AZURE_API_KEY="..."
@@ -122,13 +124,13 @@ Those checked-in files are the only authoritative config inputs. At launch, `scr
 
 The current default agent/category routing is controlled by `config/oh-my-openagent.jsonc`, and the checked-in default now points to `azure/gpt-5.5`. That routing only works if `AZURE_API_KEY` and `AZURE_RESOURCE_NAME` are available in your shell before launch. The checked-in Azure `gpt-5.5` entry currently targets the Azure deployment ID `gpt-5.5-1`, so change the model `id` in `config/opencode.json` if your deployment uses a different name.
 
-If you launch with `--config pro`, the launcher selects `config/oh-my-openagent.pro.jsonc`, so high-reasoning routes plus the planning/review agents `metis` and `momus` use `azure/gpt-5.4-pro` while the remaining routes use models declared in `config/opencode.json`.
+If you launch with `--config pro`, the launcher selects `config/oh-my-openagent.pro.jsonc`, so high-reasoning routes plus the planning/review agents `metis` and `momus` use `azure/gpt-5.4-pro` while the remaining routes use models declared in `config/opencode.json`. If you launch with `--config deepseek`, high-thinking routes use `azure/gpt-5.5` with high reasoning effort, medium-thinking routes use `azure/deepseek-v4-pro` with medium reasoning effort, and low-thinking routes use `azure/deepseek-v4-flash` with low reasoning effort.
 
 ### Configured Providers
 
 | Provider | Models |
 |---|---|
-| **Azure OpenAI** | GPT 5.5, GPT 5.4, GPT 5.4 Pro |
+| **Azure OpenAI** | GPT 5.5, GPT 5.4, GPT 5.4 Pro, DeepSeek V4 Pro, DeepSeek V4 Flash |
 | **AWS Bedrock** | Claude Opus 4.6, Claude Haiku 4.5 |
 | **Google Vertex AI** | Gemini 3.1 Pro, Gemini 3 Flash |
 | **LM Studio** | Local models via OpenAI-compatible API |

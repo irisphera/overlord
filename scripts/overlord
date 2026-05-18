@@ -6,7 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "${RESOLVED_SCRIPT}")" && pwd)"
 OVERLORD_DIR="$(dirname "${SCRIPT_DIR}")"
 OPENCODE_CONFIG_NAME="opencode.json"
 DEFAULT_OH_MY_CONFIG_NAME="oh-my-openagent.jsonc"
-OPENCODE_CONFIG_SCHEMA="\"\$schema\": \"https://opencode.ai/config.json\""
+OPENCODE_CONFIG_SCHEMA='"$schema":"https://opencode.ai/config.json"'
 OH_MY_CONFIG_SCHEMA="\"\$schema\": \"https://raw.githubusercontent.com/code-yeongyu/oh-my-openagent/dev/assets/oh-my-opencode.schema.json\""
 OPENCODE_REQUIRED_VERSION="latest"
 OPENCODE_WEB_HOSTNAME="0.0.0.0"
@@ -467,7 +467,7 @@ is_opencode_config_file() {
 	file_name="$(basename "${file_path}")"
 	[[ -f "${file_path}" ]] || return 1
 	[[ "${file_name}" == opencode*.json ]] || return 1
-	grep -Fq "${OPENCODE_CONFIG_SCHEMA}" "${file_path}"
+	tr -d '[:space:]' <"${file_path}" | grep -Fq "${OPENCODE_CONFIG_SCHEMA}"
 }
 
 is_oh_my_config_file() {
@@ -567,7 +567,7 @@ fi
 
 CONFIG_FILE="${OVERLORD_DIR}/config/${OPENCODE_CONFIG_NAME}"
 if ! is_opencode_config_file "${CONFIG_FILE}"; then
-	echo "Error: ${OPENCODE_CONFIG_NAME} is not a valid OpenCode provider catalog from config/" >&2
+	echo "Error: ${CONFIG_FILE} is not a valid OpenCode provider catalog from config/" >&2
 	exit 1
 fi
 

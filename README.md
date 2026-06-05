@@ -67,6 +67,8 @@ overlord --config pro
 overlord --config gemini
 overlord --config opus
 overlord --config deepseek
+overlord --config lms
+overlord --config m3
 export OPENROUTER_API_KEY="..." && overlord --config openrouter-minimax-m2.5-free
 overlord --lms-model qwen3-8b web
 ```
@@ -78,11 +80,13 @@ Available routing presets include:
 - `gemini` (`oh-my-openagent.gemini.jsonc`)
 - `opus` (`oh-my-openagent.opus.jsonc`)
 - `deepseek` (`oh-my-openagent.deepseek.jsonc`)
+- `lms` (`oh-my-openagent.lms.jsonc`)
+- `m3` (`oh-my-openagent.m3.jsonc`)
 - `openrouter-minimax-m2.5-free` (`oh-my-openagent.openrouter-minimax-m2.5-free.jsonc`)
 
 `--config <preset>` cannot be combined with `--lms-model`. LM Studio remains a separate dynamic escape hatch because the local model name is supplied at runtime.
 
-The checked-in `pro` routing preset upgrades high-reasoning and review/planning routes to Azure's `gpt-5.4-pro` while using the shared provider catalog from `config/opencode.json`. The `deepseek` preset keeps high-thinking routes on Azure `gpt-5.5`, sends medium-thinking routes to Azure `deepseek-v4-pro`, and sends low-thinking routes to Azure `deepseek-v4-flash`. The OpenRouter preset selects `minimax/minimax-m2.5:free` and requires `OPENROUTER_API_KEY` in your shell before launch.
+The checked-in `pro` routing preset upgrades high-reasoning and review/planning routes to Azure's `gpt-5.4-pro` while using the shared provider catalog from `config/opencode.json`. The `deepseek` preset keeps high-thinking routes on Azure `gpt-5.5`, sends medium-thinking routes to Azure `deepseek-v4-pro`, and sends low-thinking routes to Azure `deepseek-v4-flash`. The `lms` preset uses the LM Studio model `Qwopus3.6-27B-v2-MTP-GGUF`. The `m3` preset routes every agent and category only to OpenCode Zen's `opencode/minimax-m3-free`; it does not reference AWS, Azure, or Google models. The OpenRouter preset selects `minimax/minimax-m2.5:free` and requires `OPENROUTER_API_KEY` in your shell before launch.
 
 ```bash
 export AZURE_API_KEY="..."
@@ -104,6 +108,12 @@ Use `overlord zellij` or `overlord shell` when you want an explicit terminal ent
 Conversations, memory, and shell history are stored in `.overlord/` inside your project directory and survive `fresh` and `purge`.
 
 Anything you install inside the container (apt packages, pip packages, etc.) persists until you run `overlord fresh`. Running `overlord purge` also removes the image, so the next launch rebuilds everything.
+
+### Repo-Specific Dependencies
+
+The Overlord image intentionally contains only common development utilities and language servers. Project-specific stacks such as PHP/Composer, Java/Maven/JDTLS, Terraform, Ansible, AWS tools, Tailwind's language server, or heavy Python packages should live in the mounted repository, not in the shared image.
+
+If a repository needs extra packages on fresh container setup, add an executable `setup-devcontainer.sh` at that repository root. When `overlord` creates or restarts the workspace container, it automatically runs `/workspace/setup-devcontainer.sh` as root inside the container, then repairs `/home/overlord` ownership. Review repo-controlled setup scripts before launching untrusted workspaces. Re-attaching to an already-running container skips setup; use `overlord fresh` to rerun it.
 
 ### What's Mounted
 
@@ -152,9 +162,11 @@ If you launch with `--config pro`, the launcher selects `config/oh-my-openagent.
 | Provider | Models |
 |---|---|
 | **Azure OpenAI** | GPT 5.5, GPT 5.4, GPT 5.4 Pro, DeepSeek V4 Pro, DeepSeek V4 Flash |
-| **AWS Bedrock** | Claude Opus 4.6, Claude Haiku 4.5 |
-| **Google Vertex AI** | Gemini 3.1 Pro, Gemini 3 Flash |
-| **LM Studio** | Local models via OpenAI-compatible API |
+| **AWS Bedrock** | Claude Opus 4.8, Claude Haiku 4.5 |
+| **Google Vertex AI** | Gemini 3.1 Pro, Gemini 3 Flash, Gemini 3.5 Flash |
+| **OpenCode Zen** | MiniMax M3 Free |
+| **LM Studio** | Qwopus3.6-27B-v2-MTP-GGUF, local models via OpenAI-compatible API |
+| **OpenRouter** | MiniMax M2.5 (free) |
 
 ### Credentials
 
@@ -174,14 +186,17 @@ The launcher forwards provider env vars listed in the `PROVIDER_ENV_VARS` array 
 - `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`
 - `AZURE_RESOURCE_NAME`, `AZURE_API_KEY`
 - `OPENROUTER_API_KEY`
+- `EXA_API_KEY`, `TAVILY_API_KEY`
 - `LMSTUDIO_BASE_URL`, `LMSTUDIO_API_KEY`
 - `DOCKER_HOST`, `DOCKER_TLS_VERIFY`, `DOCKER_CERT_PATH`
 - `TESTCONTAINERS_HOST_OVERRIDE`, `TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE`, `TESTCONTAINERS_RYUK_DISABLED`
 - `UV_CACHE_DIR`
 
-`CONTEXT7_API_KEY` is always forwarded (used by the Context7 MCP server).
+`CONTEXT7_API_KEY` is always forwarded for Context7. `EXA_API_KEY` and `TAVILY_API_KEY` are forwarded when present for the websearch MCP.
 
 Google Cloud ADC credentials are automatically injected if found at `~/.config/gcloud/application_default_credentials.json` or `$GOOGLE_APPLICATION_CREDENTIALS`.
+
+The `m3` preset uses OpenCode Zen authentication. Connect to OpenCode Zen with `/connect` and select `OpenCode Zen`; do not export AWS, Azure, or Google credentials for that preset if you want the runtime environment to contain only Zen-related model credentials.
 
 ## Troubleshooting
 
@@ -208,13 +223,14 @@ MIT
 
 ## Toolchain
 
-The image ships with a polyglot toolchain for application and plugin development:
+The image ships with the common tooling needed to run OpenCode and work across typical repositories:
 
-- **Java**: JDK 24, Maven, JDTLS, Lombok-enabled `jdtls` launcher
 - **TypeScript/Bun**: Node.js 22, Bun, TypeScript LSP stack, Biome CLI
-- **PHP**: `php-cli`, Composer, and common extensions for WordPress/PrestaShop plugin workflows
 - **Python**: Python 3 plus `uv` (with `UV_LINK_MODE=copy` and cache support)
+- **General LSPs**: YAML, Dockerfile, Bash, Python, HTML/CSS/JSON, and C/C++ basics
 - **Containers**: Docker CLI + Compose plugin with Testcontainers-oriented env forwarding
+
+Repository-specific stacks are intentionally not baked into the shared image. If a workspace needs PHP, Java, Terraform, Ansible, AWS CLI, Tailwind, or similar project-specific tools, add a repo-local `setup-devcontainer.sh`. On a new or restarted container, `overlord` runs `/workspace/setup-devcontainer.sh` automatically with a sanitized root environment and then repairs `/home/overlord` ownership. Re-run setup with `overlord fresh`; `overlord purge` is only needed after shared image changes.
 
 For Testcontainers in this Docker-socket setup, defaults are preconfigured:
 

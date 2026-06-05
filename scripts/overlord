@@ -86,6 +86,7 @@ EXAMPLES:
 	    overlord --config pro                   # Use config/oh-my-openagent.pro.jsonc
 	    overlord --config gemini                # Use config/oh-my-openagent.gemini.jsonc
 	    overlord --config opus                  # Use config/oh-my-openagent.opus.jsonc
+	    overlord --config m3                    # Use OpenCode Zen MiniMax M3 routing
 	    overlord --lms-model qwen3-8b web       # Use LM Studio with an explicit runtime model
 	    overlord --lms-model qwen3-8b zellij    # Same runtime model, with zellij
     overlord shell                   # Open a shell
@@ -94,6 +95,7 @@ EXAMPLES:
     First run creates a persistent container per workspace directory.
     Subsequent runs reuse the existing container and web server.
     Anything installed in the container persists across restarts.
+    Workspace /workspace/setup-devcontainer.sh runs automatically during fresh/restarted setup.
     Use 'fresh' to destroy the container and start from a clean image.
     Use 'purge' to also remove the image (full rebuild on next launch).
     .overlord/ inside the workspace and survive fresh/purge.
@@ -251,6 +253,19 @@ log_dir="$2"
 port="$3"
 success_line="service=plugin path=oh-my-openagent@latest loading plugin"
 failure_pattern='service=plugin .*oh-my-openagent.*(failed|incompatible|no server entrypoint)'
+lsp_enabled_pattern='service=lsp .* enabled LSP servers'
+lsp_disabled_pattern='service=lsp all LSPs are disabled'
+
+has_log_pattern() {
+	pattern="$1"
+	if [ -d "${log_dir}" ] && grep -R -E "${pattern}" "${log_dir}" >/dev/null 2>&1; then
+		return 0
+	fi
+	if [ -f "${log_file}" ] && grep -E "${pattern}" "${log_file}" >/dev/null 2>&1; then
+		return 0
+	fi
+	return 1
+}
 
 if [ -n "${OPENCODE_SERVER_PASSWORD:-}" ]; then
 	curl --silent --fail --max-time 5 \
@@ -263,17 +278,17 @@ else
 		"http://127.0.0.1:${port}/path?directory=/workspace" >/dev/null 2>&1 || true
 fi
 
-if [ -d "${log_dir}" ] && grep -R -F "${success_line}" "${log_dir}" >/dev/null 2>&1; then
-	exit 0
-fi
-if [ -f "${log_file}" ] && grep -Fq "${success_line}" "${log_file}"; then
-	exit 0
-fi
-if [ -d "${log_dir}" ] && grep -R -E "${failure_pattern}" "${log_dir}" >/dev/null 2>&1; then
+if has_log_pattern "${failure_pattern}"; then
 	exit 2
 fi
-if [ -f "${log_file}" ] && grep -E "${failure_pattern}" "${log_file}" >/dev/null 2>&1; then
-	exit 2
+
+if has_log_pattern "$(printf '%s' "${success_line}" | sed 's/[][(){}.^$*+?|\\]/\\&/g')"; then
+	if has_log_pattern "${lsp_enabled_pattern}"; then
+		exit 0
+	fi
+	if has_log_pattern "${lsp_disabled_pattern}"; then
+		exit 3
+	fi
 fi
 exit 1
 EOF
@@ -281,21 +296,21 @@ EOF
 			return 0
 		fi
 		status=$?
-		if [[ "${status}" -eq 2 ]]; then
+		if [[ "${status}" -eq 2 || "${status}" -eq 3 ]]; then
 			break
 		fi
 		sleep 1
 	done
 
-	echo "Error: OpenCode web started, but oh-my-openagent did not load as a plugin." >&2
-	echo "Expected to find 'service=plugin path=oh-my-openagent@latest loading plugin' in ${OPENCODE_STRUCTURED_LOG_DIR}/*.log or ${OPENCODE_WEB_LOG_FILE}." >&2
+	echo "Error: OpenCode web started, but oh-my-openagent did not load with native LSP enabled." >&2
+	echo "Expected plugin load plus 'enabled LSP servers' in ${OPENCODE_STRUCTURED_LOG_DIR}/*.log or ${OPENCODE_WEB_LOG_FILE}." >&2
 	echo "Relevant OpenCode log lines:" >&2
 	"${ENGINE}" exec -i "${CONTAINER_NAME}" sh -s -- \
 		"${OPENCODE_WEB_LOG_FILE}" \
 		"${OPENCODE_STRUCTURED_LOG_DIR}" <<'EOF' >&2 || true
 log_file="$1"
 log_dir="$2"
-pattern='oh-my-openagent|oh-my-opencode|service=plugin|plugin|failed|error|cannot find|not found|config path=|path='
+pattern='oh-my-openagent|oh-my-opencode|service=plugin|service=mcp|service=lsp|key=(websearch|context7|grep_app|lsp|ast_grep)|plugin|failed|error|cannot find|not found|config path=|path='
 if [ -d "${log_dir}" ]; then
 	grep -R -Ei "${pattern}" "${log_dir}" 2>/dev/null | tail -120 || true
 fi
@@ -449,6 +464,7 @@ ensure_opencode_web_server() {
 	local network_ip
 
 	ensure_opencode_runtime_version
+	restart_opencode_web_if_needed
 	host_port="$(resolve_published_web_port)"
 
 	echo "Ensuring OpenCode web server is running in ${CONTAINER_NAME}..."
@@ -510,17 +526,27 @@ EOF
 ensure_opencode_runtime_version() {
 	local current_version
 	local installed_version
+	local latest_version
 
-	current_version=$("${ENGINE}" exec -u "${EXEC_USER}" "${EXEC_ENV[@]}" "${CONTAINER_NAME}" opencode --version 2>/dev/null || true)
-	if [[ "${OPENCODE_REQUIRED_VERSION}" == "latest" && -n "${current_version}" ]]; then
-		return 0
+	current_version=$("${ENGINE}" exec -u "${EXEC_USER}" "${CONTAINER_NAME}" env -i "${PACKAGE_ENV[@]}" node -p \
+		"require('/home/overlord/.bun/install/global/node_modules/opencode-ai/package.json').version" 2>/dev/null || true)
+	if [[ -z "${current_version}" ]]; then
+		current_version=$("${ENGINE}" exec -u "${EXEC_USER}" "${CONTAINER_NAME}" env -i "${PACKAGE_ENV[@]}" opencode --version 2>/dev/null || true)
 	fi
-	if [[ "${current_version}" == "${OPENCODE_REQUIRED_VERSION}" ]]; then
+	if [[ "${OPENCODE_REQUIRED_VERSION}" == "latest" ]]; then
+		latest_version=$("${ENGINE}" exec -u "${EXEC_USER}" "${CONTAINER_NAME}" env -i "${PACKAGE_ENV[@]}" npm view opencode-ai version 2>/dev/null || true)
+		if [[ -n "${latest_version}" && "${current_version}" == "${latest_version}" ]]; then
+			return 0
+		fi
+		if [[ -z "${latest_version}" && -n "${current_version}" ]]; then
+			return 0
+		fi
+	elif [[ "${current_version}" == "${OPENCODE_REQUIRED_VERSION}" ]]; then
 		return 0
 	fi
 
 	echo "Ensuring OpenCode CLI package opencode-ai@${OPENCODE_REQUIRED_VERSION} in ${CONTAINER_NAME}..."
-	"${ENGINE}" exec -i -u "${EXEC_USER}" "${EXEC_ENV[@]}" "${CONTAINER_NAME}" sh -s -- "${OPENCODE_REQUIRED_VERSION}" <<'EOF'
+	"${ENGINE}" exec -i -u "${EXEC_USER}" "${CONTAINER_NAME}" env -i "${PACKAGE_ENV[@]}" sh -s -- "${OPENCODE_REQUIRED_VERSION}" <<'EOF'
 set -e
 
 required_version="$1"
@@ -542,20 +568,25 @@ if ! "${bun_bin}" add -g "opencode-ai@${required_version}" >"${install_log}" 2>&
 	exit 1
 fi
 EOF
-	installed_version=$("${ENGINE}" exec -u "${EXEC_USER}" "${EXEC_ENV[@]}" "${CONTAINER_NAME}" opencode --version 2>/dev/null || true)
+	installed_version=$("${ENGINE}" exec -u "${EXEC_USER}" "${CONTAINER_NAME}" env -i "${PACKAGE_ENV[@]}" node -p \
+		"require('/home/overlord/.bun/install/global/node_modules/opencode-ai/package.json').version" 2>/dev/null || true)
+	if [[ -z "${installed_version}" ]]; then
+		installed_version=$("${ENGINE}" exec -u "${EXEC_USER}" "${CONTAINER_NAME}" env -i "${PACKAGE_ENV[@]}" opencode --version 2>/dev/null || true)
+	fi
 	printf 'OpenCode CLI version: %s\n' "${installed_version:-unknown}"
+	OPENCODE_WEB_RESTART_REQUIRED=1
 }
 
 ensure_oh_my_openagent_runtime_package() {
 	local installed_version
 
-	if "${ENGINE}" exec -i -u "${EXEC_USER}" "${EXEC_ENV[@]}" "${CONTAINER_NAME}" sh -s -- \
-		"${OH_MY_OPENAGENT_PACKAGE}" \
+	if "${ENGINE}" exec -i -u "${EXEC_USER}" "${CONTAINER_NAME}" env -i "${PACKAGE_ENV[@]}" sh -s -- \
+		"${OH_MY_OPENAGENT_REQUIRED_VERSION}" \
 		"${OH_MY_OPENAGENT_CACHE_DIR}" \
 		"${OH_MY_OPENAGENT_BIN}" <<'EOF'
 set -e
 
-package_spec="$1"
+required_version="$1"
 cache_dir="$2"
 public_bin="$3"
 package_dir="${cache_dir}/node_modules/oh-my-openagent"
@@ -563,14 +594,28 @@ package_json="${package_dir}/package.json"
 canonical_bin="${cache_dir}/node_modules/.bin/oh-my-openagent"
 fallback_bin="${package_dir}/bin/oh-my-opencode.js"
 
-test -f "${package_json}" && test -x "${public_bin}"
+if [ ! -f "${package_json}" ] || [ ! -x "${public_bin}" ]; then
+	exit 1
+fi
+
+installed_version="$(node -p "require('${package_json}').version" 2>/dev/null || true)"
+if [ "${required_version}" = "latest" ]; then
+	latest_version="$(npm view oh-my-openagent version 2>/dev/null || true)"
+	if [ -n "${latest_version}" ]; then
+		test "${installed_version}" = "${latest_version}"
+	else
+		test -n "${installed_version}"
+	fi
+else
+	test "${installed_version}" = "${required_version}"
+fi
 EOF
 	then
 		return 0
 	fi
 
 	echo "Ensuring OpenCode plugin package ${OH_MY_OPENAGENT_PACKAGE} in ${CONTAINER_NAME}..."
-	"${ENGINE}" exec -i -u "${EXEC_USER}" "${EXEC_ENV[@]}" "${CONTAINER_NAME}" sh -s -- \
+	"${ENGINE}" exec -i -u "${EXEC_USER}" "${CONTAINER_NAME}" env -i "${PACKAGE_ENV[@]}" sh -s -- \
 		"${OH_MY_OPENAGENT_PACKAGE}" \
 		"${OH_MY_OPENAGENT_CACHE_DIR}" \
 		"${OH_MY_OPENAGENT_BIN}" <<'EOF'
@@ -603,11 +648,9 @@ if [ ! -f package.json ]; then
 	"${bun_bin}" init -y >/dev/null 2>&1
 fi
 
-if [ ! -f "${package_json}" ]; then
-	if ! "${bun_bin}" add "${package_spec}" >"${install_log}" 2>&1; then
-		cat "${install_log}" >&2
-		exit 1
-	fi
+if ! "${bun_bin}" add "${package_spec}" >"${install_log}" 2>&1; then
+	cat "${install_log}" >&2
+	exit 1
 fi
 
 if [ -x "${canonical_bin}" ]; then
@@ -621,7 +664,7 @@ fi
 
 test -x "${public_bin}"
 EOF
-	installed_version=$("${ENGINE}" exec -u "${EXEC_USER}" "${EXEC_ENV[@]}" "${CONTAINER_NAME}" node -p \
+	installed_version=$("${ENGINE}" exec -u "${EXEC_USER}" "${CONTAINER_NAME}" env -i "${PACKAGE_ENV[@]}" node -p \
 		"require('${OH_MY_OPENAGENT_CACHE_DIR}/node_modules/oh-my-openagent/package.json').version" 2>/dev/null || true)
 	printf 'oh-my-openagent version: %s\n' "${installed_version:-unknown}"
 	OPENCODE_WEB_RESTART_REQUIRED=1
@@ -707,7 +750,7 @@ restart_opencode_web_if_needed() {
 		return 0
 	fi
 
-	echo "Restarting OpenCode web server so plugin repairs take effect in ${CONTAINER_NAME}..."
+	echo "Restarting OpenCode web server so package/config repairs take effect in ${CONTAINER_NAME}..."
 	"${ENGINE}" exec -i "${CONTAINER_NAME}" sh -s -- "${OPENCODE_WEB_PID_FILE}" <<'EOF'
 set -e
 
@@ -1005,6 +1048,7 @@ ensure_image
 # --- Env vars ---
 
 EXEC_ENV=()
+PACKAGE_ENV=()
 
 pass_env() {
 	local var="$1"
@@ -1023,6 +1067,19 @@ EXEC_ENV+=(-e "XDG_DATA_HOME=${CONTAINER_HOME}/.local/share")
 EXEC_ENV+=(-e "XDG_STATE_HOME=${CONTAINER_HOME}/.local/state")
 EXEC_ENV+=(-e "TERM=${TERM:-xterm-256color}")
 EXEC_ENV+=(-e "OVERLORD_WORKSPACE=${ZELLIJ_SESSION}")
+PACKAGE_ENV=(
+	"HOME=${CONTAINER_HOME}"
+	"USER=overlord"
+	"LOGNAME=overlord"
+	"XDG_CONFIG_HOME=${CONTAINER_HOME}/.config"
+	"XDG_CACHE_HOME=${CONTAINER_HOME}/.cache"
+	"XDG_DATA_HOME=${CONTAINER_HOME}/.local/share"
+	"XDG_STATE_HOME=${CONTAINER_HOME}/.local/state"
+	"BUN_INSTALL=${CONTAINER_HOME}/.bun"
+	"UV_CACHE_DIR=${CONTAINER_HOME}/.cache/uv"
+	"npm_config_cache=${CONTAINER_HOME}/.npm"
+	"PATH=/usr/local/.safe-chain/shims:/usr/local/.safe-chain/bin:${CONTAINER_HOME}/.bun/bin:${CONTAINER_HOME}/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+)
 pass_env COLORTERM
 pass_env TERM_PROGRAM
 pass_env TERM_PROGRAM_VERSION
@@ -1031,6 +1088,8 @@ pass_env LC_ALL
 
 # MCP credentials
 pass_env CONTEXT7_API_KEY
+pass_env EXA_API_KEY
+pass_env TAVILY_API_KEY
 pass_env OPENCODE_SERVER_PASSWORD
 
 # Docker / Testcontainers runtime envs
@@ -1064,6 +1123,8 @@ PROVIDER_ENV_VARS=(
 	AZURE_RESOURCE_NAME
 	AZURE_API_KEY
 	OPENROUTER_API_KEY
+	EXA_API_KEY
+	TAVILY_API_KEY
 	LMSTUDIO_BASE_URL
 	LMSTUDIO_API_KEY
 	DOCKER_HOST
@@ -1101,6 +1162,49 @@ ensure_state_dir() {
 		echo '.overlord/' >"${gi}"
 	fi
 }
+
+
+repair_workspace_setup_ownership() {
+	"${ENGINE}" exec "${CONTAINER_NAME}" sh -c '
+    chown -R overlord:overlord \
+        /home/overlord/.cache \
+        /home/overlord/.config \
+        /home/overlord/.local \
+        /home/overlord/.npm \
+        2>/dev/null || true
+    chmod -R a+rwX \
+        /home/overlord/.cache \
+        /home/overlord/.config \
+        /home/overlord/.local \
+        /home/overlord/.npm \
+        2>/dev/null || true
+'
+}
+
+run_workspace_setup_script() {
+	local host_script_path
+	local container_script_path="/workspace/setup-devcontainer.sh"
+
+	host_script_path="$(pwd)/setup-devcontainer.sh"
+
+	if [[ ! -f "${host_script_path}" ]]; then
+		echo "==> No setup-devcontainer.sh found; skipping repo setup."
+		return
+	fi
+
+	echo "==> Running repo-controlled devcontainer setup as root: ${container_script_path}"
+	"${ENGINE}" exec -i -w /workspace -u root "${CONTAINER_NAME}" env -i \
+		HOME=/root \
+		USER=root \
+		LOGNAME=root \
+		DEBIAN_FRONTEND=noninteractive \
+		npm_config_cache=/root/.npm \
+		UV_CACHE_DIR=/root/.cache/uv \
+		PATH="/usr/local/.safe-chain/shims:/usr/local/.safe-chain/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/overlord/.bun/bin:/home/overlord/.local/bin" \
+		bash "${container_script_path}"
+	repair_workspace_setup_ownership
+}
+
 
 ensure_running() {
 	case "${STATE}" in
@@ -1176,9 +1280,11 @@ if [[ "${STATE}" != "running" ]]; then
 	# container. Adding +X (execute on directories only) fixes this.
 	chmod -R a+X "$(pwd)" 2>/dev/null || true
 
-	# --- Inject configs into container ---
-
 	ensure_runtime_config_dirs
+
+	run_workspace_setup_script
+
+	# --- Inject configs into container ---
 
 	if [[ -n "${LMS_MODEL}" ]]; then
 		# LM Studio model IDs are user-supplied at runtime, so this override still
@@ -1254,20 +1360,6 @@ TITLE_HOOKS
         /home/overlord/.cache \
         2>/dev/null || true
 '
-
-	# --- Fix cross-platform native modules ---
-	"${ENGINE}" exec -i -u "${EXEC_USER}" "${EXEC_ENV[@]}" "${CONTAINER_NAME}" bash <<'EOF'
-if [ -d /workspace/node_modules ] && [ -f /workspace/package.json ]; then
-    MARKER=/workspace/node_modules/.overlord-platform
-    CURRENT="linux-$(uname -m)"
-    if [ ! -f "$MARKER" ] || [ "$(cat "$MARKER" 2>/dev/null)" != "$CURRENT" ]; then
-        echo "==> Fixing native dependencies for ${CURRENT}..."
-        cd /workspace && npm install --no-audit --no-fund 2>&1 | tail -5
-        echo "$CURRENT" > "$MARKER"
-        echo "==> Done."
-    fi
-fi
-EOF
 
 	# --- Ensure zellij cache dir is writable (rootless Podman UID mapping can break chown) ---
 	"${ENGINE}" exec "${CONTAINER_NAME}" sh -c \

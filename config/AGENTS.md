@@ -11,7 +11,7 @@
 
 - Edit files here.
 - The runtime files actually consumed by OpenCode and zellij live under `/home/overlord/.config/*` inside the container and are overwritten by `scripts/overlord` during lifecycle actions.
-- `entrypoint.sh` and `jdtls.sh` are checked-in wrappers copied into image/runtime paths by the Dockerfile.
+- `entrypoint.sh` is copied into the image by the Dockerfile. `jdtls.sh` is retained only as a reference wrapper for repo-local Java setup scripts; the shared image no longer installs JDTLS.
 
 ## FILE MAP
 
@@ -22,10 +22,12 @@
 | `oh-my-openagent.gemini.jsonc` | Gemini-specific routing preset | Selectable via `overlord --config gemini` |
 | `oh-my-openagent.opus.jsonc` | Bedrock Opus routing preset | Selectable via `overlord --config opus` |
 | `oh-my-openagent.deepseek.jsonc` | DeepSeek V4 medium/low routing preset with GPT 5.5 high-thinking routes | Selectable via `overlord --config deepseek` |
+| `oh-my-openagent.lms.jsonc` | LM Studio routing preset for `Qwopus3.6-27B-v2-MTP-GGUF` | Selectable via `overlord --config lms` |
+| `oh-my-openagent.m3.jsonc` | OpenCode Zen MiniMax M3 routing preset | Selectable via `overlord --config m3`; routes only to `opencode/minimax-m3-free` |
 | `oh-my-openagent.openrouter-minimax-m2.5-free.jsonc` | OpenRouter MiniMax routing preset | Selectable via `overlord --config openrouter-minimax-m2.5-free` |
 | `oh-my-openagent.pro.jsonc` | GPT 5.4 Pro high-reasoning routing preset | Selectable via `overlord --config pro` |
 | `entrypoint.sh` | Container bootstrap entrypoint | Root startup, permission repair, privilege drop |
-| `jdtls.sh` | Java LSP wrapper | Installed as `/usr/local/bin/jdtls` |
+| `jdtls.sh` | Java LSP wrapper reference | Not installed by the shared image; Java repos own JDTLS setup |
 | `zellij-config.kdl` | Active zellij config source | Copied to `/home/overlord/.config/zellij/config.kdl` |
 | `zellij-opencode.kdl` | Checked-in layout file | Present in repo, not currently injected by launcher |
 
@@ -33,14 +35,13 @@
 
 - `opencode.json` is the only selectable OpenCode provider catalog; routing choices live in checked-in `oh-my-openagent*.jsonc` presets.
 - `entrypoint.sh` must preserve root bootstrap -> UID/GID remap -> ownership repair -> `exec gosu overlord "$@"` handoff.
-- `jdtls.sh` must keep arch-aware config discovery and fail fast if the JDTLS launcher jar is missing.
 - `zellij-config.kdl` intentionally maps tab mode to `Ctrl+b` and leaves `Ctrl+t` available for app passthrough.
 
 ## MANUAL VERIFICATION
 
 - Config catalog/routing edits: run `overlord --list-configs`, then use `overlord fresh && overlord --config <preset>` to verify the selected routing preset is re-injected.
 - `entrypoint.sh` edits: use `overlord fresh && overlord` to force a clean bootstrap pass.
-- `jdtls.sh` or Dockerfile copy-path edits: use `overlord purge && overlord` so the wrapper is rebuilt into the image.
+- Dockerfile image edits: use `overlord purge && overlord` so the image is rebuilt.
 
 ## ANTI-PATTERNS
 

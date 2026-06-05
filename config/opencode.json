@@ -3,28 +3,49 @@
   "plugin": [
     "oh-my-openagent@latest"
   ],
-  "mcp": {
-    "context7": {
-      "type": "remote",
-      "url": "https://mcp.context7.com/mcp",
-      "headers": {
-        "CONTEXT7_API_KEY": "{env:CONTEXT7_API_KEY}"
-      }
-    }
+  "lsp": true,
+  "permission": {
+    "lsp": "allow"
   },
   "provider": {
+    "opencode": {
+      "models": {
+        "minimax-m3-free": {
+          "name": "MiniMax M3 Free",
+          "reasoning": true,
+          "tool_call": true,
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 1000000,
+            "output": 32000
+          }
+        }
+      }
+    },
     "amazon-bedrock": {
       "npm": "@ai-sdk/amazon-bedrock",
       "name": "AWS Bedrock",
       "models": {
-        "global.anthropic.claude-opus-4-6-v1": {
-          "name": "Claude Opus 4.6",
+        "global.anthropic.claude-opus-4-8-v1": {
+          "name": "Claude Opus 4.8",
           "reasoning": true,
           "tool_call": true,
           "attachment": true,
           "modalities": {
-            "input": ["text", "image"],
-            "output": ["text"]
+            "input": [
+              "text",
+              "image"
+            ],
+            "output": [
+              "text"
+            ]
           },
           "limit": {
             "context": 200000,
@@ -46,6 +67,10 @@
       "models": {
         "gemini-3.1-pro-preview-customtools": {
           "name": "Gemini 3.1 Pro Preview Custom Tools"
+        },
+        "gemini-3.5-flash": {
+          "name": "Gemini 3.5 Flash",
+          "tool_call": true
         },
         "gemini-3-flash-preview": {
           "name": "Gemini 3 Flash"
@@ -81,28 +106,6 @@
             "context": 272000,
             "input": 272000,
             "output": 32000
-          }
-        },
-        "gpt-5.4": {
-          "name": "GPT-5.4",
-          "options": {
-            "serviceTier": "priority"
-          },
-          "reasoning": true,
-          "tool_call": true,
-          "attachment": true,
-          "modalities": {
-            "input": [
-              "text",
-              "image"
-            ],
-            "output": [
-              "text"
-            ]
-          },
-          "limit": {
-            "context": 350000,
-            "output": 65536
           }
         },
         "gpt-5.4-pro": {
@@ -165,21 +168,8 @@
         "apiKey": "{env:LMSTUDIO_API_KEY}"
       },
       "models": {
-        "lm-studio": {
-          "name": "LM Studio (Local)"
-        }
-      }
-    },
-    "openrouter": {
-      "npm": "@ai-sdk/openai-compatible",
-      "name": "OpenRouter",
-      "options": {
-        "baseURL": "https://openrouter.ai/api/v1",
-        "apiKey": "{env:OPENROUTER_API_KEY}"
-      },
-      "models": {
-        "minimax/minimax-m2.5:free": {
-          "name": "MiniMax M2.5 (free)"
+        "qwopus3.5-9b-coder-mtp": {
+          "name": "qwopus3.5-9b-coder-mtp"
         }
       }
     }

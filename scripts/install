@@ -55,6 +55,7 @@ WRITES:
 
 Existing files are backed up before they are replaced.
 Bun must already be installed and available in PATH.
+Use --config m3 to install the OpenCode Zen MiniMax M3 routing preset.
 USAGE
 }
 
@@ -266,6 +267,8 @@ write_env_file() {
 		AZURE_RESOURCE_NAME
 		AZURE_API_KEY
 		OPENROUTER_API_KEY
+		EXA_API_KEY
+		TAVILY_API_KEY
 		LMSTUDIO_BASE_URL
 		LMSTUDIO_API_KEY
 		UV_CACHE_DIR

@@ -2,12 +2,24 @@
 # Base: ubuntu:24.04 (amd64 + arm64)
 # No VNC/GUI — pure terminal + dev tools + LSPs
 
+ARG SAFE_CHAIN_VERSION=1.5.3
+
 FROM --platform=$TARGETPLATFORM oven/bun:latest AS bun-stage
+
+ARG SAFE_CHAIN_VERSION
+
+RUN if ! command -v curl >/dev/null 2>&1; then \
+    apt-get update && apt-get install -y curl ca-certificates && rm -rf /var/lib/apt/lists/*; \
+  fi \
+  && curl -fsSL "https://github.com/AikidoSec/safe-chain/releases/download/${SAFE_CHAIN_VERSION}/install-safe-chain.sh" \
+  | sh -s -- --ci --install-dir /usr/local/.safe-chain
+
+ENV PATH="/usr/local/.safe-chain/shims:/usr/local/.safe-chain/bin:$PATH"
 
 FROM ubuntu:24.04
 
 ARG TARGETARCH
-ARG SAFE_CHAIN_VERSION=1.5.3
+ARG SAFE_CHAIN_VERSION
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -56,49 +68,12 @@ RUN apt-get update && apt-get install -y \
   python3-venv \
   && rm -rf /var/lib/apt/lists/*
 
-# PHP CLI + Composer + common extensions for WordPress/PrestaShop plugin development
-RUN apt-get update && apt-get install -y \
-  php-cli \
-  composer \
-  php-curl \
-  php-mbstring \
-  php-xml \
-  php-zip \
-  php-intl \
-  php-gd \
-  php-mysql \
-  php-sqlite3 \
-  php-opcache \
-  && rm -rf /var/lib/apt/lists/*
-
-
-# JDK 24 (architecture-aware)
-RUN ADOPTIUM_ARCH=$([ "$TARGETARCH" = "arm64" ] && echo "aarch64" || echo "x64") \
-  && curl -fsSL "https://api.adoptium.net/v3/binary/latest/24/ga/linux/${ADOPTIUM_ARCH}/jdk/hotspot/normal/eclipse" -o /tmp/jdk.tar.gz \
-  && mkdir -p /opt/jdk-24 && tar xzf /tmp/jdk.tar.gz -C /opt/jdk-24 --strip-components=1 && rm /tmp/jdk.tar.gz \
-  && update-alternatives --install /usr/bin/java java /opt/jdk-24/bin/java 100 \
-  && update-alternatives --install /usr/bin/javac javac /opt/jdk-24/bin/javac 100
-
-# Maven
-RUN apt-get update && apt-get install -y maven && rm -rf /var/lib/apt/lists/*
-
-# Lombok (for Java LSP annotation processing)
-RUN curl -fsSL "https://projectlombok.org/downloads/lombok.jar" -o /opt/lombok.jar
-
-# JDTLS (Eclipse JDT Language Server)
-ARG JDTLS_VERSION=1.56.0
-RUN JDTLS_TIMESTAMP=202601291528 \
-  && curl -fsSL "https://download.eclipse.org/jdtls/milestones/${JDTLS_VERSION}/jdt-language-server-${JDTLS_VERSION}-${JDTLS_TIMESTAMP}.tar.gz" -o /tmp/jdtls.tar.gz \
-  && mkdir -p /opt/jdtls && tar xzf /tmp/jdtls.tar.gz --no-same-owner -C /opt/jdtls && rm /tmp/jdtls.tar.gz
-
 # LSPs via npm
 RUN npm install -g \
   @biomejs/biome \
-  intelephense \
   typescript-language-server \
   typescript \
   vscode-langservers-extracted \
-  @tailwindcss/language-server \
   yaml-language-server \
   dockerfile-language-server-nodejs \
   bash-language-server \
@@ -149,18 +124,13 @@ RUN sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master
   && git clone https://github.com/zsh-users/zsh-autosuggestions ${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/plugins/zsh-autosuggestions \
   && git clone https://github.com/zsh-users/zsh-syntax-highlighting ${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/plugins/zsh-syntax-highlighting \
   && git clone https://github.com/zsh-users/zsh-completions ${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/plugins/zsh-completions \
-  && sed -i 's/plugins=(git)/plugins=(git zsh-autosuggestions zsh-syntax-highlighting zsh-completions docker mvn npm)/' ~/.zshrc
+  && sed -i 's/plugins=(git)/plugins=(git zsh-autosuggestions zsh-syntax-highlighting zsh-completions docker npm)/' ~/.zshrc
 
 ENV BUN_INSTALL=/home/overlord/.bun
-ENV PATH="/usr/local/.safe-chain/shims:/usr/local/.safe-chain/bin:/home/overlord/.bun/bin:/home/overlord/.local/bin:/opt/jdk-24/bin:$PATH"
-ENV JAVA_HOME=/opt/jdk-24
-ENV JDTLS_HOME=/opt/jdtls
+ENV PATH="/usr/local/.safe-chain/shims:/usr/local/.safe-chain/bin:/home/overlord/.bun/bin:/home/overlord/.local/bin:$PATH"
 ENV UV_LINK_MODE=copy
 ENV UV_CACHE_DIR=/home/overlord/.cache/uv
 ENV LANG=en_US.UTF-8
-
-RUN echo 'export JAVA_HOME=/opt/jdk-24' >> /home/overlord/.zshrc \
-  && echo 'export PATH="/usr/local/.safe-chain/shims:/usr/local/.safe-chain/bin:/opt/jdk-24/bin:$PATH"' >> /home/overlord/.zshrc
 
 # Install opencode-ai
 RUN install_log="$(mktemp)" \
@@ -188,10 +158,6 @@ RUN git config --global --add safe.directory /workspace
 WORKDIR /workspace
 
 USER root
-
-# JDTLS wrapper script (with Lombok agent)
-COPY config/jdtls.sh /usr/local/bin/jdtls
-RUN chmod 755 /usr/local/bin/jdtls
 
 # Entrypoint
 COPY config/entrypoint.sh /usr/local/bin/entrypoint.sh

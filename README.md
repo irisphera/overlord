@@ -68,8 +68,6 @@ overlord --config gemini
 overlord --config opus
 overlord --config deepseek
 overlord --config lms
-overlord --config m3
-export OPENROUTER_API_KEY="..." && overlord --config openrouter-minimax-m2.5-free
 overlord --lms-model qwen3-8b web
 ```
 
@@ -81,12 +79,10 @@ Available routing presets include:
 - `opus` (`oh-my-openagent.opus.jsonc`)
 - `deepseek` (`oh-my-openagent.deepseek.jsonc`)
 - `lms` (`oh-my-openagent.lms.jsonc`)
-- `m3` (`oh-my-openagent.m3.jsonc`)
-- `openrouter-minimax-m2.5-free` (`oh-my-openagent.openrouter-minimax-m2.5-free.jsonc`)
 
 `--config <preset>` cannot be combined with `--lms-model`. LM Studio remains a separate dynamic escape hatch because the local model name is supplied at runtime.
 
-The checked-in `pro` routing preset upgrades high-reasoning and review/planning routes to Azure's `gpt-5.4-pro` while using the shared provider catalog from `config/opencode.json`. The `deepseek` preset keeps high-thinking routes on Azure `gpt-5.5`, sends medium-thinking routes to Azure `deepseek-v4-pro`, and sends low-thinking routes to Azure `deepseek-v4-flash`. The `lms` preset uses the LM Studio model `Qwopus3.6-27B-v2-MTP-GGUF`. The `m3` preset routes every agent and category only to OpenCode Zen's `opencode/minimax-m3-free`; it does not reference AWS, Azure, or Google models. The OpenRouter preset selects `minimax/minimax-m2.5:free` and requires `OPENROUTER_API_KEY` in your shell before launch.
+The checked-in `pro` routing preset upgrades high-reasoning and review/planning routes to Azure's `gpt-5.4-pro` while using the shared provider catalog from `config/opencode.json`. The `deepseek` preset keeps high-thinking routes on Azure `gpt-5.5`, sends medium-thinking routes to Azure `deepseek-v4-pro`, and sends low-thinking routes to Azure `deepseek-v4-flash`. The `lms` preset uses the LM Studio model `Qwopus3.6-27B-v2-MTP-GGUF`.
 
 ```bash
 export AZURE_API_KEY="..."
@@ -111,7 +107,7 @@ Anything you install inside the container (apt packages, pip packages, etc.) per
 
 ### Repo-Specific Dependencies
 
-The Overlord image intentionally contains only common development utilities and language servers. Project-specific stacks such as PHP/Composer, Java/Maven/JDTLS, Terraform, Ansible, AWS tools, Tailwind's language server, or heavy Python packages should live in the mounted repository, not in the shared image.
+The Overlord image intentionally contains only common development utilities. Project-specific stacks and language servers such as PHP/Composer, Java/Maven/JDTLS, Terraform, Ansible, AWS tools, Tailwind's language server, Pyright, clangd, or heavy Python packages should live in the mounted repository, not in the shared image.
 
 If a repository needs extra packages on fresh container setup, add an executable `setup-devcontainer.sh` at that repository root. When `overlord` creates or restarts the workspace container, it automatically runs `/workspace/setup-devcontainer.sh` as root inside the container, then repairs `/home/overlord` ownership. Review repo-controlled setup scripts before launching untrusted workspaces. Re-attaching to an already-running container skips setup; use `overlord fresh` to rerun it.
 
@@ -139,12 +135,14 @@ If a repository needs extra packages on fresh container setup, add an executable
 
 Comes with [oh-my-openagent](https://github.com/code-yeongyu/oh-my-openagent) pre-installed. Type `ultrawork` (or `ulw`) in your prompt to activate parallel agents, deep exploration, and relentless execution.
 
+Overlord containers also install Matt Pocock's global OpenCode skills from `mattpocock/skills` by default. Run `/setup-matt-pocock-skills` yourself inside an agent when you want that skill to create repo-specific project configuration.
+
 | Feature | Description |
 |---|---|
 | **Sisyphus Agent** | Main orchestrator that delegates, verifies, and ships |
 | **Multi-Agent Orchestra** | Oracle (debugging), Librarian (docs), Explore (grep) |
 | **Background Agents** | Parallel search, docs fetching, exploration |
-| **LSP + AST Tools** | goto-definition, find-references, rename, AST search |
+| **AST + Search Tools** | AST search, code navigation MCPs, and repo-aware search |
 | **Curated MCPs** | Exa (web search), Context7 (docs), Grep.app (GitHub) |
 
 ## Model Configuration
@@ -164,9 +162,7 @@ If you launch with `--config pro`, the launcher selects `config/oh-my-openagent.
 | **Azure OpenAI** | GPT 5.5, GPT 5.4, GPT 5.4 Pro, DeepSeek V4 Pro, DeepSeek V4 Flash |
 | **AWS Bedrock** | Claude Opus 4.8, Claude Haiku 4.5 |
 | **Google Vertex AI** | Gemini 3.1 Pro, Gemini 3 Flash, Gemini 3.5 Flash |
-| **OpenCode Zen** | MiniMax M3 Free |
 | **LM Studio** | Qwopus3.6-27B-v2-MTP-GGUF, local models via OpenAI-compatible API |
-| **OpenRouter** | MiniMax M2.5 (free) |
 
 ### Credentials
 
@@ -185,7 +181,6 @@ The launcher forwards provider env vars listed in the `PROVIDER_ENV_VARS` array 
 - `AWS_REGION`, `AWS_BEARER_TOKEN_BEDROCK`
 - `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`
 - `AZURE_RESOURCE_NAME`, `AZURE_API_KEY`
-- `OPENROUTER_API_KEY`
 - `EXA_API_KEY`, `TAVILY_API_KEY`
 - `LMSTUDIO_BASE_URL`, `LMSTUDIO_API_KEY`
 - `DOCKER_HOST`, `DOCKER_TLS_VERIFY`, `DOCKER_CERT_PATH`
@@ -195,8 +190,6 @@ The launcher forwards provider env vars listed in the `PROVIDER_ENV_VARS` array 
 `CONTEXT7_API_KEY` is always forwarded for Context7. `EXA_API_KEY` and `TAVILY_API_KEY` are forwarded when present for the websearch MCP.
 
 Google Cloud ADC credentials are automatically injected if found at `~/.config/gcloud/application_default_credentials.json` or `$GOOGLE_APPLICATION_CREDENTIALS`.
-
-The `m3` preset uses OpenCode Zen authentication. Connect to OpenCode Zen with `/connect` and select `OpenCode Zen`; do not export AWS, Azure, or Google credentials for that preset if you want the runtime environment to contain only Zen-related model credentials.
 
 ## Troubleshooting
 
@@ -225,12 +218,11 @@ MIT
 
 The image ships with the common tooling needed to run OpenCode and work across typical repositories:
 
-- **TypeScript/Bun**: Node.js 22, Bun, TypeScript LSP stack, Biome CLI
+- **Node/Bun**: Node.js 22 and Bun for OpenCode package/runtime support
 - **Python**: Python 3 plus `uv` (with `UV_LINK_MODE=copy` and cache support)
-- **General LSPs**: YAML, Dockerfile, Bash, Python, HTML/CSS/JSON, and C/C++ basics
 - **Containers**: Docker CLI + Compose plugin with Testcontainers-oriented env forwarding
 
-Repository-specific stacks are intentionally not baked into the shared image. If a workspace needs PHP, Java, Terraform, Ansible, AWS CLI, Tailwind, or similar project-specific tools, add a repo-local `setup-devcontainer.sh`. On a new or restarted container, `overlord` runs `/workspace/setup-devcontainer.sh` automatically with a sanitized root environment and then repairs `/home/overlord` ownership. Re-run setup with `overlord fresh`; `overlord purge` is only needed after shared image changes.
+Repository-specific stacks and language servers are intentionally not baked into the shared image. If a workspace needs PHP, Java, Terraform, Ansible, AWS CLI, Tailwind, Pyright, clangd, or similar project-specific tools, add a repo-local `setup-devcontainer.sh`. On a new or restarted container, `overlord` runs `/workspace/setup-devcontainer.sh` automatically with a sanitized root environment and then repairs `/home/overlord` ownership. Re-run setup with `overlord fresh`; `overlord purge` is only needed after shared image changes.
 
 For Testcontainers in this Docker-socket setup, defaults are preconfigured:
 

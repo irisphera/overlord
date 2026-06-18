@@ -9,10 +9,21 @@ DEFAULT_OH_MY_CONFIG_NAME="oh-my-openagent.jsonc"
 OPENCODE_CONFIG_SCHEMA='"$schema":"https://opencode.ai/config.json"'
 OH_MY_CONFIG_SCHEMA="\"\$schema\": \"https://raw.githubusercontent.com/code-yeongyu/oh-my-openagent/dev/assets/oh-my-opencode.schema.json\""
 OPENCODE_REQUIRED_VERSION="latest"
-OH_MY_OPENAGENT_REQUIRED_VERSION="latest"
+OH_MY_OPENAGENT_REQUIRED_VERSION="4.11.1"
 OH_MY_OPENAGENT_PACKAGE="oh-my-openagent@${OH_MY_OPENAGENT_REQUIRED_VERSION}"
 OH_MY_OPENAGENT_CACHE_DIR="/home/overlord/.cache/opencode/packages/${OH_MY_OPENAGENT_PACKAGE}"
 OH_MY_OPENAGENT_BIN="/home/overlord/.local/bin/oh-my-openagent"
+CODEGRAPH_REQUIRED_VERSION="1.0.1"
+CODEGRAPH_PACKAGE="@colbymchenry/codegraph@${CODEGRAPH_REQUIRED_VERSION}"
+CODEGRAPH_INSTALL_DIR="/home/overlord/.omo/codegraph"
+CODEGRAPH_BIN="/home/overlord/.local/bin/codegraph"
+CODEGRAPH_NODE_BIN="/usr/bin/node"
+DEFAULT_SKILLS_SOURCE="mattpocock/skills#v1.0.1"
+DEFAULT_SKILLS_NPX_PACKAGE="skills@1.5.11"
+DEFAULT_SKILLS_MARKERS=(
+	"/home/overlord/.agents/skills/setup-matt-pocock-skills/SKILL.md"
+	"/home/overlord/.agents/skills/tdd/SKILL.md"
+)
 OPENCODE_WEB_HOSTNAME="0.0.0.0"
 OPENCODE_WEB_PORT="4090"
 OPENCODE_WEB_PID_FILE="/home/overlord/.local/share/opencode/overlord-serve.pid"
@@ -86,7 +97,6 @@ EXAMPLES:
 	    overlord --config pro                   # Use config/oh-my-openagent.pro.jsonc
 	    overlord --config gemini                # Use config/oh-my-openagent.gemini.jsonc
 	    overlord --config opus                  # Use config/oh-my-openagent.opus.jsonc
-	    overlord --config m3                    # Use OpenCode Zen MiniMax M3 routing
 	    overlord --lms-model qwen3-8b web       # Use LM Studio with an explicit runtime model
 	    overlord --lms-model qwen3-8b zellij    # Same runtime model, with zellij
     overlord shell                   # Open a shell
@@ -247,21 +257,59 @@ verify_oh_my_openagent_loaded() {
 		if "${ENGINE}" exec -i "${CONTAINER_NAME}" sh -s -- \
 			"${OPENCODE_WEB_LOG_FILE}" \
 			"${OPENCODE_STRUCTURED_LOG_DIR}" \
-			"${OPENCODE_WEB_PORT}" <<'EOF'
+			"${OPENCODE_WEB_PORT}" \
+			"${OH_MY_OPENAGENT_PACKAGE}" <<'EOF'
 log_file="$1"
 log_dir="$2"
 port="$3"
-success_line="service=plugin path=oh-my-openagent@latest loading plugin"
+package_spec="$4"
+plugin_path_pattern="service=plugin path=${package_spec} loading plugin"
+plugin_any_pattern='service=plugin path=oh-my-openagent(@[^[:space:]]*)? loading plugin'
 failure_pattern='service=plugin .*oh-my-openagent.*(failed|incompatible|no server entrypoint)'
-lsp_enabled_pattern='service=lsp .* enabled LSP servers'
-lsp_disabled_pattern='service=lsp all LSPs are disabled'
+lsp_enabled_pattern='(service=lsp .* enabled LSP servers|message="?enabled LSP servers"?)'
+mcp_lsp_ready_pattern='service=mcp key=lsp .*create\(\) successfully created client'
+mcp_ast_grep_ready_pattern='service=mcp key=ast_grep .*create\(\) successfully created client'
+mcp_codegraph_ready_pattern='service=mcp key=codegraph .*create\(\) successfully created client'
+
+fetch_mcp_status() {
+	status_file="$1"
+	if [ -n "${OPENCODE_SERVER_PASSWORD:-}" ]; then
+		curl --silent --fail --max-time 5 \
+			-u "opencode:${OPENCODE_SERVER_PASSWORD}" \
+			-H "x-opencode-directory: /workspace" \
+			"http://127.0.0.1:${port}/mcp" >"${status_file}" 2>/dev/null || return 1
+	else
+		curl --silent --fail --max-time 5 \
+			-H "x-opencode-directory: /workspace" \
+			"http://127.0.0.1:${port}/mcp" >"${status_file}" 2>/dev/null || return 1
+	fi
+}
+
+has_connected_mcp_tool() {
+	status_file="$1"
+	tool_name="$2"
+	grep -E "\"${tool_name}\"[[:space:]]*:[[:space:]]*\{[^}]*\"status\"[[:space:]]*:[[:space:]]*\"connected\"" "${status_file}" >/dev/null 2>&1
+}
 
 has_log_pattern() {
 	pattern="$1"
-	if [ -d "${log_dir}" ] && grep -R -E "${pattern}" "${log_dir}" >/dev/null 2>&1; then
+	latest_log=""
+	if [ -f "${log_file}" ] && grep -E "${pattern}" "${log_file}" >/dev/null 2>&1; then
 		return 0
 	fi
-	if [ -f "${log_file}" ] && grep -E "${pattern}" "${log_file}" >/dev/null 2>&1; then
+	if [ -f "${log_dir}/opencode.log" ] && grep -E "${pattern}" "${log_dir}/opencode.log" >/dev/null 2>&1; then
+		return 0
+	fi
+	if [ -d "${log_dir}" ]; then
+		for candidate in "${log_dir}"/*.log; do
+			[ -f "${candidate}" ] || continue
+			[ "${candidate}" = "${log_dir}/opencode.log" ] && continue
+			if [ -z "${latest_log}" ] || [ "${candidate}" -nt "${latest_log}" ]; then
+				latest_log="${candidate}"
+			fi
+		done
+	fi
+	if [ -n "${latest_log}" ] && grep -E "${pattern}" "${latest_log}" >/dev/null 2>&1; then
 		return 0
 	fi
 	return 1
@@ -278,16 +326,29 @@ else
 		"http://127.0.0.1:${port}/path?directory=/workspace" >/dev/null 2>&1 || true
 fi
 
+mcp_status_file="$(mktemp)"
+trap 'rm -f "${mcp_status_file}"' EXIT
+
+if fetch_mcp_status "${mcp_status_file}"; then
+	if has_connected_mcp_tool "${mcp_status_file}" lsp && \
+		has_connected_mcp_tool "${mcp_status_file}" codegraph; then
+		exit 0
+	fi
+	exit 1
+fi
+
 if has_log_pattern "${failure_pattern}"; then
 	exit 2
 fi
 
-if has_log_pattern "$(printf '%s' "${success_line}" | sed 's/[][(){}.^$*+?|\\]/\\&/g')"; then
-	if has_log_pattern "${lsp_enabled_pattern}"; then
+if has_log_pattern "$(printf '%s' "${plugin_path_pattern}" | sed 's/[][(){}.^$*+?|\\]/\\&/g')" || has_log_pattern "${plugin_any_pattern}"; then
+	if has_log_pattern "${mcp_lsp_ready_pattern}" && \
+		has_log_pattern "${mcp_codegraph_ready_pattern}"; then
 		exit 0
 	fi
-	if has_log_pattern "${lsp_disabled_pattern}"; then
-		exit 3
+	if has_log_pattern "${lsp_enabled_pattern}" && \
+		has_log_pattern "${mcp_codegraph_ready_pattern}"; then
+		exit 0
 	fi
 fi
 exit 1
@@ -296,21 +357,21 @@ EOF
 			return 0
 		fi
 		status=$?
-		if [[ "${status}" -eq 2 || "${status}" -eq 3 ]]; then
+		if [[ "${status}" -eq 2 ]]; then
 			break
 		fi
 		sleep 1
 	done
 
-	echo "Error: OpenCode web started, but oh-my-openagent did not load with native LSP enabled." >&2
-	echo "Expected plugin load plus 'enabled LSP servers' in ${OPENCODE_STRUCTURED_LOG_DIR}/*.log or ${OPENCODE_WEB_LOG_FILE}." >&2
+	echo "Error: OpenCode web started, but oh-my-openagent did not finish loading its LSP and code navigation MCP tools." >&2
+	echo "Expected /mcp to report lsp plus codegraph as connected, or plugin load plus native LSP enablement and codegraph MCP creation in ${OPENCODE_STRUCTURED_LOG_DIR}/*.log or ${OPENCODE_WEB_LOG_FILE}." >&2
 	echo "Relevant OpenCode log lines:" >&2
 	"${ENGINE}" exec -i "${CONTAINER_NAME}" sh -s -- \
 		"${OPENCODE_WEB_LOG_FILE}" \
 		"${OPENCODE_STRUCTURED_LOG_DIR}" <<'EOF' >&2 || true
 log_file="$1"
 log_dir="$2"
-pattern='oh-my-openagent|oh-my-opencode|service=plugin|service=mcp|service=lsp|key=(websearch|context7|grep_app|lsp|ast_grep)|plugin|failed|error|cannot find|not found|config path=|path='
+pattern='oh-my-openagent|oh-my-opencode|service=plugin|service=mcp|service=lsp|key=(websearch|context7|grep_app|lsp|ast_grep|codegraph)|plugin|failed|error|cannot find|not found|config path=|path='
 if [ -d "${log_dir}" ]; then
 	grep -R -Ei "${pattern}" "${log_dir}" 2>/dev/null | tail -120 || true
 fi
@@ -480,11 +541,12 @@ if [ -s "${PID_FILE}" ]; then
   if [ -n "${PID}" ] && kill -0 "${PID}" 2>/dev/null && [ -r "/proc/${PID}/cmdline" ]; then
     CMDLINE=$(tr '\000' ' ' < "/proc/${PID}/cmdline")
     case "${CMDLINE}" in
+	  *"opencode serve --hostname ${HOST} --port ${PORT}"*|\
 	  *"opencode web --hostname ${HOST} --port ${PORT}"*)
         exit 0
         ;;
       *"opencode web --pure --hostname ${HOST} --port ${PORT}"*|\
-      *"opencode serve --hostname ${HOST} --port ${PORT}"*)
+      *"opencode serve --pure --hostname ${HOST} --port ${PORT}"*)
         kill "${PID}" 2>/dev/null || true
         for _ in 1 2 3 4 5; do
           if ! kill -0 "${PID}" 2>/dev/null; then
@@ -498,8 +560,9 @@ if [ -s "${PID_FILE}" ]; then
   rm -f "${PID_FILE}"
 fi
 
-	mkdir -p "$(dirname "${PID_FILE}")"
-nohup opencode web --hostname "${HOST}" --port "${PORT}" >"${LOG_FILE}" 2>&1 &
+mkdir -p "$(dirname "${PID_FILE}")"
+: >"${LOG_FILE}"
+nohup opencode serve --hostname "${HOST}" --port "${PORT}" >"${LOG_FILE}" 2>&1 &
 echo $! >"${PID_FILE}"
 EOF
 
@@ -648,7 +711,7 @@ if [ ! -f package.json ]; then
 	"${bun_bin}" init -y >/dev/null 2>&1
 fi
 
-if ! "${bun_bin}" add "${package_spec}" >"${install_log}" 2>&1; then
+if ! "${bun_bin}" add "${package_spec}" --safe-chain-skip-minimum-package-age >"${install_log}" 2>&1; then
 	cat "${install_log}" >&2
 	exit 1
 fi
@@ -670,15 +733,117 @@ EOF
 	OPENCODE_WEB_RESTART_REQUIRED=1
 }
 
+ensure_codegraph_runtime_package() {
+	local installed_version
+
+	if "${ENGINE}" exec -i -u "${EXEC_USER}" "${CONTAINER_NAME}" env -i "${PACKAGE_ENV[@]}" sh -s -- \
+		"${CODEGRAPH_REQUIRED_VERSION}" \
+		"${CODEGRAPH_BIN}" <<'EOF'
+set -e
+
+required_version="$1"
+public_bin="$2"
+if [ ! -x "${public_bin}" ]; then
+	exit 1
+fi
+installed_version="$(node -p "require('/home/overlord/.bun/install/global/node_modules/@colbymchenry/codegraph/package.json').version" 2>/dev/null || true)"
+test "${installed_version}" = "${required_version}"
+EOF
+	then
+		return 0
+	fi
+
+	echo "Ensuring CodeGraph CLI package ${CODEGRAPH_PACKAGE} in ${CONTAINER_NAME}..."
+	"${ENGINE}" exec -i -u "${EXEC_USER}" "${CONTAINER_NAME}" env -i "${PACKAGE_ENV[@]}" sh -s -- \
+		"${CODEGRAPH_PACKAGE}" \
+		"${CODEGRAPH_BIN}" <<'EOF'
+set -e
+
+package_spec="$1"
+public_bin="$2"
+bun_bin="/usr/local/bin/bun"
+install_log="$(mktemp)"
+
+if [ ! -x "${bun_bin}" ]; then
+	bun_bin="bun"
+fi
+
+cleanup() {
+	rm -f "${install_log}"
+}
+
+trap cleanup EXIT
+
+mkdir -p "$(dirname "${public_bin}")"
+if ! "${bun_bin}" add -g "${package_spec}" >"${install_log}" 2>&1; then
+	cat "${install_log}" >&2
+	exit 1
+fi
+
+if [ ! -x /home/overlord/.bun/bin/codegraph ]; then
+	echo "Error: ${package_spec} installed without an executable codegraph entrypoint" >&2
+	exit 1
+fi
+
+ln -sf /home/overlord/.bun/bin/codegraph "${public_bin}"
+test -x "${public_bin}"
+EOF
+	installed_version=$("${ENGINE}" exec -u "${EXEC_USER}" "${CONTAINER_NAME}" env -i "${PACKAGE_ENV[@]}" node -p \
+		"require('/home/overlord/.bun/install/global/node_modules/@colbymchenry/codegraph/package.json').version" 2>/dev/null || true)
+	printf 'CodeGraph CLI version: %s\n' "${installed_version:-unknown}"
+	OPENCODE_WEB_RESTART_REQUIRED=1
+}
+
+ensure_default_opencode_skills() {
+	if "${ENGINE}" exec -i -u "${EXEC_USER}" "${CONTAINER_NAME}" env -i "${PACKAGE_ENV[@]}" sh -s -- \
+		"${DEFAULT_SKILLS_MARKERS[@]}" <<'EOF'
+set -e
+
+for marker in "$@"; do
+	test -f "${marker}" || exit 1
+done
+EOF
+	then
+		return 0
+	fi
+
+	echo "Ensuring default OpenCode skills from ${DEFAULT_SKILLS_SOURCE} in ${CONTAINER_NAME}..."
+	"${ENGINE}" exec -i -u "${EXEC_USER}" "${CONTAINER_NAME}" env -i "${PACKAGE_ENV[@]}" sh -s -- \
+		"${DEFAULT_SKILLS_NPX_PACKAGE}" \
+		"${DEFAULT_SKILLS_SOURCE}" <<'EOF'
+set -e
+
+npx_package="$1"
+source="$2"
+install_log="$(mktemp)"
+
+cleanup() {
+	rm -f "${install_log}"
+}
+
+trap cleanup EXIT
+
+if ! DISABLE_TELEMETRY=1 npx --yes "${npx_package}" add "${source}" --skill '*' --agent opencode --global --yes --copy >"${install_log}" 2>&1; then
+	cat "${install_log}" >&2
+	exit 1
+fi
+
+test -f /home/overlord/.agents/skills/setup-matt-pocock-skills/SKILL.md
+test -f /home/overlord/.agents/skills/tdd/SKILL.md
+EOF
+}
+
 ensure_oh_my_openagent_runtime_config() {
 	local repaired=0
 
 	if ! "${ENGINE}" exec -i "${CONTAINER_NAME}" sh -s -- \
-		"${RUNTIME_OPENCODE_CONFIG_FILE}" <<'EOF'
+		"${RUNTIME_OPENCODE_CONFIG_FILE}" \
+		"${OH_MY_OPENAGENT_PACKAGE}" <<'EOF'
 set -e
 
 config_file="$1"
-test -f "${config_file}" && grep -Fq 'oh-my-openagent' "${config_file}"
+package_spec="$2"
+test -f "${config_file}" && grep -Fq "${package_spec}" "${config_file}"
 EOF
 	then
 		echo "Ensuring OpenCode plugin config includes ${OH_MY_OPENAGENT_PACKAGE} in ${CONTAINER_NAME}..."
@@ -692,10 +857,10 @@ EOF
 			else
 				"${ENGINE}" exec -i "${CONTAINER_NAME}" sh -c 'cat > '"${RUNTIME_OPENCODE_CONFIG_FILE}" <"${CONFIG_FILE}"
 			fi
-		else
-			"${ENGINE}" exec -i "${CONTAINER_NAME}" sh -s -- \
-				"${RUNTIME_OPENCODE_CONFIG_FILE}" \
-				"${OH_MY_OPENAGENT_PACKAGE}" <<'EOF'
+		fi
+		"${ENGINE}" exec -i "${CONTAINER_NAME}" sh -s -- \
+			"${RUNTIME_OPENCODE_CONFIG_FILE}" \
+			"${OH_MY_OPENAGENT_PACKAGE}" <<'EOF'
 set -e
 
 config_file="$1"
@@ -709,11 +874,10 @@ cleanup() {
 trap cleanup EXIT
 
 jq --arg plugin "${package_spec}" '
-  .plugin = ((.plugin // []) | if index($plugin) then . else . + [$plugin] end)
+  .plugin = (((.plugin // []) | map(select((type != "string") or (startswith("oh-my-openagent") | not)))) + [$plugin])
 ' "${config_file}" >"${tmp_file}"
 cat "${tmp_file}" >"${config_file}"
 EOF
-		fi
 		repaired=1
 	fi
 
@@ -778,9 +942,15 @@ request_opencode_web_restart_if_plugin_missing() {
 
 	if "${ENGINE}" exec -i "${CONTAINER_NAME}" sh -s -- \
 		"${OPENCODE_WEB_PID_FILE}" \
-		"${CONTAINER_HOME}" <<'EOF'
+		"${CONTAINER_HOME}" \
+		"${CODEGRAPH_INSTALL_DIR}" \
+		"${CODEGRAPH_BIN}" \
+		"${CODEGRAPH_NODE_BIN}" <<'EOF'
 pid_file="$1"
 container_home="$2"
+codegraph_install_dir="$3"
+codegraph_bin="$4"
+codegraph_node_bin="$5"
 if [ ! -s "${pid_file}" ]; then
 	exit 0
 fi
@@ -795,13 +965,16 @@ tr '\000' '\n' < "/proc/${pid}/environ" | grep -qx "HOME=${container_home}" && \
 	tr '\000' '\n' < "/proc/${pid}/environ" | grep -qx "XDG_CONFIG_HOME=${container_home}/.config" && \
 	tr '\000' '\n' < "/proc/${pid}/environ" | grep -qx "XDG_CACHE_HOME=${container_home}/.cache" && \
 	tr '\000' '\n' < "/proc/${pid}/environ" | grep -qx "XDG_DATA_HOME=${container_home}/.local/share" && \
-	tr '\000' '\n' < "/proc/${pid}/environ" | grep -qx "XDG_STATE_HOME=${container_home}/.local/state"
+	tr '\000' '\n' < "/proc/${pid}/environ" | grep -qx "XDG_STATE_HOME=${container_home}/.local/state" && \
+	tr '\000' '\n' < "/proc/${pid}/environ" | grep -qx "CODEGRAPH_INSTALL_DIR=${codegraph_install_dir}" && \
+	tr '\000' '\n' < "/proc/${pid}/environ" | grep -qx "OMO_CODEGRAPH_BIN=${codegraph_bin}" && \
+	tr '\000' '\n' < "/proc/${pid}/environ" | grep -qx "CODEGRAPH_NODE_BIN=${codegraph_node_bin}"
 EOF
 	then
 		return 0
 	fi
 
-	echo "Restarting existing OpenCode web server because its HOME/XDG environment is not canonical in ${CONTAINER_NAME}..."
+	echo "Restarting existing OpenCode web server because its HOME/XDG/CodeGraph environment is not canonical in ${CONTAINER_NAME}..."
 	OPENCODE_WEB_RESTART_REQUIRED=1
 }
 
@@ -1067,6 +1240,9 @@ EXEC_ENV+=(-e "XDG_DATA_HOME=${CONTAINER_HOME}/.local/share")
 EXEC_ENV+=(-e "XDG_STATE_HOME=${CONTAINER_HOME}/.local/state")
 EXEC_ENV+=(-e "TERM=${TERM:-xterm-256color}")
 EXEC_ENV+=(-e "OVERLORD_WORKSPACE=${ZELLIJ_SESSION}")
+EXEC_ENV+=(-e "CODEGRAPH_INSTALL_DIR=${CODEGRAPH_INSTALL_DIR}")
+EXEC_ENV+=(-e "OMO_CODEGRAPH_BIN=${CODEGRAPH_BIN}")
+EXEC_ENV+=(-e "CODEGRAPH_NODE_BIN=${CODEGRAPH_NODE_BIN}")
 PACKAGE_ENV=(
 	"HOME=${CONTAINER_HOME}"
 	"USER=overlord"
@@ -1079,6 +1255,9 @@ PACKAGE_ENV=(
 	"UV_CACHE_DIR=${CONTAINER_HOME}/.cache/uv"
 	"npm_config_cache=${CONTAINER_HOME}/.npm"
 	"PATH=/usr/local/.safe-chain/shims:/usr/local/.safe-chain/bin:${CONTAINER_HOME}/.bun/bin:${CONTAINER_HOME}/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+	"CODEGRAPH_INSTALL_DIR=${CODEGRAPH_INSTALL_DIR}"
+	"OMO_CODEGRAPH_BIN=${CODEGRAPH_BIN}"
+	"CODEGRAPH_NODE_BIN=${CODEGRAPH_NODE_BIN}"
 )
 pass_env COLORTERM
 pass_env TERM_PROGRAM
@@ -1122,7 +1301,6 @@ PROVIDER_ENV_VARS=(
 	GOOGLE_CLOUD_LOCATION
 	AZURE_RESOURCE_NAME
 	AZURE_API_KEY
-	OPENROUTER_API_KEY
 	EXA_API_KEY
 	TAVILY_API_KEY
 	LMSTUDIO_BASE_URL
@@ -1307,6 +1485,9 @@ if [[ "${STATE}" != "running" ]]; then
 		if [[ -n "${GCLOUD_ADC_HOST}" ]]; then
 			printf 'export GOOGLE_APPLICATION_CREDENTIALS=%s\n' "${RUNTIME_GCLOUD_ADC_FILE}"
 		fi
+		printf 'export CODEGRAPH_INSTALL_DIR=%q\n' "${CODEGRAPH_INSTALL_DIR}"
+		printf 'export OMO_CODEGRAPH_BIN=%q\n' "${CODEGRAPH_BIN}"
+		printf 'export CODEGRAPH_NODE_BIN=%q\n' "${CODEGRAPH_NODE_BIN}"
 		# Terminal title: always show workspace name instead of "podman" or "opencode"
 		printf 'export OVERLORD_WORKSPACE=%q\n' "${ZELLIJ_SESSION}"
 		cat <<'TITLE_HOOKS'
@@ -1371,6 +1552,8 @@ fi # end setup (STATE != running)
 
 ensure_oh_my_openagent_runtime_config
 ensure_oh_my_openagent_runtime_package
+ensure_codegraph_runtime_package
+ensure_default_opencode_skills
 request_opencode_web_restart_if_plugin_missing
 restart_opencode_web_if_needed
 

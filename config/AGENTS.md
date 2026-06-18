@@ -23,8 +23,6 @@
 | `oh-my-openagent.opus.jsonc` | Bedrock Opus routing preset | Selectable via `overlord --config opus` |
 | `oh-my-openagent.deepseek.jsonc` | DeepSeek V4 medium/low routing preset with GPT 5.5 high-thinking routes | Selectable via `overlord --config deepseek` |
 | `oh-my-openagent.lms.jsonc` | LM Studio routing preset for `Qwopus3.6-27B-v2-MTP-GGUF` | Selectable via `overlord --config lms` |
-| `oh-my-openagent.m3.jsonc` | OpenCode Zen MiniMax M3 routing preset | Selectable via `overlord --config m3`; routes only to `opencode/minimax-m3-free` |
-| `oh-my-openagent.openrouter-minimax-m2.5-free.jsonc` | OpenRouter MiniMax routing preset | Selectable via `overlord --config openrouter-minimax-m2.5-free` |
 | `oh-my-openagent.pro.jsonc` | GPT 5.4 Pro high-reasoning routing preset | Selectable via `overlord --config pro` |
 | `entrypoint.sh` | Container bootstrap entrypoint | Root startup, permission repair, privilege drop |
 | `jdtls.sh` | Java LSP wrapper reference | Not installed by the shared image; Java repos own JDTLS setup |

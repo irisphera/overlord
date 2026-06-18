@@ -4,6 +4,14 @@
     "planner_enabled": true,
     "replace_plan": true
   },
+  "team_mode": {
+    "enabled": true
+  },
+  "codegraph": {
+    "enabled": true,
+    "auto_provision": true,
+    "telemetry": false
+  },
   "categories": {
     // HIGH reasoning — deep logical work, complex problem-solving
     "ultrabrain": {

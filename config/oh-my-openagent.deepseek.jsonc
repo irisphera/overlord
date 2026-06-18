@@ -4,6 +4,14 @@
     "planner_enabled": true,
     "replace_plan": true
   },
+  "team_mode": {
+    "enabled": true
+  },
+  "codegraph": {
+    "enabled": true,
+    "auto_provision": true,
+    "telemetry": false
+  },
   "categories": {
     // HIGH reasoning — deep logical work, complex problem-solving
     "ultrabrain": {
@@ -66,38 +74,38 @@
     // MEDIUM reasoning — validation, building, general work
     "sisyphus-junior": {
       "model": "azure/deepseek-v4-pro",
-      "reasoningEffort": "medium"
+      "reasoningEffort": "high"
     },
     "OpenCode-Builder": {
       "model": "azure/deepseek-v4-pro",
-      "reasoningEffort": "medium"
+      "reasoningEffort": "high"
     },
     "build": {
       "model": "azure/deepseek-v4-pro",
-      "reasoningEffort": "medium"
+      "reasoningEffort": "high"
     },
     "metis": {
-      "model": "azure/deepseek-v4-pro",
-      "reasoningEffort": "medium"
+      "model": "azure/gpt-5.5",
+      "reasoningEffort": "high"
     },
     "momus": {
-      "model": "azure/deepseek-v4-pro",
-      "reasoningEffort": "medium"
+      "model": "azure/gpt-5.5",
+      "reasoningEffort": "high"
     },
     "multimodal-looker": {
-      "model": "azure/deepseek-v4-pro",
-      "reasoningEffort": "medium"
+      "model": "azure/gpt-5.5",
+      "reasoningEffort": "high"
     },
     // LOW reasoning — search, lookup, exploration (speed over depth)
     "explore": {
       "model": "azure/deepseek-v4-flash",
-      "reasoningEffort": "low",
+      "reasoningEffort": "high",
       "category": "unspecified-low"
     },
     "librarian": {
-      "model": "azure/deepseek-v4-flash",
-      "reasoningEffort": "low",
-      "category": "unspecified-low"
+      "model": "azure/gpt-5.5",
+      "reasoningEffort": "high",
+      "category": "unspecified-high"
     }
   }
 }

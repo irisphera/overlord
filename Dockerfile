@@ -1,6 +1,6 @@
 # Overlord - Lightweight multi-arch environment for OpenCode + Oh-My-OpenCode
 # Base: ubuntu:24.04 (amd64 + arm64)
-# No VNC/GUI — pure terminal + dev tools + LSPs
+# No VNC/GUI — pure terminal + dev tools
 
 ARG SAFE_CHAIN_VERSION=1.5.3
 
@@ -39,6 +39,7 @@ RUN apt-get update && apt-get install -y \
   unzip \
   ripgrep \
   locales \
+  xdg-utils \
   neovim \
   && rm -rf /var/lib/apt/lists/*
 
@@ -68,21 +69,14 @@ RUN apt-get update && apt-get install -y \
   python3-venv \
   && rm -rf /var/lib/apt/lists/*
 
-# LSPs via npm
-RUN npm install -g \
-  @biomejs/biome \
-  typescript-language-server \
-  typescript \
-  vscode-langservers-extracted \
-  yaml-language-server \
-  dockerfile-language-server-nodejs \
-  bash-language-server \
-  basedpyright
+# ast-grep ships an `sg` bin that conflicts with Ubuntu's setgroups tool.
+ARG AST_GREP_VERSION=0.43.0
+RUN npm install --prefix /opt/ast-grep "@ast-grep/cli@${AST_GREP_VERSION}" \
+  && ln -sf /opt/ast-grep/node_modules/.bin/ast-grep /usr/local/bin/ast-grep \
+  && ast-grep --version
 
-# LSPs + tools via apt (NO tigervnc-tools)
+# Shell tooling via apt (NO tigervnc-tools)
 RUN apt-get update && apt-get install -y \
-  clangd \
-  python3-pylsp \
   shellcheck \
   shfmt \
   && rm -rf /var/lib/apt/lists/*
@@ -141,16 +135,34 @@ RUN install_log="$(mktemp)" \
   && printf 'OpenCode CLI version: %s\n' "${opencode_version:-unknown}"
 
 RUN install_log="$(mktemp)" \
-  && helper_cache_dir="/home/overlord/.cache/opencode/packages/oh-my-openagent@latest" \
+  && skills_source="$(printf '%s\043%s' mattpocock/skills v1.0.1)" \
+  && echo "Installing default OpenCode skills (mattpocock/skills)..." \
+  && if ! DISABLE_TELEMETRY=1 npx --yes skills@1.5.11 add "${skills_source}" --skill '*' --agent opencode --global --yes --copy >"${install_log}" 2>&1; then cat "${install_log}"; rm -f "${install_log}"; exit 1; fi \
+  && rm -f "${install_log}" \
+  && test -f /home/overlord/.agents/skills/setup-matt-pocock-skills/SKILL.md \
+  && test -f /home/overlord/.agents/skills/tdd/SKILL.md
+
+ARG OH_MY_OPENAGENT_VERSION=4.11.1
+RUN install_log="$(mktemp)" \
+  && helper_package="oh-my-openagent@${OH_MY_OPENAGENT_VERSION}" \
+  && helper_cache_dir="/home/overlord/.cache/opencode/packages/${helper_package}" \
   && mkdir -p "${helper_cache_dir}" /home/overlord/.local/bin \
   && cd "${helper_cache_dir}" \
   && bun init -y > /dev/null 2>&1 \
-  && echo "Prewarming OpenCode plugin package (oh-my-openagent@latest)..." \
-  && if ! bun add oh-my-openagent@latest >"${install_log}" 2>&1; then cat "${install_log}"; rm -f "${install_log}"; exit 1; fi \
+  && echo "Prewarming OpenCode plugin package (${helper_package})..." \
+  && if ! bun add "${helper_package}" --safe-chain-skip-minimum-package-age >"${install_log}" 2>&1; then cat "${install_log}"; rm -f "${install_log}"; exit 1; fi \
   && rm -f "${install_log}" \
   && ln -sf "${helper_cache_dir}/node_modules/.bin/oh-my-openagent" /home/overlord/.local/bin/oh-my-openagent \
   && helper_version="$(node -p "require('./node_modules/oh-my-openagent/package.json').version" 2>/dev/null || true)" \
   && printf 'oh-my-openagent version: %s\n' "${helper_version:-unknown}"
+
+RUN install_log="$(mktemp)" \
+  && echo "Installing CodeGraph CLI package (@colbymchenry/codegraph@1.0.1)..." \
+  && if ! bun add -g @colbymchenry/codegraph@1.0.1 >"${install_log}" 2>&1; then cat "${install_log}"; rm -f "${install_log}"; exit 1; fi \
+  && rm -f "${install_log}" \
+  && ln -sf /home/overlord/.bun/bin/codegraph /home/overlord/.local/bin/codegraph \
+  && codegraph_version="$(node -p "require('/home/overlord/.bun/install/global/node_modules/@colbymchenry/codegraph/package.json').version" 2>/dev/null || true)" \
+  && printf 'CodeGraph CLI version: %s\n' "${codegraph_version:-unknown}"
 
 # Git safe directory
 RUN git config --global --add safe.directory /workspace

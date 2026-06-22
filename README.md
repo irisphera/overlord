@@ -173,6 +173,7 @@ export AZURE_API_KEY="..."
 export AZURE_RESOURCE_NAME="..."
 export AWS_ACCESS_KEY_ID="..."
 export AWS_SECRET_ACCESS_KEY="..."
+export EXA_API_KEY="..."
 overlord
 ```
 
@@ -187,7 +188,7 @@ The launcher forwards provider env vars listed in the `PROVIDER_ENV_VARS` array 
 - `TESTCONTAINERS_HOST_OVERRIDE`, `TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE`, `TESTCONTAINERS_RYUK_DISABLED`
 - `UV_CACHE_DIR`
 
-`CONTEXT7_API_KEY` is always forwarded for Context7. `EXA_API_KEY` and `TAVILY_API_KEY` are forwarded when present for the websearch MCP.
+`CONTEXT7_API_KEY` is always forwarded for Context7. `EXA_API_KEY` and `TAVILY_API_KEY` are forwarded when present for the websearch MCP. If `EXA_API_KEY` changes while an OpenCode web server is already running, rerun `overlord`; the launcher restarts only the web server so the MCP sees the current host value.
 
 Google Cloud ADC credentials are automatically injected if found at `~/.config/gcloud/application_default_credentials.json` or `$GOOGLE_APPLICATION_CREDENTIALS`.
 

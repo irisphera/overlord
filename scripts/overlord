@@ -529,7 +529,7 @@ ensure_opencode_web_server() {
 	host_port="$(resolve_published_web_port)"
 
 	echo "Ensuring OpenCode web server is running in ${CONTAINER_NAME}..."
-	"${ENGINE}" exec -i -w /workspace -u "${EXEC_USER}" "${EXEC_ENV[@]}" "${CONTAINER_NAME}" \
+	"${ENGINE}" exec -i -w /workspace -u "${EXEC_USER}" "${EXEC_ENV[@]}" "${OPENCODE_WEB_CREDENTIAL_ENV[@]}" "${CONTAINER_NAME}" \
 		sh -s -- "${OPENCODE_WEB_PID_FILE}" "${OPENCODE_WEB_LOG_FILE}" "${OPENCODE_WEB_HOSTNAME}" "${OPENCODE_WEB_PORT}" <<'EOF'
 PID_FILE="$1"
 LOG_FILE="$2"
@@ -940,7 +940,7 @@ request_opencode_web_restart_if_plugin_missing() {
 		return 0
 	fi
 
-	if "${ENGINE}" exec -i "${CONTAINER_NAME}" sh -s -- \
+	if "${ENGINE}" exec -i "${OPENCODE_WEB_CREDENTIAL_ENV[@]}" "${CONTAINER_NAME}" sh -s -- \
 		"${OPENCODE_WEB_PID_FILE}" \
 		"${CONTAINER_HOME}" \
 		"${CODEGRAPH_INSTALL_DIR}" \
@@ -961,6 +961,24 @@ fi
 if [ ! -r "/proc/${pid}/environ" ]; then
 	exit 0
 fi
+
+process_has_env_name() {
+	name="$1"
+	tr '\000' '\n' < "/proc/${pid}/environ" | grep -Eq "^${name}="
+}
+
+process_has_env_value() {
+	name="$1"
+	value="$2"
+	tr '\000' '\n' < "/proc/${pid}/environ" | grep -Fxq "${name}=${value}"
+}
+
+if [ "${OVERLORD_HOST_EXA_API_KEY_PRESENT:-0}" = "1" ]; then
+	process_has_env_value EXA_API_KEY "${EXA_API_KEY:-}" || exit 1
+else
+	! process_has_env_name EXA_API_KEY || exit 1
+fi
+
 tr '\000' '\n' < "/proc/${pid}/environ" | grep -qx "HOME=${container_home}" && \
 	tr '\000' '\n' < "/proc/${pid}/environ" | grep -qx "XDG_CONFIG_HOME=${container_home}/.config" && \
 	tr '\000' '\n' < "/proc/${pid}/environ" | grep -qx "XDG_CACHE_HOME=${container_home}/.cache" && \
@@ -974,7 +992,7 @@ EOF
 		return 0
 	fi
 
-	echo "Restarting existing OpenCode web server because its HOME/XDG/CodeGraph environment is not canonical in ${CONTAINER_NAME}..."
+	echo "Restarting existing OpenCode web server because its HOME/XDG/CodeGraph/MCP credential environment is not canonical in ${CONTAINER_NAME}..."
 	OPENCODE_WEB_RESTART_REQUIRED=1
 }
 
@@ -1270,6 +1288,13 @@ pass_env CONTEXT7_API_KEY
 pass_env EXA_API_KEY
 pass_env TAVILY_API_KEY
 pass_env OPENCODE_SERVER_PASSWORD
+
+OPENCODE_WEB_CREDENTIAL_ENV=()
+if [[ -n "${EXA_API_KEY:-}" ]]; then
+	OPENCODE_WEB_CREDENTIAL_ENV+=(-e "OVERLORD_HOST_EXA_API_KEY_PRESENT=1" -e "EXA_API_KEY=${EXA_API_KEY}")
+else
+	OPENCODE_WEB_CREDENTIAL_ENV+=(-e "OVERLORD_HOST_EXA_API_KEY_PRESENT=0" -e "EXA_API_KEY=")
+fi
 
 # Docker / Testcontainers runtime envs
 : "${DOCKER_HOST:=unix:///var/run/docker.sock}"

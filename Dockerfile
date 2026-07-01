@@ -58,6 +58,13 @@ RUN curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /
   | tee /etc/apt/sources.list.d/docker.list > /dev/null \
   && apt-get update && apt-get install -y docker-ce-cli docker-compose-plugin && rm -rf /var/lib/apt/lists/*
 
+RUN curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg \
+  && echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" \
+  | tee /etc/apt/sources.list.d/google-cloud-sdk.list > /dev/null \
+  && apt-get update \
+  && CLOUDSDK_SKIP_PY_COMPILATION=1 apt-get install -y google-cloud-cli \
+  && rm -rf /var/lib/apt/lists/*
+
 # Node.js 22 via NodeSource
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
   && apt-get install -y nodejs && rm -rf /var/lib/apt/lists/*
@@ -96,6 +103,9 @@ RUN groupadd -g 33333 overlord \
   && echo 'overlord ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/overlord \
   && chmod 440 /etc/sudoers.d/overlord
 
+RUN mkdir -p /usr/local/.safe-chain/certs \
+  && chown -R overlord:overlord /usr/local/.safe-chain/certs
+
 # Config directories
 RUN mkdir -p /home/overlord/.config/opencode /home/overlord/.config/zellij/layouts /home/overlord/.config/gcloud /home/overlord/.bun /home/overlord/.cache/zellij /home/overlord/.local/share \
   && chown -R overlord:overlord /home/overlord/.config /home/overlord/.bun /home/overlord/.cache /home/overlord/.local
@@ -125,6 +135,17 @@ ENV PATH="/usr/local/.safe-chain/shims:/usr/local/.safe-chain/bin:/home/overlord
 ENV UV_LINK_MODE=copy
 ENV UV_CACHE_DIR=/home/overlord/.cache/uv
 ENV LANG=en_US.UTF-8
+ENV HEADROOM_TELEMETRY=off
+
+ARG HEADROOM_VERSION=0.27.0
+RUN install_log="$(mktemp)" \
+  && echo "Installing Headroom CLI package (headroom-ai[proxy]==${HEADROOM_VERSION})..." \
+  && if ! uv tool install "headroom-ai[proxy]==${HEADROOM_VERSION}" >"${install_log}" 2>&1; then cat "${install_log}"; rm -f "${install_log}"; exit 1; fi \
+  && rm -f "${install_log}" \
+  && headroom_version="$(HEADROOM_TELEMETRY=off headroom --version 2>&1)" \
+  && printf 'Headroom CLI version: %s\n' "${headroom_version}" \
+  && printf '%s\n' "${headroom_version}" | grep -F "${HEADROOM_VERSION}" \
+  && HEADROOM_TELEMETRY=off headroom proxy --help | grep -F -- "--no-telemetry"
 
 # Install opencode-ai
 RUN install_log="$(mktemp)" \

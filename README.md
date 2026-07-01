@@ -12,7 +12,7 @@ ln -s "$(pwd)/scripts/overlord" ~/.local/bin/
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-Requires Docker.
+Requires host `python3` plus Docker or Podman.
 
 ```bash
 # Navigate to any project and launch
@@ -30,7 +30,9 @@ If you do not want to containerize OpenCode, use the native installer instead:
 ./scripts/install
 ```
 
-This installs the checked-in OpenCode provider catalog, selected `oh-my-openagent` routing preset, zellij config, and Bun-managed OpenCode packages directly under your user config/cache/bin directories. Bun must already be installed and available in `PATH`. The native installer backs up existing target files before replacing them and does not use Docker or Podman.
+This Bash installer installs the checked-in OpenCode provider catalog, selected `oh-my-openagent` routing preset, zellij config, and Bun-managed OpenCode packages directly under your user config/cache/bin directories. Bun must already be installed and available in `PATH`. The native installer backs up existing target files before replacing them and does not use Docker or Podman.
+
+The native installer does not install or configure Headroom. Headroom support is scoped to the container launcher and is never wrapped around host OpenCode by `scripts/install`.
 
 Use the same routing options as the launcher:
 
@@ -48,6 +50,8 @@ The installer writes an optional env file at `~/.config/opencode/overlord-env`; 
 overlord              Start/reuse OpenCode web mode (default)
 overlord web          Start/reuse OpenCode web mode explicitly
 overlord opencode     Alias for `overlord web`
+overlord --headroom   Request opt-in Headroom web mode, currently fail-fast
+OVERLORD_HEADROOM=1 overlord
 overlord shell        Open a zsh shell in the container
 overlord zellij       Launch zellij explicitly
 overlord fresh        Remove the container (next launch starts from clean image)
@@ -97,9 +101,31 @@ Use `overlord fresh` before switching routing presets on an existing workspace c
 
 Each workspace directory gets its own persistent container. `overlord` keeps that container alive in the background, starts or reuses a single OpenCode web server process inside it, publishes the fixed container port to an ephemeral host port on all host interfaces, and prints both the local `http://localhost:<port>` URL and a LAN-accessible `http://<host-ip>:<port>` URL when it can resolve the host IP.
 
+The `scripts/overlord` executable is a minimal shim. It resolves host `python3` and runs the standard-library Python launcher implementation under `scripts/overlord_py/`.
+
 If you want to require authentication for the web UI, export `OPENCODE_SERVER_PASSWORD` before launch. The launcher forwards it to the container and uses it for health checks.
 
 Use `overlord zellij` or `overlord shell` when you want an explicit terminal entrypoint into the same container.
+
+### Headroom Cloud Mode
+
+Headroom is preinstalled in the container image as cloud and devcontainer tooling. It is not enabled by default.
+
+Request it only with `overlord --headroom`, `overlord --headroom web`, `overlord --headroom opencode`, or `OVERLORD_HEADROOM=1 overlord`.
+
+As of this plan, no checked-in provider or routing preset has real Headroom traversal proof. A Headroom launch fails fast for every current preset and override instead of proxying an unsupported model.
+
+Future provider support needs evidence from a real OpenCode request through Headroom, or an accepted deterministic proof of the same protocol path, before the launcher can mark that route supported.
+
+When a supported route exists, the launcher starts `headroom proxy` only inside the container on `127.0.0.1:8787`. That port is not published to the host or LAN.
+
+Headroom telemetry is forced off with `HEADROOM_TELEMETRY=off` and `headroom proxy --no-telemetry`. Do not rely on Headroom defaults for privacy.
+
+The launcher generates any Headroom OpenCode overlay only under `/home/overlord/.config/opencode` inside the container. Checked-in `config/opencode.json` and `config/oh-my-openagent*.jsonc` stay authoritative.
+
+Plain `overlord` is the default mode. After a future supported Headroom run, rerun plain `overlord` to stop Headroom mode and restart OpenCode without it. You do not need `overlord fresh` or `overlord purge` just to disable Headroom.
+
+Use `overlord purge && overlord` after image or toolchain changes, including Headroom version changes, so the shared image is rebuilt.
 
 Conversations, memory, and shell history are stored in `.overlord/` inside your project directory and survive `fresh` and `purge`.
 
@@ -155,6 +181,10 @@ The current default agent/category routing is controlled by `config/oh-my-openag
 
 If you launch with `--config pro`, the launcher selects `config/oh-my-openagent.pro.jsonc`, so high-reasoning routes plus the planning/review agents `metis` and `momus` use `azure/gpt-5.4-pro` while the remaining routes use models declared in `config/opencode.json`. If you launch with `--config deepseek`, high-thinking routes use `azure/gpt-5.5` with high reasoning effort, medium-thinking routes use `azure/deepseek-v4-pro` with medium reasoning effort, and low-thinking routes use `azure/deepseek-v4-flash` with low reasoning effort.
 
+Current configured providers remain unsupported for Headroom until traversal proof is recorded.
+
+That includes Azure, Google Vertex AI, AWS Bedrock, LM Studio, and `--lms-model` overrides.
+
 ### Configured Providers
 
 | Provider | Models |
@@ -177,7 +207,7 @@ export EXA_API_KEY="..."
 overlord
 ```
 
-The launcher forwards provider env vars listed in the `PROVIDER_ENV_VARS` array in `scripts/overlord`:
+The launcher forwards provider env vars defined by the Python launcher environment builder:
 
 - `AWS_REGION`, `AWS_BEARER_TOKEN_BEDROCK`
 - `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`
@@ -191,6 +221,18 @@ The launcher forwards provider env vars listed in the `PROVIDER_ENV_VARS` array 
 `CONTEXT7_API_KEY` is always forwarded for Context7. `EXA_API_KEY` and `TAVILY_API_KEY` are forwarded when present for the websearch MCP. If `EXA_API_KEY` changes while an OpenCode web server is already running, rerun `overlord`; the launcher restarts only the web server so the MCP sees the current host value.
 
 Google Cloud ADC credentials are automatically injected if found at `~/.config/gcloud/application_default_credentials.json` or `$GOOGLE_APPLICATION_CREDENTIALS`.
+
+The image also includes the Google Cloud CLI, so you can create ADC credentials inside the container when the host does not already have them:
+
+```bash
+overlord shell
+gcloud auth application-default login --no-launch-browser
+test -s ~/.config/gcloud/application_default_credentials.json
+```
+
+Credentials created this way live in the current container. They survive normal re-entry, but `overlord fresh` or `overlord purge` removes them. After upgrading from an older image, run `overlord purge && overlord` once so the rebuilt image includes `gcloud`.
+
+Headroom uses the same runtime credential boundary. Provider credentials are still forwarded by the launcher at runtime and are not baked into the image.
 
 ## Troubleshooting
 
@@ -211,6 +253,17 @@ Check that all agents/categories in `oh-my-openagent.jsonc` reference models def
 **Can't reach API:**
 Ensure credentials are exported in your shell before running `overlord`.
 
+**Headroom exits before startup:**
+This is expected today. No checked-in provider or preset has real Headroom traversal proof yet, so `--headroom` and `OVERLORD_HEADROOM=1` fail fast.
+
+**Run launcher tests:**
+```bash
+python3 -m unittest discover -s scripts/tests
+```
+
+**Disable Headroom mode:**
+Run plain `overlord`. A future supported Headroom run should stop the proxy and restart OpenCode in plain mode. Use `purge` only when you need a rebuilt image.
+
 ## License
 
 MIT
@@ -222,6 +275,8 @@ The image ships with the common tooling needed to run OpenCode and work across t
 - **Node/Bun**: Node.js 22 and Bun for OpenCode package/runtime support
 - **Python**: Python 3 plus `uv` (with `UV_LINK_MODE=copy` and cache support)
 - **Containers**: Docker CLI + Compose plugin with Testcontainers-oriented env forwarding
+- **Google Cloud**: Google Cloud CLI for in-container ADC / Vertex AI authentication
+- **Headroom**: Pinned Headroom proxy tooling for future opt-in cloud mode, with launcher-managed telemetry-off runtime behavior
 
 Repository-specific stacks and language servers are intentionally not baked into the shared image. If a workspace needs PHP, Java, Terraform, Ansible, AWS CLI, Tailwind, Pyright, clangd, or similar project-specific tools, add a repo-local `setup-devcontainer.sh`. On a new or restarted container, `overlord` runs `/workspace/setup-devcontainer.sh` automatically with a sanitized root environment and then repairs `/home/overlord` ownership. Re-run setup with `overlord fresh`; `overlord purge` is only needed after shared image changes.
 

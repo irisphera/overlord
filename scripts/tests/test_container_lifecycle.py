@@ -1,0 +1,262 @@
+from __future__ import annotations
+
+import os
+import sys
+import unittest
+from collections.abc import Mapping
+from pathlib import Path
+from typing import Final
+
+from harness import CommandRecord, TempLauncherWorkspace
+
+
+SCRIPTS_DIR: Final = Path(__file__).resolve().parents[1]
+
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+from overlord_py.container_lifecycle import (  # noqa: E402
+    LifecycleError,
+    build_container_run_args,
+    container_state,
+    ensure_image,
+    ensure_running,
+    fresh,
+    purge,
+)
+from overlord_py.engine import ContainerEngine  # noqa: E402
+from overlord_py.env_builder import build_environment_plan  # noqa: E402
+from overlord_py.paths import WorkspacePaths, build_workspace_paths  # noqa: E402
+
+
+class ContainerLifecycleTests(unittest.TestCase):
+    def test_ensure_image_builds_only_when_image_is_missing(self) -> None:
+        with lifecycle_workspace(image_exists=False) as fixture:
+            messages = ensure_image(fixture.engine, fixture.paths, env=fixture.runner_env)
+
+            self.assertEqual(messages, (f"Building overlord image from {SCRIPTS_DIR.parent}...",))
+            image_ref = f"localhost/{fixture.paths.identity.image_name}:latest"
+            self.assertIn(["docker", "build", "--load", "-t", image_ref, str(SCRIPTS_DIR.parent)], argv_list(fixture.records()))
+
+        with lifecycle_workspace(image_exists=True) as fixture:
+            messages = ensure_image(fixture.engine, fixture.paths, env=fixture.runner_env)
+
+            self.assertEqual(messages, ())
+            self.assertNotIn("build", subcommands(fixture.records()))
+
+    def test_container_state_maps_missing_and_existing_states(self) -> None:
+        with lifecycle_workspace(state="missing") as fixture:
+            self.assertEqual(container_state(fixture.engine, fixture.paths, env=fixture.runner_env), "missing")
+
+        with lifecycle_workspace(state="exited") as fixture:
+            self.assertEqual(container_state(fixture.engine, fixture.paths, env=fixture.runner_env), "exited")
+
+    def test_missing_container_creates_with_mounts_ports_optional_git_and_setup(self) -> None:
+        with lifecycle_workspace(state="missing", host_files=True, setup_script=True) as fixture:
+            traversal_dir = fixture.paths.workspace / "needs-traversal"
+            traversal_dir.mkdir()
+            traversal_dir.chmod(0o600)
+            result = ensure_running(fixture.engine, fixture.paths, fixture.environment.exec_env_flags, env=fixture.runner_env, home=fixture.home)
+
+            records = fixture.records()
+            run = first_record(records, "run")["argv"]
+            setup = [record["argv"] for record in records if "/workspace/setup-devcontainer.sh" in record["argv"]]
+
+            self.assertEqual(result.state_before, "missing")
+            self.assertTrue(result.setup_ran)
+            self.assertIn(f"Creating container {fixture.paths.identity.container_name}...", result.messages)
+            self.assertIn("==> Running repo-controlled devcontainer setup as root: /workspace/setup-devcontainer.sh", result.messages)
+            self.assertIn(f"{fixture.paths.workspace}:/workspace:rw", run)
+            self.assertIn("/var/run/docker.sock:/var/run/docker.sock", run)
+            self.assertIn(f"{fixture.paths.state.opencode_data}:/home/overlord/.local/share/opencode", run)
+            self.assertIn(f"{fixture.paths.state.zsh_data}:/home/overlord/.zsh_data", run)
+            self.assertIn("0.0.0.0::4090", run)
+            self.assertIn("--security-opt", run)
+            self.assertIn("label=disable", run)
+            self.assertIn("seccomp=unconfined", run)
+            self.assertIn(f"{fixture.home / '.gitconfig'}:/home/overlord/.gitconfig:ro", run)
+            self.assertIn(f"{fixture.home / '.ssh'}:/home/overlord/.ssh:ro", run)
+            self.assertEqual(run[-3:], [f"localhost/{fixture.paths.identity.image_name}:latest", "sleep", "infinity"])
+            self.assertEqual((fixture.paths.workspace / ".gitignore").read_text(encoding="utf-8"), ".overlord/\n")
+            self.assertTrue(traversal_dir.stat().st_mode & 0o111)
+            self.assertTrue(setup)
+            self.assertIn("env", setup[0])
+            self.assertIn("-i", setup[0])
+            self.assertIn("HOME=/root", setup[0])
+            self.assertIn("DEBIAN_FRONTEND=noninteractive", setup[0])
+            self.assertNotIn("sentinel-azure-secret", " ".join(setup[0]))
+            self.assertTrue(any(record["argv"][1:3] == ["exec", fixture.paths.identity.container_name] and "chown -R overlord:overlord" in " ".join(record["argv"]) for record in records))
+
+    def test_missing_container_without_optional_mounts_or_setup_skips_repo_setup(self) -> None:
+        with lifecycle_workspace(state="missing") as fixture:
+            result = ensure_running(fixture.engine, fixture.paths, fixture.environment.exec_env_flags, env=fixture.runner_env, home=fixture.home)
+
+            run = first_record(fixture.records(), "run")["argv"]
+
+            self.assertFalse(result.setup_ran)
+            self.assertIn("==> No setup-devcontainer.sh found; skipping repo setup.", result.messages)
+            self.assertFalse(any(".gitconfig" in arg for arg in run))
+            self.assertFalse(any("/home/overlord/.ssh" in arg for arg in run))
+
+    def test_exited_container_starts_and_runs_setup_while_running_reuse_skips_setup(self) -> None:
+        with lifecycle_workspace(state="exited", setup_script=True) as fixture:
+            result = ensure_running(fixture.engine, fixture.paths, fixture.environment.exec_env_flags, env=fixture.runner_env, home=fixture.home)
+
+            self.assertEqual(result.state_before, "exited")
+            self.assertTrue(result.setup_ran)
+            self.assertIn("start", subcommands(fixture.records()))
+
+        with lifecycle_workspace(state="running", setup_script=True) as fixture:
+            result = ensure_running(fixture.engine, fixture.paths, fixture.environment.exec_env_flags, env=fixture.runner_env, home=fixture.home)
+
+            self.assertEqual(result.state_before, "running")
+            self.assertFalse(result.setup_ran)
+            self.assertNotIn("start", subcommands(fixture.records()))
+            self.assertNotIn("run", subcommands(fixture.records()))
+            self.assertFalse(any("/workspace/setup-devcontainer.sh" in record["argv"] for record in fixture.records()))
+
+    def test_unexpected_container_state_raises_current_diagnostic(self) -> None:
+        with lifecycle_workspace(state="paused") as fixture:
+            with self.assertRaises(LifecycleError) as caught:
+                ensure_running(fixture.engine, fixture.paths, fixture.environment.exec_env_flags, env=fixture.runner_env)
+
+            self.assertEqual(caught.exception.status, 1)
+            self.assertIn(f"Error: Container {fixture.paths.identity.container_name} is in unexpected state: paused", caught.exception.message)
+            self.assertIn("Try: overlord fresh", caught.exception.message)
+            self.assertNotIn("exec", subcommands(fixture.records()))
+
+    def test_build_container_run_args_preserves_security_ports_and_environment_boundaries(self) -> None:
+        with lifecycle_workspace(host_files=True) as fixture:
+            args = build_container_run_args(fixture.paths, fixture.environment.exec_env_flags, home=fixture.home)
+
+            self.assertEqual(args[0:2], ["-d", "--name"])
+            self.assertIn("--add-host=host.docker.internal:host-gateway", args)
+            self.assertIn("--security-opt", args)
+            self.assertIn("0.0.0.0::4090", args)
+            self.assertIn("HOME=/home/overlord", args)
+            self.assertIn("AZURE_API_KEY=sentinel-azure-secret", args)
+            self.assertFalse(any("8787" in arg for arg in args))
+
+    def test_fresh_preserves_state_sentinel_backs_up_and_clears_stale_web_state(self) -> None:
+        with lifecycle_workspace(state="running", image_exists=True) as fixture:
+            sentinel = fixture.paths.state.root / "sentinel.txt"
+            sentinel.parent.mkdir()
+            sentinel.write_text("keep\n", encoding="utf-8")
+            stale_pid = fixture.paths.state.opencode_data / "overlord-serve.pid"
+            stale_log = fixture.paths.state.opencode_data / "overlord-serve.log"
+            stale_pid.parent.mkdir(parents=True)
+            stale_pid.write_text("123\n", encoding="utf-8")
+            stale_log.write_text("log\n", encoding="utf-8")
+
+            messages = fresh(fixture.engine, fixture.paths, env=fixture.runner_env)
+
+            self.assertTrue(sentinel.exists())
+            self.assertFalse(stale_pid.exists())
+            self.assertFalse(stale_log.exists())
+            self.assertIn(f"Removing container {fixture.paths.identity.container_name}...", messages)
+            self.assertIn("Done. Run 'overlord' to start fresh.", messages)
+            self.assertIn("cp", subcommands(fixture.records()))
+            self.assertIn("stop", subcommands(fixture.records()))
+            self.assertIn("rm", subcommands(fixture.records()))
+            self.assertNotIn("rmi", subcommands(fixture.records()))
+
+    def test_purge_removes_image_prunes_and_preserves_state_sentinel(self) -> None:
+        with lifecycle_workspace(state="running", image_exists=True) as fixture:
+            sentinel = fixture.paths.state.root / "sentinel.txt"
+            sentinel.parent.mkdir()
+            sentinel.write_text("keep\n", encoding="utf-8")
+
+            messages = purge(fixture.engine, fixture.paths, env=fixture.runner_env)
+
+            self.assertTrue(sentinel.exists())
+            self.assertIn(f"==> Removing image {fixture.paths.identity.image_name}...", messages)
+            self.assertIn("==> Done. Run 'overlord' to rebuild and launch.", messages)
+            self.assertIn("rmi", subcommands(fixture.records()))
+            self.assertIn(["docker", "image", "prune", "-f", "--filter", "dangling=true"], argv_list(fixture.records()))
+
+    def test_purge_failure_when_image_still_exists_reports_existing_diagnostic(self) -> None:
+        with lifecycle_workspace(state="running", image_exists=True, rmi_fails=True) as fixture:
+            with self.assertRaises(LifecycleError) as caught:
+                purge(fixture.engine, fixture.paths, env=fixture.runner_env)
+
+            self.assertEqual(caught.exception.status, 1)
+            self.assertIn("Warning: image removal command reported a failure; verifying final image state...", caught.exception.message)
+            self.assertIn(f"Error: image {fixture.paths.identity.image_name} still exists after purge; rebuild is not guaranteed.", caught.exception.message)
+            self.assertNotIn("prune", subcommands(fixture.records()))
+            self.assertEqual(first_record(fixture.records()[subcommands(fixture.records()).index("rmi") + 1 :], "image")["argv"][1:3], ["image", "inspect"])
+
+
+class LifecycleFixture:
+    def __init__(self, workspace: TempLauncherWorkspace, home: Path, paths: WorkspacePaths, runner_env: Mapping[str, str]) -> None:
+        self.workspace = workspace
+        self.home = home
+        self.paths = paths
+        self.runner_env = runner_env
+        self.engine = ContainerEngine("docker")
+        self.environment = build_environment_plan(
+            {"HOME": str(home), "TERM": "xterm-256color", "AZURE_API_KEY": "sentinel-azure-secret"},
+            home=home,
+            workspace_name=paths.identity.workspace_name,
+        )
+
+    def records(self) -> list[CommandRecord]:
+        return [record for record in self.workspace.read_command_log() if record["executable"] == "docker"]
+
+
+class lifecycle_workspace:
+    def __init__(
+        self,
+        *,
+        state: str = "missing",
+        image_exists: bool = True,
+        host_files: bool = False,
+        setup_script: bool = False,
+        rmi_fails: bool = False,
+    ) -> None:
+        self._state = state
+        self._image_exists = image_exists
+        self._host_files = host_files
+        self._setup_script = setup_script
+        self._rmi_fails = rmi_fails
+        self._workspace = TempLauncherWorkspace(workspace_name="Lifecycle Project")
+
+    def __enter__(self) -> LifecycleFixture:
+        workspace = self._workspace.__enter__()
+        workspace.install_fake_engine("docker", state=self._state, image_exists=self._image_exists, rmi_fails=self._rmi_fails)
+        home = workspace.path / "host-home"
+        home.mkdir()
+        if self._host_files:
+            (home / ".gitconfig").write_text("[user]\n", encoding="utf-8")
+            (home / ".ssh").mkdir()
+        if self._setup_script:
+            setup = workspace.path / "setup-devcontainer.sh"
+            setup.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+        paths = build_workspace_paths(workspace.path, script_path=SCRIPTS_DIR / "overlord")
+        runner_env = {
+            "PATH": f"{workspace.fake_bin}{os.pathsep}{os.environ.get('PATH', '')}",
+            "FAKE_COMMAND_LOG": str(workspace.log_path),
+            "FAKE_CAPTURE_ENV": "AZURE_API_KEY,EXA_API_KEY",
+        }
+        return LifecycleFixture(workspace, home, paths, runner_env)
+
+    def __exit__(self, exc_type: type[BaseException] | None, exc_value: BaseException | None, traceback: object) -> None:
+        self._workspace.__exit__(exc_type, exc_value, None)
+
+
+def subcommands(records: list[CommandRecord]) -> list[str]:
+    return [record["argv"][1] for record in records if len(record["argv"]) > 1]
+
+
+def argv_list(records: list[CommandRecord]) -> list[list[str]]:
+    return [record["argv"] for record in records]
+
+
+def first_record(records: list[CommandRecord], subcommand: str) -> CommandRecord:
+    for record in records:
+        if len(record["argv"]) > 1 and record["argv"][1] == subcommand:
+            return record
+    raise AssertionError(f"Missing engine subcommand: {subcommand}")
+
+
+if __name__ == "__main__":
+    unittest.main()

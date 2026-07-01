@@ -5,22 +5,29 @@
 
 ## OVERVIEW
 
-`scripts/` owns the host-side launcher and native installer. `overlord` is the bind-mounted local workflow; `install` configures OpenCode directly on the host for users who do not want containerized OpenCode.
+`scripts/` owns the host-side launcher and native installer. `overlord` is the bind-mounted local workflow. `scripts/overlord` is a minimal shim that resolves host `python3` and execs the standard-library Python launcher under `scripts/overlord_py/`. `install` is the Bash native installer for users who do not want containerized OpenCode.
+
+Headroom runtime behavior belongs to `scripts/overlord` only. The native installer stays no-Headroom unless a future plan explicitly changes that boundary.
 
 ## PRIMARY COMMAND
 
 - `overlord`
 - Modes: `web` (default), `opencode` (web alias), `zellij`, `shell`, `fresh`, `purge`, `help`
+- Headroom option: `--headroom` or strict `OVERLORD_HEADROOM` for web/opencode only; current provider status is fail-fast
 - Engine selection: Podman preferred, Docker fallback
 - `install`
-- Host-native setup: installs checked-in OpenCode provider config, selected oh-my-openagent routing preset, zellij config, and Bun-managed OpenCode packages directly under the user's home directory
+- Host-native Bash setup: installs checked-in OpenCode provider config, selected oh-my-openagent routing preset, zellij config, and Bun-managed OpenCode packages directly under the user's home directory
 
 ## WHERE TO LOOK
 
 | Task | Location | Notes |
 |------|----------|-------|
-| Change local CLI command behavior | `overlord` command dispatch | Validates `help`, `fresh`, `purge`, `web`, `opencode`, `shell`, `zellij` |
+| Change local CLI command behavior | `overlord_py/` command dispatch | Validates `help`, `fresh`, `purge`, `web`, `opencode`, `shell`, `zellij` |
+| Change launcher shim behavior | `overlord` | Keep this as minimal host `python3` resolution plus `exec` into `overlord_py/` |
 | Change native host install behavior | `install` | Validates `--list-configs`, `--config`, `--lms-model`, config injection, and host package setup without Docker/Podman |
+| Change Headroom opt-in or fail-fast behavior | `overlord` arg parsing and provider guard | Keeps `--headroom`/`OVERLORD_HEADROOM` web-only and unsupported presets nonzero |
+| Change Headroom proxy lifecycle | Headroom helpers in `overlord` | Keeps proxy private on `127.0.0.1:8787`, telemetry off, no host port publish |
+| Change Headroom runtime overlay | `ensure_runtime_config_dirs` and runtime config writer in `overlord` | Generated container files only; checked-in config remains authority |
 | Change `--config` selection rules | routing preset validation, arg parsing | Selects checked-in `oh-my-openagent*.jsonc` presets; rejects paths and invalid presets |
 | Change provider catalog or env forwarding | `config/opencode.json`, `PROVIDER_ENV_VARS` in `overlord` | Keep single provider catalog and forwarded env vars in sync |
 | Change local persistence/gitignore behavior | `ensure_state_dir`, `backup_container_data` | `.overlord/` creation, backup, and gitignore wiring live here |
@@ -31,24 +38,30 @@
 
 - This script is authoritative over `README.md` for the current launcher surface.
 - `install` is an installer/configurator, not a web launcher; it should not create containers, images, `.overlord/` state, or Docker/Podman lifecycle hooks.
+- `install` must not install Headroom, expose a Headroom flag, wrap host OpenCode, or mutate host Headroom config.
 - Lifecycle is wrapper-first: users run `overlord`, not raw `docker`/`podman`, for normal create/start/attach/remove flow.
 - The persistent container is launched detached as `sleep infinity`; interactive modes are entered later with `exec`.
 - Web mode is the default path: `overlord`, `overlord web`, and `overlord opencode` should resolve to the same published OpenCode web-server flow and print local/network URLs.
+- Headroom mode is not default. Plain `overlord` should stop supported Headroom mode without requiring `fresh` or `purge`.
+- Current Headroom launches fail fast because no checked-in provider or preset has real traversal proof.
 - `.overlord/` state management is intentional and must remain git-ignored.
 - Adding or removing providers is incomplete unless `config/opencode.json`, `PROVIDER_ENV_VARS`, and routing presets are updated together.
 
 ## MANUAL VERIFICATION
 
-- `overlord` — verify build/create/reuse path and printed local/network URLs.
-- `overlord web` — verify explicit web alias.
-- `overlord shell` — verify interactive shell entry.
-- `overlord opencode` — verify web alias behavior.
-- `overlord zellij` — verify explicit terminal multiplexer entry.
-- `overlord --list-configs` and `overlord --config <preset>` — verify routing preset listing and selection guards.
-- `scripts/install --list-configs` — verify native installer preset listing without host writes.
-- `tmp_home=$(mktemp -d); HOME=$tmp_home XDG_CONFIG_HOME=$tmp_home/.config XDG_CACHE_HOME=$tmp_home/.cache scripts/install --skip-package-install` — verify native config injection in an isolated home.
-- `overlord fresh && overlord` — verify clean-container reset.
-- `overlord purge && overlord` — verify full rebuild after runtime wiring or image-affecting changes.
+- `overlord`: verify build/create/reuse path and printed local/network URLs.
+- `overlord web`: verify explicit web alias.
+- `overlord shell`: verify interactive shell entry.
+- `overlord opencode`: verify web alias behavior.
+- `overlord zellij`: verify explicit terminal multiplexer entry.
+- `overlord --list-configs` and `overlord --config <preset>`: verify routing preset listing and selection guards.
+- `overlord --headroom` and `OVERLORD_HEADROOM=1 overlord`: verify current provider fail-fast before proxy/OpenCode startup.
+- Future supported Headroom mode: verify one private proxy, `HEADROOM_TELEMETRY=off`, `--no-telemetry`, no host-published 8787, and plain rerun disables it.
+- `scripts/install --list-configs`: verify native installer preset listing without host writes.
+- `tmp_home=$(mktemp -d); HOME=$tmp_home XDG_CONFIG_HOME=$tmp_home/.config XDG_CACHE_HOME=$tmp_home/.cache scripts/install --skip-package-install`: verify native config injection in an isolated home.
+- `python3 -m unittest discover -s scripts/tests`: verify Python launcher regression coverage.
+- `overlord fresh && overlord`: verify clean-container reset.
+- `overlord purge && overlord`: verify full rebuild after runtime wiring or image-affecting changes.
 
 ## ANTI-PATTERNS
 
@@ -56,3 +69,5 @@
 - Do not bypass wrapper lifecycle with undocumented raw `docker`/`podman` flows.
 - Do not change aliases, modes, or command semantics without updating root `AGENTS.md` and `README.md` together.
 - Do not add provider/catalog options without updating validation and env forwarding in the same file.
+- Do not claim Headroom support for Azure, Vertex, Bedrock, LM Studio, or dynamic LMS routes without recorded traversal proof.
+- Do not add Headroom native-install behavior while docs still define it as launcher-only.

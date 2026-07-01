@@ -1,6 +1,8 @@
 # Sessions data
 sessions/
 
+/**/*pycache*/**
+
 # OS files
 .DS_Store
 Thumbs.db

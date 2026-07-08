@@ -17,6 +17,7 @@ from overlord_py.package_scripts import (
     OPENCODE_INSTALL_SCRIPT,
 )
 from overlord_py.paths import WorkspacePaths
+from overlord_py.progress import StageReporter, noop_stage, stage_return_message
 from overlord_py.runtime_config import RestartState
 
 RESPONSIBILITY: Final = "ensure pinned runtime packages and request web restarts when repairs occur"
@@ -46,16 +47,19 @@ def ensure_opencode_runtime_version(
     restart: RestartState,
     *,
     env: Mapping[str, str],
+    stage: StageReporter = noop_stage,
 ) -> tuple[str, ...]:
+    stage(f"Checking OpenCode CLI package opencode-ai@{OPENCODE_REQUIRED_VERSION} in {paths.identity.container_name}...")
     current_version = opencode_current_version(engine, paths, package_env, env=env)
     if opencode_version_satisfied(engine, paths, package_env, current_version, env=env):
         return ()
-    message = f"Ensuring OpenCode CLI package opencode-ai@{OPENCODE_REQUIRED_VERSION} in {paths.identity.container_name}..."
+    stage(f"Installing OpenCode CLI package opencode-ai@{OPENCODE_REQUIRED_VERSION} in {paths.identity.container_name}...")
     install = run_package_script(engine, paths, package_env, (OPENCODE_REQUIRED_VERSION,), OPENCODE_INSTALL_SCRIPT, env=env)
     require_success(install, "OpenCode package install failed")
     installed_version = opencode_current_version(engine, paths, package_env, env=env)
     restart.request()
-    return (message, f"OpenCode CLI version: {installed_version or 'unknown'}")
+    message = f"Ensuring OpenCode CLI package opencode-ai@{OPENCODE_REQUIRED_VERSION} in {paths.identity.container_name}..."
+    return (*stage_return_message(stage, message), f"OpenCode CLI version: {installed_version or 'unknown'}")
 
 
 def ensure_oh_my_openagent_runtime_package(
@@ -65,7 +69,9 @@ def ensure_oh_my_openagent_runtime_package(
     restart: RestartState,
     *,
     env: Mapping[str, str],
+    stage: StageReporter = noop_stage,
 ) -> tuple[str, ...]:
+    stage(f"Checking OpenCode plugin package {OH_MY_OPENAGENT_PACKAGE} in {paths.identity.container_name}...")
     check = run_package_script(
         engine,
         paths,
@@ -76,7 +82,7 @@ def ensure_oh_my_openagent_runtime_package(
     )
     if check.returncode == 0:
         return ()
-    message = f"Ensuring OpenCode plugin package {OH_MY_OPENAGENT_PACKAGE} in {paths.identity.container_name}..."
+    stage(f"Installing OpenCode plugin package {OH_MY_OPENAGENT_PACKAGE} in {paths.identity.container_name}...")
     install = run_package_script(
         engine,
         paths,
@@ -88,7 +94,8 @@ def ensure_oh_my_openagent_runtime_package(
     require_success(install, "oh-my-openagent package install failed")
     installed_version = package_json_version(engine, paths, package_env, f"require('{OH_MY_OPENAGENT_CACHE_DIR}/node_modules/oh-my-openagent/package.json').version", env=env)
     restart.request()
-    return (message, f"oh-my-openagent version: {installed_version or 'unknown'}")
+    message = f"Ensuring OpenCode plugin package {OH_MY_OPENAGENT_PACKAGE} in {paths.identity.container_name}..."
+    return (*stage_return_message(stage, message), f"oh-my-openagent version: {installed_version or 'unknown'}")
 
 
 def ensure_codegraph_runtime_package(
@@ -98,11 +105,13 @@ def ensure_codegraph_runtime_package(
     restart: RestartState,
     *,
     env: Mapping[str, str],
+    stage: StageReporter = noop_stage,
 ) -> tuple[str, ...]:
+    stage(f"Checking CodeGraph CLI package {CODEGRAPH_PACKAGE} in {paths.identity.container_name}...")
     check = run_package_script(engine, paths, package_env, (CODEGRAPH_REQUIRED_VERSION, CODEGRAPH_BIN), CODEGRAPH_CHECK_SCRIPT, env=env)
     if check.returncode == 0:
         return ()
-    message = f"Ensuring CodeGraph CLI package {CODEGRAPH_PACKAGE} in {paths.identity.container_name}..."
+    stage(f"Installing CodeGraph CLI package {CODEGRAPH_PACKAGE} in {paths.identity.container_name}...")
     install = run_package_script(engine, paths, package_env, (CODEGRAPH_PACKAGE, CODEGRAPH_BIN), CODEGRAPH_INSTALL_SCRIPT, env=env)
     require_success(install, "CodeGraph package install failed")
     installed_version = package_json_version(
@@ -113,7 +122,8 @@ def ensure_codegraph_runtime_package(
         env=env,
     )
     restart.request()
-    return (message, f"CodeGraph CLI version: {installed_version or 'unknown'}")
+    message = f"Ensuring CodeGraph CLI package {CODEGRAPH_PACKAGE} in {paths.identity.container_name}..."
+    return (*stage_return_message(stage, message), f"CodeGraph CLI version: {installed_version or 'unknown'}")
 
 
 def ensure_headroom_runtime_available(
@@ -123,10 +133,12 @@ def ensure_headroom_runtime_available(
     *,
     headroom_enabled: bool,
     env: Mapping[str, str],
+    stage: StageReporter = noop_stage,
 ) -> tuple[str, ...]:
     if not headroom_enabled:
         return ()
     runtime_env = package_environment() if package_env is None else package_env
+    stage(f"Checking Headroom CLI runtime {HEADROOM_REQUIRED_VERSION} in {paths.identity.container_name}...")
     result = run_package_script(
         engine,
         paths,
@@ -151,11 +163,13 @@ def ensure_default_opencode_skills(
     package_env: Mapping[str, str],
     *,
     env: Mapping[str, str],
+    stage: StageReporter = noop_stage,
 ) -> tuple[str, ...]:
+    stage(f"Checking default OpenCode skills from {DEFAULT_SKILLS_SOURCE} in {paths.identity.container_name}...")
     check = run_package_script(engine, paths, package_env, DEFAULT_SKILLS_MARKERS, DEFAULT_SKILLS_CHECK_SCRIPT, env=env)
     if check.returncode == 0:
         return ()
-    message = f"Ensuring default OpenCode skills from {DEFAULT_SKILLS_SOURCE} in {paths.identity.container_name}..."
+    stage(f"Installing default OpenCode skills from {DEFAULT_SKILLS_SOURCE} in {paths.identity.container_name}...")
     install = run_package_script(
         engine,
         paths,
@@ -165,7 +179,8 @@ def ensure_default_opencode_skills(
         env=env,
     )
     require_success(install, "default skills install failed")
-    return (message,)
+    message = f"Ensuring default OpenCode skills from {DEFAULT_SKILLS_SOURCE} in {paths.identity.container_name}..."
+    return stage_return_message(stage, message)
 
 
 def opencode_current_version(
@@ -214,4 +229,3 @@ def package_json_version(
 ) -> str:
     result = run_package_command(engine, paths, package_env, ("node", "-p", expression), env=env)
     return result.stdout.strip()
-

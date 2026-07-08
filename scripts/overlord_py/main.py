@@ -11,7 +11,7 @@ from overlord_py.config_catalog import OPENCODE_CONFIG_NAME, OpencodeRenderOptio
 from overlord_py.container_lifecycle import LifecycleError, ensure_image, ensure_running, fresh, purge
 from overlord_py.engine import ContainerEngine, EngineDetectionError, detect_engine
 from overlord_py.env_builder import EnvironmentPlan, build_environment_plan, normalized_host_env
-from overlord_py.headroom import HeadroomScriptPlan, plan_ensure_headroom_proxy, plan_stop_headroom_proxy, plan_wait_for_headroom_proxy
+from overlord_py.headroom import HEADROOM_INTERNAL_HOST, HEADROOM_INTERNAL_PORT, HeadroomScriptPlan, plan_ensure_headroom_proxy, plan_stop_headroom_proxy, plan_wait_for_headroom_proxy
 from overlord_py.package_runner import PackageRepairError
 from overlord_py.packages import (
     ensure_codegraph_runtime_package,
@@ -21,6 +21,7 @@ from overlord_py.packages import (
     ensure_opencode_runtime_version,
 )
 from overlord_py.paths import WorkspacePaths, build_workspace_paths
+from overlord_py.progress import stdout_stage
 from overlord_py.runtime_config import RestartState, RuntimeConfigContext, ensure_oh_my_openagent_runtime_config, inject_initial_runtime_config
 from overlord_py.terminal import run_terminal_command, terminal_title
 from overlord_py.web_server import (
@@ -29,6 +30,7 @@ from overlord_py.web_server import (
     plan_opencode_web_server,
     request_opencode_web_restart_if_mode_changed,
     request_opencode_web_restart_if_plugin_env_missing,
+    request_opencode_web_restart_if_workspace_project_stale,
     resolve_access_port_for_engine,
     resolve_network_host_ip,
     resolve_published_web_port,
@@ -65,11 +67,11 @@ def run_launcher(engine: ContainerEngine, paths: WorkspacePaths, options: CliOpt
     match options.command:
         case Command.FRESH:
             stop_host_web_proxy(paths)
-            write_messages(fresh(engine, paths, env=host_env))
+            write_messages(fresh(engine, paths, env=host_env, stage=stdout_stage))
             return 0
         case Command.PURGE:
             stop_host_web_proxy(paths)
-            write_messages(purge(engine, paths, env=host_env))
+            write_messages(purge(engine, paths, env=host_env, stage=stdout_stage))
             return 0
         case Command.WEB | Command.OPENCODE | Command.SHELL | Command.ZELLIJ:
             return run_container_command(engine, paths, options, host_env)
@@ -80,24 +82,24 @@ def run_launcher(engine: ContainerEngine, paths: WorkspacePaths, options: CliOpt
 
 
 def run_container_command(engine: ContainerEngine, paths: WorkspacePaths, options: CliOptions, host_env: Mapping[str, str]) -> int:
-    write_messages(ensure_image(engine, paths, env=host_env))
+    write_messages(ensure_image(engine, paths, env=host_env, stage=stdout_stage))
     home = Path(host_env.get("HOME", str(Path.home())))
     environment = build_environment_plan(host_env, home=home, workspace_name=paths.identity.workspace_name)
     runner_env = normalized_host_env(host_env)
     restart = RestartState()
-    running = ensure_running(engine, paths, environment.exec_env_flags, env=runner_env, home=home)
+    running = ensure_running(engine, paths, environment.exec_env_flags, env=runner_env, home=home, stage=stdout_stage)
     write_messages(running.messages)
     context = runtime_context(paths, options, environment)
     if running.state_before != "running":
-        write_messages(inject_initial_runtime_config(engine, paths, context, env=runner_env))
-        write_messages(ensure_opencode_runtime_version(engine, paths, environment.package_env, restart, env=runner_env))
-    write_messages(ensure_oh_my_openagent_runtime_config(engine, paths, context, restart, env=runner_env))
-    write_messages(ensure_oh_my_openagent_runtime_package(engine, paths, environment.package_env, restart, env=runner_env))
-    write_messages(ensure_codegraph_runtime_package(engine, paths, environment.package_env, restart, env=runner_env))
+        write_messages(inject_initial_runtime_config(engine, paths, context, env=runner_env, stage=stdout_stage))
+        write_messages(ensure_opencode_runtime_version(engine, paths, environment.package_env, restart, env=runner_env, stage=stdout_stage))
+    write_messages(ensure_oh_my_openagent_runtime_config(engine, paths, context, restart, env=runner_env, stage=stdout_stage))
+    write_messages(ensure_oh_my_openagent_runtime_package(engine, paths, environment.package_env, restart, env=runner_env, stage=stdout_stage))
+    write_messages(ensure_codegraph_runtime_package(engine, paths, environment.package_env, restart, env=runner_env, stage=stdout_stage))
     if options.command in {Command.WEB, Command.OPENCODE}:
-        write_messages(ensure_headroom_runtime_available(engine, paths, environment.package_env, headroom_enabled=options.headroom_enabled, env=runner_env))
+        write_messages(ensure_headroom_runtime_available(engine, paths, environment.package_env, headroom_enabled=options.headroom_enabled, env=runner_env, stage=stdout_stage))
         run_headroom_mode(engine, paths, environment, options, restart, runner_env)
-    write_messages(ensure_default_opencode_skills(engine, paths, environment.package_env, env=runner_env))
+    write_messages(ensure_default_opencode_skills(engine, paths, environment.package_env, env=runner_env, stage=stdout_stage))
     write_messages(
         request_opencode_web_restart_if_plugin_env_missing(
             engine,
@@ -105,9 +107,12 @@ def run_container_command(engine: ContainerEngine, paths: WorkspacePaths, option
             restart,
             env=runner_env,
             credential_flags=environment.opencode_web_credential_flags,
+            stage=stdout_stage,
         )
     )
-    write_messages(restart_opencode_web_if_needed(engine, paths, restart, env=runner_env))
+    write_messages(request_opencode_web_restart_if_workspace_project_stale(engine, paths, restart, env=runner_env, stage=stdout_stage))
+    if options.command not in {Command.WEB, Command.OPENCODE}:
+        write_messages(restart_opencode_web_if_needed(engine, paths, restart, env=runner_env, stage=stdout_stage))
     sys.stdout.write(terminal_title(paths.identity.zellij_session))
     return dispatch_final(engine, paths, environment, options, restart, runner_env)
 
@@ -132,11 +137,14 @@ def run_headroom_mode(
     env: Mapping[str, str],
 ) -> None:
     if options.headroom_enabled:
+        stdout_stage(f"Starting or reusing private Headroom proxy on {HEADROOM_INTERNAL_HOST}:{HEADROOM_INTERNAL_PORT} in {paths.identity.container_name}...")
         run_headroom_script(engine, paths, plan_ensure_headroom_proxy(engine, paths, environment.package_env), env=env)
+        stdout_stage(f"Waiting for Headroom proxy health in {paths.identity.container_name}...")
         run_headroom_script(engine, paths, plan_wait_for_headroom_proxy(engine, paths, environment.package_env), env=env)
     else:
+        stdout_stage(f"Stopping Headroom proxy for plain OpenCode mode in {paths.identity.container_name}...")
         run_headroom_script(engine, paths, plan_stop_headroom_proxy(engine, paths, environment.package_env), env=env)
-    write_messages(request_opencode_web_restart_if_mode_changed(engine, paths, options.desired_headroom_mode, restart, env=env))
+    write_messages(request_opencode_web_restart_if_mode_changed(engine, paths, options.desired_headroom_mode, restart, env=env, stage=stdout_stage))
 
 
 def run_headroom_script(engine: ContainerEngine, paths: WorkspacePaths, plan: HeadroomScriptPlan, *, env: Mapping[str, str]) -> None:
@@ -151,8 +159,10 @@ def dispatch_final(engine: ContainerEngine, paths: WorkspacePaths, environment: 
             ensure_web_server(engine, paths, environment, options, restart, env=env)
             return 0
         case Command.SHELL:
+            stdout_stage(f"Opening shell in {paths.identity.container_name}...")
             return run_terminal_command(engine, paths, environment.exec_env_flags, "shell", env=env)
         case Command.ZELLIJ:
+            stdout_stage(f"Opening zellij session {paths.identity.zellij_session} in {paths.identity.container_name}...")
             return run_terminal_command(engine, paths, environment.exec_env_flags, "zellij", env=env)
         case Command.FRESH | Command.PURGE | Command.HELP:
             return 0
@@ -161,18 +171,23 @@ def dispatch_final(engine: ContainerEngine, paths: WorkspacePaths, environment: 
 
 
 def ensure_web_server(engine: ContainerEngine, paths: WorkspacePaths, environment: EnvironmentPlan, options: CliOptions, restart: RestartState, *, env: Mapping[str, str]) -> None:
-    write_messages(ensure_opencode_runtime_version(engine, paths, environment.package_env, restart, env=env))
-    write_messages(restart_opencode_web_if_needed(engine, paths, restart, env=env))
-    sys.stdout.write(f"Ensuring OpenCode web server is running in {paths.identity.container_name}...\n")
+    write_messages(ensure_opencode_runtime_version(engine, paths, environment.package_env, restart, env=env, stage=stdout_stage))
+    write_messages(restart_opencode_web_if_needed(engine, paths, restart, env=env, stage=stdout_stage))
+    stdout_stage(f"Ensuring OpenCode web server is running in {paths.identity.container_name}...")
     plan = plan_opencode_web_server(paths, environment.exec_env_flags, environment.opencode_web_credential_flags, options.desired_headroom_mode)
     result = engine.run(plan.argv, cwd=paths.workspace, env=env, input_text=plan.script)
     if result.returncode != 0:
         raise WebServerError(result.stderr or result.stdout or "OpenCode web server start failed")
+    stdout_stage(f"Resolving published OpenCode web port for {paths.identity.container_name}...")
     host_port = resolve_published_web_port(engine, paths, env=env)
     password = env.get("OPENCODE_SERVER_PASSWORD", "")
+    stdout_stage("Waiting for OpenCode health endpoint...")
     wait_for_opencode_web(host_port, password=password)
+    stdout_stage("Waiting for OpenCode web UI...")
     wait_for_opencode_web_ui(host_port, password=password)
+    stdout_stage("Resolving local OpenCode access port...")
     access_port = resolve_access_port_for_engine(engine.name, paths, host_port=host_port, env=env)
+    stdout_stage("Verifying oh-my-openagent MCP readiness...")
     verify_oh_my_openagent_loaded(engine, paths, env=env, credential_flags=environment.opencode_web_credential_flags)
     sys.stdout.write(format_access_urls(host_port=host_port, access_port=access_port, network_ip=resolve_network_host_ip()))
 

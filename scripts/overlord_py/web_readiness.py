@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import sys
 import time
 from collections.abc import Mapping, Sequence
 
 from overlord_py.packages import OH_MY_OPENAGENT_PACKAGE
 from overlord_py.paths import WorkspacePaths
 from overlord_py.web_scripts import RELEVANT_LOG_LINES_SCRIPT, VERIFY_OH_MY_OPENAGENT_SCRIPT
-from overlord_py.web_types import EngineRunner, OPENCODE_STRUCTURED_LOG_DIR, OPENCODE_WEB_LOG_FILE, OPENCODE_WEB_PORT, OPENCODE_WEB_WAIT_SECONDS, WebServerError
+from overlord_py.web_types import EngineRunner, OPENCODE_STRUCTURED_LOG_DIR, OPENCODE_WEB_LOG_FILE, OPENCODE_WEB_PORT, OPENCODE_WEB_WAIT_SECONDS
 
 
 def verify_oh_my_openagent_loaded(
@@ -27,10 +28,14 @@ def verify_oh_my_openagent_loaded(
             time.sleep(1)
     log_result = engine.run(log_lines_args(paths), cwd=paths.workspace, env=env, input_text=RELEVANT_LOG_LINES_SCRIPT)
     detail = log_result.stderr or log_result.stdout
-    raise WebServerError(
-        "Error: OpenCode web started, but oh-my-openagent did not finish loading its LSP and code navigation MCP tools.\n"
-        f"Expected /mcp to report lsp plus codegraph or ast_grep as connected, or plugin load plus native LSP enablement and code navigation MCP creation in {OPENCODE_STRUCTURED_LOG_DIR}/*.log or {OPENCODE_WEB_LOG_FILE}.\n"
-        f"Relevant OpenCode log lines:\n{detail.rstrip()}"
+    _ = sys.stderr.write(readiness_warning(detail))
+
+
+def readiness_warning(detail: str) -> str:
+    return (
+        "Warning: oh-my-openagent LSP/code navigation MCP tools are still loading.\n"
+        f"Expected /mcp to report lsp plus codegraph or ast_grep as connected. OpenCode web is running, so continuing; MCP tools may finish connecting shortly.\n"
+        f"Relevant OpenCode log lines:\n{detail.rstrip()}\n"
     )
 
 

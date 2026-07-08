@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 import base64
+import contextlib
+import io
 import os
 import sys
 import threading
 import unittest
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Final
+from typing import Final, override
 
 from runtime_support import FakeResponse, RecordingEngine, runtime_workspace
 
@@ -56,7 +58,23 @@ class WebReadinessTests(unittest.TestCase):
 
             self.assertEqual(fixture.paths(), ["/global/health", "/global/health"])
 
-    def test_mcp_and_path_readiness_script_uses_basic_auth_and_log_fallback(self) -> None:
+    def test_health_wait_fails_hard_when_web_returns_empty_body(self) -> None:
+        with response_http_server({"/global/health": b""}) as fixture:
+            with self.assertRaises(WebServerError) as caught:
+                wait_for_opencode_web(str(fixture.port), wait_seconds=1)
+
+            self.assertIn("OpenCode web UI did not become healthy", caught.exception.message)
+            self.assertEqual(fixture.paths(), ["/global/health"])
+
+    def test_root_wait_fails_hard_when_html_never_loads(self) -> None:
+        with response_http_server({"/": b"ok"}) as fixture:
+            with self.assertRaises(WebServerError) as caught:
+                wait_for_opencode_web_ui(str(fixture.port), wait_seconds=1)
+
+            self.assertIn("OpenCode web UI root did not become ready", caught.exception.message)
+            self.assertEqual(fixture.paths(), ["/"])
+
+    def test_mcp_and_path_readiness_script_uses_basic_auth_and_warns_when_tools_are_slow(self) -> None:
         engine = RecordingEngine(
             responses=[
                 ("fetch_mcp_status", FakeResponse(returncode=1)),
@@ -70,16 +88,33 @@ class WebReadinessTests(unittest.TestCase):
                 workspace_name=fixture.paths.identity.workspace_name,
             )
 
-            with self.assertRaises(WebServerError) as caught:
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
                 verify_oh_my_openagent_loaded(engine, fixture.paths, env=fixture.runner_env, credential_flags=environment.opencode_web_credential_flags, wait_seconds=1)
 
             script = "\n".join(run.input_text or "" for run in engine.runs)
             self.assertIn('-u "opencode:${OPENCODE_SERVER_PASSWORD}"', script)
             self.assertIn('"http://127.0.0.1:${port}/mcp"', script)
             self.assertIn('"http://127.0.0.1:${port}/path?directory=/workspace"', script)
-            self.assertEqual(caught.exception.message.count("Relevant OpenCode log lines:"), 1)
-            self.assertIn("Relevant OpenCode log lines:", caught.exception.message)
-            self.assertIn("service=plugin failed", caught.exception.message)
+            self.assertEqual(stderr.getvalue().count("Warning: oh-my-openagent LSP/code navigation MCP tools are still loading."), 1)
+            self.assertEqual(stderr.getvalue().count("Relevant OpenCode log lines:"), 1)
+            self.assertIn("service=plugin failed", stderr.getvalue())
+
+    def test_readiness_script_failure_status_warns_and_continues(self) -> None:
+        engine = RecordingEngine(
+            responses=[
+                ("fetch_mcp_status", FakeResponse(returncode=2)),
+                ("pattern=", FakeResponse(stdout="service=plugin oh-my-openagent failed to load\n")),
+            ]
+        )
+        with runtime_workspace(engine=engine) as fixture:
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                verify_oh_my_openagent_loaded(engine, fixture.paths, env=fixture.runner_env, wait_seconds=1)
+
+            self.assertEqual(stderr.getvalue().count("Warning: oh-my-openagent LSP/code navigation MCP tools are still loading."), 1)
+            self.assertEqual(stderr.getvalue().count("Relevant OpenCode log lines:"), 1)
+            self.assertIn("service=plugin oh-my-openagent failed", stderr.getvalue())
 
 
 class WebPlanningTests(unittest.TestCase):
@@ -146,7 +181,7 @@ class WebPlanningTests(unittest.TestCase):
             )
             plan = plan_opencode_web_server(fixture.paths, environment.exec_env_flags, environment.opencode_web_credential_flags, "plain")
 
-            self.assertTrue(restart.required)
+            self.assertFalse(restart.required)
             self.assertIn("Headroom mode changed", messages[0])
             self.assertIn("Restarting OpenCode web server so package/config repairs take effect", restart_messages[0])
             self.assertEqual(plugin_messages, ())
@@ -222,6 +257,32 @@ def close_once_http_server() -> Iterator[AuthFixture]:
             self.end_headers()
             self.wfile.write(b"ok")
 
+        def log_message(self, format: str, *args: object) -> None:
+            del format, args
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield AuthFixture(server, thread, seen)
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+        server.server_close()
+
+
+@contextmanager
+def response_http_server(responses: Mapping[str, bytes]) -> Iterator[AuthFixture]:
+    seen: list[tuple[str, str]] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            seen.append((self.path, self.headers.get("Authorization", "")))
+            self.send_response(200)
+            self.end_headers()
+            _ = self.wfile.write(responses.get(self.path, b""))
+
+        @override
         def log_message(self, format: str, *args: object) -> None:
             del format, args
 

@@ -54,7 +54,7 @@ class LifecycleCharacterizationTests(unittest.TestCase):
                 result = run_launcher(workspace, command, env=host_env(workspace))
 
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertIn("Ensuring OpenCode web server is running", result.stdout)
+                self.assertIn("==> Ensuring OpenCode web server is running", result.stdout)
                 docker = engine_records(workspace, "docker")
                 self.assertNotIn("run", subcommands(docker))
                 self.assertNotIn("start", subcommands(docker))
@@ -106,12 +106,14 @@ class LifecycleCharacterizationTests(unittest.TestCase):
                 self.assertTrue(sentinel.exists())
                 docker = engine_records(workspace, "docker")
                 self.assertIn("cp", subcommands(docker))
-                self.assertIn("stop", subcommands(docker))
                 self.assertIn("rm", subcommands(docker))
                 if command == "purge":
+                    self.assertNotIn("stop", subcommands(docker))
+                    self.assertTrue(any(record["argv"][1:3] == ["rm", "-f"] for record in docker))
                     self.assertIn("rmi", subcommands(docker))
                     self.assertIn(["docker", "image", "prune", "-f", "--filter", "dangling=true"], argv_list(docker))
                 else:
+                    self.assertIn("stop", subcommands(docker))
                     self.assertNotIn("rmi", subcommands(docker))
 
     def test_engine_selection_prefers_podman_and_falls_back_to_docker_only(self) -> None:

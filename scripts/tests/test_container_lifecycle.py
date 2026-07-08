@@ -3,7 +3,8 @@ from __future__ import annotations
 import os
 import sys
 import unittest
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
@@ -17,6 +18,7 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 from overlord_py.container_lifecycle import (  # noqa: E402
     LifecycleError,
+    SETUP_SCRIPT_CONTAINER_PATH,
     build_container_run_args,
     container_state,
     ensure_image,
@@ -24,7 +26,7 @@ from overlord_py.container_lifecycle import (  # noqa: E402
     fresh,
     purge,
 )
-from overlord_py.engine import ContainerEngine  # noqa: E402
+from overlord_py.engine import CommandResult, ContainerEngine  # noqa: E402
 from overlord_py.env_builder import build_environment_plan  # noqa: E402
 from overlord_py.paths import WorkspacePaths, build_workspace_paths  # noqa: E402
 
@@ -56,6 +58,9 @@ class ContainerLifecycleTests(unittest.TestCase):
             traversal_dir = fixture.paths.workspace / "needs-traversal"
             traversal_dir.mkdir()
             traversal_dir.chmod(0o600)
+            external_dir = fixture.paths.workspace.parent / "external-tool-dir"
+            external_dir.mkdir(mode=0o700)
+            (fixture.paths.workspace / "linked-tool-dir").symlink_to(external_dir, target_is_directory=True)
             result = ensure_running(fixture.engine, fixture.paths, fixture.environment.exec_env_flags, env=fixture.runner_env, home=fixture.home)
 
             records = fixture.records()
@@ -79,6 +84,7 @@ class ContainerLifecycleTests(unittest.TestCase):
             self.assertEqual(run[-3:], [f"localhost/{fixture.paths.identity.image_name}:latest", "sleep", "infinity"])
             self.assertEqual((fixture.paths.workspace / ".gitignore").read_text(encoding="utf-8"), ".overlord/\n")
             self.assertTrue(traversal_dir.stat().st_mode & 0o111)
+            self.assertEqual(external_dir.stat().st_mode & 0o777, 0o700)
             self.assertTrue(setup)
             self.assertIn("env", setup[0])
             self.assertIn("-i", setup[0])
@@ -86,6 +92,17 @@ class ContainerLifecycleTests(unittest.TestCase):
             self.assertIn("DEBIAN_FRONTEND=noninteractive", setup[0])
             self.assertNotIn("sentinel-azure-secret", " ".join(setup[0]))
             self.assertTrue(any(record["argv"][1:3] == ["exec", fixture.paths.identity.container_name] and "chown -R overlord:overlord" in " ".join(record["argv"]) for record in records))
+
+    def test_setup_script_failure_warns_repairs_ownership_and_continues(self) -> None:
+        with lifecycle_workspace(state="missing", setup_script=True) as fixture:
+            engine = SetupFailureEngine(fixture.paths.identity.container_name)
+
+            result = ensure_running(engine, fixture.paths, fixture.environment.exec_env_flags, env=fixture.runner_env, home=fixture.home)
+
+            self.assertTrue(result.setup_ran)
+            self.assertIn("Warning: repo-controlled setup failed: /workspace/setup-devcontainer.sh", "\n".join(result.messages))
+            self.assertIn("curl: (22) The requested URL returned error: 404", "\n".join(result.messages))
+            self.assertTrue(any("chown -R overlord:overlord" in " ".join(args) for args in engine.runs))
 
     def test_missing_container_without_optional_mounts_or_setup_skips_repo_setup(self) -> None:
         with lifecycle_workspace(state="missing") as fixture:
@@ -174,16 +191,20 @@ class ContainerLifecycleTests(unittest.TestCase):
             self.assertIn("rmi", subcommands(fixture.records()))
             self.assertIn(["docker", "image", "prune", "-f", "--filter", "dangling=true"], argv_list(fixture.records()))
 
-    def test_purge_failure_when_image_still_exists_reports_existing_diagnostic(self) -> None:
+    def test_purge_force_removes_stopped_container_before_image(self) -> None:
+        with lifecycle_workspace(state="exited", image_exists=True) as fixture:
+            purge(fixture.engine, fixture.paths, env=fixture.runner_env)
+
+            self.assertIn(["docker", "rm", "-f", fixture.paths.identity.container_name], argv_list(fixture.records()))
+            self.assertIn(["docker", "rmi", "-f", f"localhost/{fixture.paths.identity.image_name}:latest"], argv_list(fixture.records()))
+
+    def test_purge_failure_when_image_removal_fails_reports_runtime_error(self) -> None:
         with lifecycle_workspace(state="running", image_exists=True, rmi_fails=True) as fixture:
             with self.assertRaises(LifecycleError) as caught:
                 purge(fixture.engine, fixture.paths, env=fixture.runner_env)
 
-            self.assertEqual(caught.exception.status, 1)
-            self.assertIn("Warning: image removal command reported a failure; verifying final image state...", caught.exception.message)
-            self.assertIn(f"Error: image {fixture.paths.identity.image_name} still exists after purge; rebuild is not guaranteed.", caught.exception.message)
+            self.assertEqual(caught.exception.message, "Error: failed to remove image: rmi failed")
             self.assertNotIn("prune", subcommands(fixture.records()))
-            self.assertEqual(first_record(fixture.records()[subcommands(fixture.records()).index("rmi") + 1 :], "image")["argv"][1:3], ["image", "inspect"])
 
 
 class LifecycleFixture:
@@ -241,6 +262,32 @@ class lifecycle_workspace:
 
     def __exit__(self, exc_type: type[BaseException] | None, exc_value: BaseException | None, traceback: object) -> None:
         self._workspace.__exit__(exc_type, exc_value, None)
+
+
+@dataclass(frozen=True, slots=True)
+class SetupFailureEngine(ContainerEngine):
+    runs: list[list[str]]
+
+    def __init__(self, _container_name: str) -> None:
+        ContainerEngine.__init__(self, "docker")
+        object.__setattr__(self, "runs", [])
+
+    def run(
+        self,
+        args: Sequence[str],
+        *,
+        cwd: Path,
+        env: Mapping[str, str],
+        input_text: str | None = None,
+    ) -> CommandResult:
+        del cwd, env, input_text
+        args_list = [*args]
+        self.runs.append(args_list)
+        if args_list[:2] == ["inspect", "--format"]:
+            return CommandResult(argv=self.argv(args_list), returncode=1, stdout="", stderr="")
+        if SETUP_SCRIPT_CONTAINER_PATH in args_list:
+            return CommandResult(argv=self.argv(args_list), returncode=22, stdout="", stderr="curl: (22) The requested URL returned error: 404\n")
+        return CommandResult(argv=self.argv(args_list), returncode=0, stdout="", stderr="")
 
 
 def subcommands(records: list[CommandRecord]) -> list[str]:

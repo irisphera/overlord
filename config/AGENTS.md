@@ -43,7 +43,7 @@ Headroom mode must not make checked-in config a second Headroom authority. Any H
 
 - Config catalog/routing edits: run `overlord --list-configs`, then use `overlord fresh && overlord --config <preset>` to verify the selected routing preset is re-injected.
 - Headroom-related docs or launcher edits: run protected diffs for `config/opencode.json` and `config/oh-my-openagent*.jsonc`; they should stay unchanged unless the task explicitly edits config.
-- `entrypoint.sh` edits: use `overlord fresh && overlord` to force a clean bootstrap pass.
+- `entrypoint.sh` edits: use `overlord purge && overlord` because the entrypoint is copied into the image; `fresh` alone reuses a stale image.
 - Dockerfile image edits: use `overlord purge && overlord` so the image is rebuilt.
 
 ## ANTI-PATTERNS

@@ -241,6 +241,12 @@ Headroom uses the same runtime credential boundary. Provider credentials are sti
 overlord fresh && overlord
 ```
 
+If you just updated Overlord's image or bootstrap files, including `config/entrypoint.sh`, rebuild the image instead:
+
+```bash
+overlord purge && overlord
+```
+
 **Existing container does not expose the web port:**
 ```bash
 overlord fresh

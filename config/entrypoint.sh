@@ -18,6 +18,7 @@ fi
 # mounts with split ownership).
 OVERLORD_UID=$(id -u overlord)
 OVERLORD_GID=$(id -g overlord)
+AUTO_DETECTED=false
 
 # --- Resolve target UID/GID ---
 if [ -n "${HOST_UID}" ] && [ -n "${HOST_GID}" ]; then
@@ -25,6 +26,7 @@ if [ -n "${HOST_UID}" ] && [ -n "${HOST_GID}" ]; then
 	TARGET_GID="${HOST_GID}"
 	echo "[entrypoint] using HOST_UID=${TARGET_UID} HOST_GID=${TARGET_GID} (explicit)"
 else
+	AUTO_DETECTED=true
 	# Auto-detect from workspace contents.
 	# GID: from workspace directory (where we need to create new files/dirs)
 	TARGET_GID=$(stat -c '%g' /workspace 2>/dev/null || echo "")
@@ -32,9 +34,9 @@ else
 	# UID: sample from depth >= 2 to skip root-level files that are often
 	# created by the container (owned by root/777) rather than the host.
 	TARGET_UID=""
-	SAMPLE_FILE=$(find /workspace -mindepth 2 -maxdepth 5 -type f -print -quit 2>/dev/null)
+	SAMPLE_FILE=$(find /workspace -mindepth 2 -maxdepth 5 \( -path '/workspace/.omo/*' -o -path '/workspace/.overlord/*' -o -name '.DS_Store' \) -prune -o -type f -print -quit 2>/dev/null)
 	if [ -z "${SAMPLE_FILE}" ]; then
-		SAMPLE_FILE=$(find /workspace -maxdepth 3 -type f -print -quit 2>/dev/null)
+		SAMPLE_FILE=$(find /workspace -maxdepth 3 \( -path '/workspace/.omo/*' -o -path '/workspace/.overlord/*' -o -name '.DS_Store' \) -prune -o -type f -print -quit 2>/dev/null)
 	fi
 	if [ -n "${SAMPLE_FILE}" ]; then
 		TARGET_UID=$(stat -c '%u' "${SAMPLE_FILE}" 2>/dev/null || echo "")
@@ -44,6 +46,17 @@ else
 		TARGET_UID=$(stat -c '%u' /workspace 2>/dev/null || echo "")
 	fi
 	echo "[entrypoint] auto-detected UID=${TARGET_UID:-?} GID=${TARGET_GID:-?} (sample: ${SAMPLE_FILE:-<none>})"
+fi
+
+if [ "${AUTO_DETECTED}" = true ]; then
+	if [ "${TARGET_UID}" = "0" ]; then
+		echo "[entrypoint] ignoring auto-detected root UID=0; keeping overlord UID=${OVERLORD_UID}"
+		TARGET_UID="${OVERLORD_UID}"
+	fi
+	if [ "${TARGET_GID}" = "0" ]; then
+		echo "[entrypoint] ignoring auto-detected root GID=0; keeping overlord GID=${OVERLORD_GID}"
+		TARGET_GID="${OVERLORD_GID}"
+	fi
 fi
 
 # --- Apply remap if needed ---

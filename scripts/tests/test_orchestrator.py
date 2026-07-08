@@ -25,9 +25,32 @@ class OrchestratorEntrypointTests(unittest.TestCase):
             result = run_python(workspace, env=host_env(workspace))
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn("Building overlord image", result.stdout)
-            self.assertIn("Creating container overlord-", result.stdout)
+            assert_contains_ordered(
+                self,
+                result.stdout.splitlines(),
+                [
+                    "==> Checking local Overlord image...",
+                    f"==> Building overlord image from {SCRIPTS_DIR.parent}...",
+                    "==> Checking container state for overlord-",
+                    "==> Creating container overlord-",
+                    "==> Injecting initial runtime config...",
+                    "==> Checking OpenCode CLI package opencode-ai@latest in overlord-",
+                    "==> Checking oh-my-openagent runtime config...",
+                    "==> Checking OpenCode plugin package oh-my-openagent@4.11.1 in overlord-",
+                    "==> Checking CodeGraph CLI package @colbymchenry/codegraph@1.0.1 in overlord-",
+                    "==> Stopping Headroom proxy for plain OpenCode mode in overlord-",
+                    "==> Checking default OpenCode skills from mattpocock/skills#v1.0.1 in overlord-",
+                    "==> Restarting OpenCode web server in overlord-",
+                    "==> Ensuring OpenCode web server is running in overlord-",
+                    "==> Resolving published OpenCode web port for overlord-",
+                    "==> Waiting for OpenCode health endpoint...",
+                    "==> Waiting for OpenCode web UI...",
+                    "==> Resolving local OpenCode access port...",
+                    "==> Verifying oh-my-openagent MCP readiness...",
+                ],
+            )
             self.assertIn(f"Local access:   http://localhost:{server.port}", result.stdout)
+            self.assertEqual(result.stdout.count("==> Restarting OpenCode web server in overlord-"), 1)
             docker = engine_records(workspace, "docker")
             assert_subcommands_in_order(
                 self,
@@ -52,6 +75,16 @@ class OrchestratorEntrypointTests(unittest.TestCase):
             self.assertFalse(any("/workspace/setup-devcontainer.sh" in record["argv"] for record in docker))
             self.assertLess(index_of(docker, "inspect"), index_of(docker, "port"))
             self.assertLess(index_of_fragment(docker, "opencode-ai"), index_of(docker, "port"))
+            assert_contains_ordered(
+                self,
+                result.stdout.splitlines(),
+                [
+                    "==> Checking OpenCode web restart need for Headroom mode in overlord-",
+                    "==> Checking default OpenCode skills from mattpocock/skills#v1.0.1 in overlord-",
+                    "==> Checking OpenCode web restart need for plugin environment in overlord-",
+                    "==> Checking OpenCode web restart need for workspace project cache in overlord-",
+                ],
+            )
 
     def test_fresh_and_purge_dispatch_before_image_build_or_runtime_repair(self) -> None:
         for command in ("fresh", "purge"):
@@ -68,8 +101,12 @@ class OrchestratorEntrypointTests(unittest.TestCase):
                 docker = engine_records(workspace, "docker")
                 self.assertNotIn("build", subcommands(docker))
                 self.assertNotIn("exec", subcommands(docker))
-                self.assertIn("stop", subcommands(docker))
                 self.assertIn("rm", subcommands(docker))
+                if command == "purge":
+                    self.assertNotIn("stop", subcommands(docker))
+                    self.assertTrue(any(record["argv"][1:3] == ["rm", "-f"] for record in docker))
+                else:
+                    self.assertIn("stop", subcommands(docker))
 
     def test_shell_and_zellij_final_exec_shapes_match_bash(self) -> None:
         expectations = {
@@ -88,6 +125,8 @@ class OrchestratorEntrypointTests(unittest.TestCase):
                 assert_contains_ordered(self, final_exec, expected_tail)
                 self.assertIn("OVERLORD_WORKSPACE=My Project!", final_exec)
                 self.assertIn("HEADROOM_TELEMETRY=off", final_exec)
+                self.assertIn("==> Opening", result.stdout)
+                self.assertIn("in overlord-my-project-", result.stdout)
 
     def test_unexpected_state_returns_nonzero_before_runtime_config_or_packages(self) -> None:
         with python_workspace(state="paused", image_exists=True) as workspace:
@@ -215,7 +254,12 @@ def assert_subcommands_in_order(test_case: unittest.TestCase, records: list[Comm
 def assert_contains_ordered(test_case: unittest.TestCase, values: list[str], expected: list[str]) -> None:
     cursor = 0
     for item in expected:
-        cursor = values.index(item, cursor) + 1
+        for index in range(cursor, len(values)):
+            if item in values[index]:
+                cursor = index + 1
+                break
+        else:
+            test_case.fail(f"Missing ordered item after index {cursor}: {item}")
 
 
 if __name__ == "__main__":

@@ -8,12 +8,14 @@ import os
 from pathlib import Path
 from typing import Final
 
+from overlord_py.container_run_args import build_container_run_args
+from overlord_py.docker_bind_sources import resolve_bind_source_paths
 from overlord_py.engine import CommandResult, ContainerEngine
 from overlord_py.paths import WorkspacePaths
+from overlord_py.progress import StageReporter, noop_stage, report_stage, stage_return_message
 from overlord_py.state import clear_persisted_opencode_server_state, ensure_state_dir
 
 RESPONSIBILITY: Final = "preserve image/container lifecycle, mounts, setup timing, and removal semantics"
-OPENCODE_WEB_PORT: Final = "4090"
 CONTAINER_HOME: Final = "/home/overlord"
 SETUP_SCRIPT_CONTAINER_PATH: Final = "/workspace/setup-devcontainer.sh"
 ROOT_SETUP_ENV: Final = (
@@ -25,20 +27,10 @@ ROOT_SETUP_ENV: Final = (
     "UV_CACHE_DIR=/root/.cache/uv",
     "PATH=/usr/local/.safe-chain/shims:/usr/local/.safe-chain/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/overlord/.bun/bin:/home/overlord/.local/bin",
 )
-SETUP_OWNERSHIP_REPAIR_SCRIPT: Final = """
-    chown -R overlord:overlord \
-        /home/overlord/.cache \
-        /home/overlord/.config \
-        /home/overlord/.local \
-        /home/overlord/.npm \
-        2>/dev/null || true
-    chmod -R a+rwX \
-        /home/overlord/.cache \
-        /home/overlord/.config \
-        /home/overlord/.local \
-        /home/overlord/.npm \
-        2>/dev/null || true
-"""
+SETUP_OWNERSHIP_REPAIR_SCRIPT: Final = (
+    "chown -R overlord:overlord /home/overlord/.cache /home/overlord/.config /home/overlord/.local /home/overlord/.npm 2>/dev/null || true\n"
+    "chmod -R a+rwX /home/overlord/.cache /home/overlord/.config /home/overlord/.local /home/overlord/.npm 2>/dev/null || true\n"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,23 +49,21 @@ class EnsureRunningResult:
     messages: tuple[str, ...]
 
 
-def describe() -> str:
-    return RESPONSIBILITY
-
-
 def local_image_ref(paths: WorkspacePaths) -> str:
     return f"localhost/{paths.identity.image_name}:latest"
 
 
-def ensure_image(engine: ContainerEngine, paths: WorkspacePaths, *, env: Mapping[str, str]) -> tuple[str, ...]:
+def ensure_image(engine: ContainerEngine, paths: WorkspacePaths, *, env: Mapping[str, str], stage: StageReporter = noop_stage) -> tuple[str, ...]:
+    stage("Checking local Overlord image...")
     image = engine.run(["image", "inspect", local_image_ref(paths)], cwd=paths.workspace, env=env)
     if image.returncode == 0:
         return ()
     message = f"Building overlord image from {paths.repo_root}..."
+    stage(message)
     build_args = ["build", *(("--load",) if engine.name == "docker" else ()), "-t", local_image_ref(paths), str(paths.repo_root)]
     build = engine.run(build_args, cwd=paths.workspace, env=env)
     require_success(build, "build image")
-    return (message,)
+    return stage_return_message(stage, message)
 
 
 def container_state(engine: ContainerEngine, paths: WorkspacePaths, *, env: Mapping[str, str]) -> str:
@@ -84,10 +74,7 @@ def container_state(engine: ContainerEngine, paths: WorkspacePaths, *, env: Mapp
     )
     if result.returncode != 0:
         return "missing"
-    state = result.stdout.strip()
-    if state:
-        return state
-    return "missing"
+    return result.stdout.strip() or "missing"
 
 
 def ensure_running(
@@ -97,22 +84,28 @@ def ensure_running(
     *,
     env: Mapping[str, str],
     home: Path | None = None,
+    stage: StageReporter = noop_stage,
 ) -> EnsureRunningResult:
+    stage(f"Checking container state for {paths.identity.container_name}...")
     state = container_state(engine, paths, env=env)
     messages: list[str] = []
     setup_allowed = True
     match state:
         case "missing":
-            messages.append(f"Creating container {paths.identity.container_name}...")
+            message = f"Creating container {paths.identity.container_name}..."
+            messages.extend(report_stage(stage, message))
             ensure_state_dir(paths.state)
+            host_home = Path.home() if home is None else home
+            bind_sources = resolve_bind_source_paths(engine, paths, env=env, home=host_home)
             run = engine.run(
-                ["run", *build_container_run_args(paths, exec_env_flags, home=home), local_image_ref(paths), "sleep", "infinity"],
+                ["run", *build_container_run_args(paths, exec_env_flags, home=host_home, bind_sources=bind_sources), local_image_ref(paths), "sleep", "infinity"],
                 cwd=paths.workspace,
                 env=env,
             )
             require_success(run, "create container")
         case "exited":
-            messages.append(f"Starting container {paths.identity.container_name}...")
+            message = f"Starting container {paths.identity.container_name}..."
+            messages.extend(report_stage(stage, message))
             start = engine.run(["start", paths.identity.container_name], cwd=paths.workspace, env=env)
             require_success(start, "start container")
         case "running":
@@ -123,87 +116,54 @@ def ensure_running(
             )
     if not setup_allowed:
         return EnsureRunningResult(state_before=state, setup_ran=False, messages=tuple(messages))
+    stage(f"Repairing workspace traversal permissions for {paths.workspace}...")
     chmod_workspace_for_rootless_podman(paths.workspace)
-    setup_messages, setup_ran = run_workspace_setup_script(engine, paths, env=env)
+    stage("Checking repo setup script...")
+    setup_messages, setup_ran = run_workspace_setup_script(engine, paths, env=env, stage=stage)
     messages.extend(setup_messages)
     return EnsureRunningResult(state_before=state, setup_ran=setup_ran, messages=tuple(messages))
 
 
-def build_container_run_args(
-    paths: WorkspacePaths,
-    exec_env_flags: Sequence[str],
-    *,
-    home: Path | None = None,
-) -> list[str]:
-    host_home = Path.home() if home is None else home
-    args = [
-        "-d",
-        "--name",
-        paths.identity.container_name,
-        "--add-host=host.docker.internal:host-gateway",
-        "--security-opt",
-        "label=disable",
-        "--security-opt",
-        "seccomp=unconfined",
-        "-v",
-        f"{paths.workspace}:/workspace:rw",
-        "-v",
-        "/var/run/docker.sock:/var/run/docker.sock",
-        "-v",
-        f"{paths.state.opencode_data}:/home/overlord/.local/share/opencode",
-        "-v",
-        f"{paths.state.zsh_data}:/home/overlord/.zsh_data",
-        "-p",
-        f"0.0.0.0::{OPENCODE_WEB_PORT}",
-        *exec_env_flags,
-    ]
-    gitconfig = host_home / ".gitconfig"
-    ssh_dir = host_home / ".ssh"
-    if gitconfig.is_file():
-        args.extend(("-v", f"{gitconfig}:/home/overlord/.gitconfig:ro"))
-    if ssh_dir.is_dir():
-        args.extend(("-v", f"{ssh_dir}:/home/overlord/.ssh:ro"))
-    return args
-
-
-def fresh(engine: ContainerEngine, paths: WorkspacePaths, *, env: Mapping[str, str]) -> tuple[str, ...]:
-    messages = [*backup_container_data(engine, paths, env=env)]
+def fresh(engine: ContainerEngine, paths: WorkspacePaths, *, env: Mapping[str, str], stage: StageReporter = noop_stage) -> tuple[str, ...]:
+    messages = [*backup_container_data(engine, paths, env=env, stage=stage)]
     clear_persisted_opencode_server_state(paths.state)
-    messages.append(f"Removing container {paths.identity.container_name}...")
+    stop_message = f"Stopping container {paths.identity.container_name}..."
+    messages.extend(report_stage(stage, stop_message))
     ignore_failure(engine.run(["stop", paths.identity.container_name], cwd=paths.workspace, env=env))
+    remove_message = f"Removing container {paths.identity.container_name}..."
+    messages.extend(report_stage(stage, remove_message))
     ignore_failure(engine.run(["rm", paths.identity.container_name], cwd=paths.workspace, env=env))
     messages.append("Done. Run 'overlord' to start fresh.")
     return tuple(messages)
 
 
-def purge(engine: ContainerEngine, paths: WorkspacePaths, *, env: Mapping[str, str]) -> tuple[str, ...]:
-    messages = [*backup_container_data(engine, paths, env=env)]
-    messages.append(f"==> Removing container {paths.identity.container_name}...")
-    ignore_failure(engine.run(["stop", paths.identity.container_name], cwd=paths.workspace, env=env))
-    ignore_failure(engine.run(["rm", paths.identity.container_name], cwd=paths.workspace, env=env))
+def purge(engine: ContainerEngine, paths: WorkspacePaths, *, env: Mapping[str, str], stage: StageReporter = noop_stage) -> tuple[str, ...]:
+    messages = [*backup_container_data(engine, paths, env=env, stage=stage)]
+    remove_container_message = f"Removing container {paths.identity.container_name}..."
+    messages.extend(report_stage(stage, remove_container_message, f"==> {remove_container_message}"))
+    remove_container = engine.run(["rm", "-f", paths.identity.container_name], cwd=paths.workspace, env=env)
+    require_success(remove_container, "remove container")
     image_ref = local_image_ref(paths)
+    stage(f"Checking image {paths.identity.image_name}...")
     image = engine.run(["image", "inspect", image_ref], cwd=paths.workspace, env=env)
     if image.returncode == 0:
-        messages.append(f"==> Removing image {paths.identity.image_name}...")
-        remove = engine.run(["rmi", image_ref], cwd=paths.workspace, env=env)
-        if remove.returncode != 0:
-            messages.append("Warning: image removal command reported a failure; verifying final image state...")
-        final_image = engine.run(["image", "inspect", image_ref], cwd=paths.workspace, env=env)
-        if final_image.returncode == 0:
-            messages.append(f"Error: image {paths.identity.image_name} still exists after purge; rebuild is not guaranteed.")
-            raise LifecycleError("\n".join(messages))
+        remove_image_message = f"Removing image {paths.identity.image_name}..."
+        messages.extend(report_stage(stage, remove_image_message, f"==> {remove_image_message}"))
+        remove_image = engine.run(["rmi", "-f", image_ref], cwd=paths.workspace, env=env)
+        require_success(remove_image, "remove image")
     else:
         messages.append(f"==> Image {paths.identity.image_name} is already absent.")
-    messages.append("==> Pruning dangling images...")
+    messages.extend(report_stage(stage, "Pruning dangling images...", "==> Pruning dangling images..."))
     ignore_failure(engine.run(["image", "prune", "-f", "--filter", "dangling=true"], cwd=paths.workspace, env=env))
     messages.append("==> Done. Run 'overlord' to rebuild and launch.")
     return tuple(messages)
 
 
-def backup_container_data(engine: ContainerEngine, paths: WorkspacePaths, *, env: Mapping[str, str]) -> tuple[str, ...]:
+def backup_container_data(engine: ContainerEngine, paths: WorkspacePaths, *, env: Mapping[str, str], stage: StageReporter = noop_stage) -> tuple[str, ...]:
     inspect = engine.run(["inspect", paths.identity.container_name], cwd=paths.workspace, env=env)
     if inspect.returncode != 0:
         return ()
+    report_stage(stage, f"Backing up session data from {paths.identity.container_name}...")
     paths.state.opencode_data.mkdir(parents=True, exist_ok=True)
     paths.state.zsh_data.mkdir(parents=True, exist_ok=True)
     ignore_failure(
@@ -220,17 +180,13 @@ def backup_container_data(engine: ContainerEngine, paths: WorkspacePaths, *, env
             env=env,
         )
     )
-    return ("Backing up session data...",)
+    return stage_return_message(stage, "Backing up session data...")
 
 
-def run_workspace_setup_script(
-    engine: ContainerEngine,
-    paths: WorkspacePaths,
-    *,
-    env: Mapping[str, str],
-) -> tuple[tuple[str, ...], bool]:
+def run_workspace_setup_script(engine: ContainerEngine, paths: WorkspacePaths, *, env: Mapping[str, str], stage: StageReporter = noop_stage) -> tuple[tuple[str, ...], bool]:
     if not (paths.workspace / "setup-devcontainer.sh").is_file():
         return (("==> No setup-devcontainer.sh found; skipping repo setup.",), False)
+    stage(f"Running repo-controlled devcontainer setup as root: {SETUP_SCRIPT_CONTAINER_PATH}")
     setup = engine.run(
         [
             "exec",
@@ -249,9 +205,21 @@ def run_workspace_setup_script(
         cwd=paths.workspace,
         env=env,
     )
-    require_success(setup, "run workspace setup")
     repair_workspace_setup_ownership(engine, paths, env=env)
-    return ((f"==> Running repo-controlled devcontainer setup as root: {SETUP_SCRIPT_CONTAINER_PATH}",), True)
+    setup_messages = () if stage is not noop_stage else (f"==> Running repo-controlled devcontainer setup as root: {SETUP_SCRIPT_CONTAINER_PATH}",)
+    if setup.returncode != 0:
+        return ((*setup_messages, setup_failure_warning(setup)), True)
+    return (setup_messages, True)
+
+
+def setup_failure_warning(result: CommandResult) -> str:
+    detail = result.stderr.strip() or result.stdout.strip() or "setup script exited without output"
+    return (
+        f"Warning: repo-controlled setup failed: {SETUP_SCRIPT_CONTAINER_PATH}\n"
+        f"Exit status: {result.returncode}\n"
+        f"{detail}\n"
+        "Continuing OpenCode startup so you can fix setup-devcontainer.sh from inside the workspace."
+    )
 
 
 def repair_workspace_setup_ownership(engine: ContainerEngine, paths: WorkspacePaths, *, env: Mapping[str, str]) -> None:
@@ -259,19 +227,16 @@ def repair_workspace_setup_ownership(engine: ContainerEngine, paths: WorkspacePa
 
 
 def chmod_workspace_for_rootless_podman(workspace: Path) -> None:
-    for root, directories, files in os.walk(workspace):
+    for root, directories, _ in os.walk(workspace):
         root_path = Path(root)
         add_execute_bits(root_path)
         for directory in directories:
             add_execute_bits(root_path / directory)
-        for file_name in files:
-            target = root_path / file_name
-            mode = target.stat().st_mode
-            if mode & 0o111:
-                target.chmod(mode | 0o111)
 
 
 def add_execute_bits(path: Path) -> None:
+    if path.is_symlink():
+        return
     path.chmod(path.stat().st_mode | 0o111)
 
 

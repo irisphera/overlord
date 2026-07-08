@@ -116,11 +116,24 @@ exit 1
 
 RELEVANT_LOG_LINES_SCRIPT: Final = r'''log_file="$1"
 log_dir="$2"
+recent_log_seconds=300
 pattern='oh-my-openagent|oh-my-opencode|service=plugin|service=mcp|service=lsp|key=(websearch|context7|grep_app|lsp|ast_grep|codegraph)|plugin|failed|error|cannot find|not found|config path=|path='
+
+is_recent_log() {
+    candidate="$1"
+    now="$(date +%s)"
+    modified="$(stat -c %Y "${candidate}" 2>/dev/null || printf '0')"
+    [ $((now - modified)) -le "${recent_log_seconds}" ]
+}
+
 if [ -d "${log_dir}" ]; then
-    grep -R -Ei "${pattern}" "${log_dir}" 2>/dev/null | tail -120 || true
+    for candidate in "${log_dir}/opencode.log" "${log_dir}"/*.log; do
+        [ -f "${candidate}" ] || continue
+        is_recent_log "${candidate}" || continue
+        grep -Ei "${pattern}" "${candidate}" 2>/dev/null || true
+    done | tail -120
 fi
-if [ -f "${log_file}" ]; then
+if [ -f "${log_file}" ] && is_recent_log "${log_file}"; then
     grep -Ei "${pattern}" "${log_file}" 2>/dev/null | tail -120 || true
 else
     echo "${log_file} does not exist"

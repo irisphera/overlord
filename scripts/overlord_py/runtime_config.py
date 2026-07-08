@@ -9,6 +9,7 @@ from overlord_py.config_catalog import OpencodeRenderOptions, render_oh_my_runti
 from overlord_py.engine import CommandResult
 from overlord_py.env_builder import EnvironmentPlan, render_overlord_env
 from overlord_py.paths import WorkspacePaths
+from overlord_py.progress import StageReporter, noop_stage, stage_return_message
 
 RESPONSIBILITY: Final = "render and inject OpenCode, oh-my-openagent, zellij, zsh, and env files"
 CONTAINER_HOME: Final = "/home/overlord"
@@ -104,7 +105,9 @@ def inject_initial_runtime_config(
     context: RuntimeConfigContext,
     *,
     env: Mapping[str, str],
+    stage: StageReporter = noop_stage,
 ) -> tuple[str, ...]:
+    stage("Injecting initial runtime config...")
     ensure_runtime_config_dirs(engine, paths, env=env)
     write_runtime_opencode_config(engine, paths, context, env=env)
     write_text(engine, paths, OVERLORD_ENV_FILE, render_overlord_env(context.environment), env=env)
@@ -168,9 +171,11 @@ def ensure_oh_my_openagent_runtime_config(
     restart: RestartState,
     *,
     env: Mapping[str, str],
+    stage: StageReporter = noop_stage,
 ) -> tuple[str, ...]:
     messages: list[str] = []
     repaired = False
+    stage("Checking oh-my-openagent runtime config...")
     config_check = engine.run(
         [
             "exec",
@@ -189,23 +194,29 @@ def ensure_oh_my_openagent_runtime_config(
         input_text=RUNTIME_CONFIG_REPAIR_CHECK_SCRIPT,
     )
     if config_check.returncode != 0:
-        messages.append(
+        message = (
             "Ensuring OpenCode runtime config includes "
             f"{context.opencode_options.plugin_spec} and the selected Headroom overlay state in "
             f"{paths.identity.container_name}..."
         )
+        stage(message.replace("Ensuring", "Repairing", 1).replace("includes", "to include", 1))
+        messages.extend(stage_return_message(stage, message))
         write_runtime_opencode_config(engine, paths, context, env=env)
         repaired = True
     if runtime_file_missing(engine, paths, RUNTIME_OH_MY_OPENAGENT_CONFIG_FILE, env=env):
-        messages.append(f"Ensuring oh-my-openagent routing config in {paths.identity.container_name}...")
+        stage(f"Repairing oh-my-openagent routing config in {paths.identity.container_name}...")
+        message = f"Ensuring oh-my-openagent routing config in {paths.identity.container_name}..."
+        messages.extend(stage_return_message(stage, message))
         content = render_oh_my_runtime_config(context.oh_my_config_file, model_override=context.model_override)
         write_text(engine, paths, RUNTIME_OH_MY_OPENAGENT_CONFIG_FILE, content, env=env)
         repaired = True
     if runtime_file_missing(engine, paths, RUNTIME_OH_MY_OPENCODE_CONFIG_FILE, env=env):
+        stage(f"Repairing oh-my-opencode compatibility routing config in {paths.identity.container_name}...")
         content = render_oh_my_runtime_config(context.oh_my_config_file, model_override=context.model_override)
         write_text(engine, paths, RUNTIME_OH_MY_OPENCODE_CONFIG_FILE, content, env=env)
         repaired = True
     if repaired:
+        stage("Repairing runtime config permissions...")
         chown = engine.run(
             ["exec", paths.identity.container_name, "sh", "-c", f"chown -R overlord:overlord {RUNTIME_OPENCODE_CONFIG_DIR} 2>/dev/null || true"],
             cwd=paths.workspace,

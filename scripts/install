@@ -35,6 +35,10 @@ CODEGRAPH_INSTALL_DIR="${HOME}/.omo/codegraph"
 CODEGRAPH_BIN="${LOCAL_BIN_DIR}/codegraph"
 CODEGRAPH_NODE_BIN="$(command -v node 2>/dev/null || true)"
 
+stage() {
+	printf '==> %s\n' "$1"
+}
+
 show_help() {
 	cat <<'USAGE'
 install - Install Overlord's OpenCode setup directly on this machine
@@ -227,6 +231,7 @@ write_opencode_config() {
 	local tmp_file
 	local escaped_model
 
+	stage "Installing OpenCode provider catalog..."
 	tmp_file="$(mktemp)"
 	if [[ -n "${LMS_MODEL}" ]]; then
 		escaped_model="$(escape_sed_replacement "${LMS_MODEL}")"
@@ -244,6 +249,7 @@ write_oh_my_config() {
 	local tmp_file
 	local escaped_override
 
+	stage "Installing oh-my-openagent routing configs..."
 	tmp_file="$(mktemp)"
 	if [[ -n "${MODEL_OVERRIDE}" ]]; then
 		escaped_override="$(escape_sed_replacement "${MODEL_OVERRIDE}")"
@@ -257,6 +263,7 @@ write_oh_my_config() {
 }
 
 write_zellij_config() {
+	stage "Installing zellij config..."
 	install_file "${OVERLORD_DIR}/config/zellij-config.kdl" "${RUNTIME_ZELLIJ_CONFIG_FILE}" 644
 }
 
@@ -280,6 +287,7 @@ write_env_file() {
 		OPENCODE_SERVER_PASSWORD
 	)
 
+	stage "Writing OpenCode environment file..."
 	: "${LMSTUDIO_BASE_URL:=http://localhost:1234/v1}"
 	: "${LMSTUDIO_API_KEY:=lm-studio}"
 	: "${UV_CACHE_DIR:=${XDG_CACHE_HOME}/uv}"
@@ -319,6 +327,7 @@ write_env_file() {
 }
 
 ensure_bun() {
+	stage "Checking Bun for native package installation..."
 	export BUN_INSTALL
 	export PATH="${LOCAL_BIN_DIR}:${BUN_INSTALL}/bin:${PATH}"
 
@@ -334,7 +343,7 @@ ensure_opencode_package() {
 	local opencode_bin
 	local installed_version
 
-	echo "Ensuring OpenCode CLI package opencode-ai@${OPENCODE_REQUIRED_VERSION}..."
+	stage "Installing OpenCode CLI package opencode-ai@${OPENCODE_REQUIRED_VERSION}..."
 	bun add -g "opencode-ai@${OPENCODE_REQUIRED_VERSION}"
 	opencode_bin="${BUN_INSTALL}/bin/opencode"
 	if [[ -x "${opencode_bin}" ]]; then
@@ -356,7 +365,7 @@ ensure_oh_my_openagent_package() {
 	canonical_bin="${OH_MY_OPENAGENT_CACHE_DIR}/node_modules/.bin/oh-my-openagent"
 	fallback_bin="${package_dir}/bin/oh-my-opencode.js"
 
-	echo "Ensuring OpenCode plugin package ${OH_MY_OPENAGENT_PACKAGE}..."
+	stage "Installing OpenCode plugin package ${OH_MY_OPENAGENT_PACKAGE}..."
 	mkdir -p "${OH_MY_OPENAGENT_CACHE_DIR}" "${LOCAL_BIN_DIR}"
 	cd "${OH_MY_OPENAGENT_CACHE_DIR}"
 	if [[ ! -f package.json ]]; then
@@ -381,7 +390,7 @@ ensure_codegraph_package() {
 	local codegraph_bin
 	local installed_version
 
-	echo "Ensuring CodeGraph CLI package ${CODEGRAPH_PACKAGE}..."
+	stage "Installing CodeGraph CLI package ${CODEGRAPH_PACKAGE}..."
 	bun add -g "${CODEGRAPH_PACKAGE}"
 	codegraph_bin="${BUN_INSTALL}/bin/codegraph"
 	if [[ ! -x "${codegraph_bin}" ]]; then
@@ -394,6 +403,7 @@ ensure_codegraph_package() {
 }
 
 warn_path() {
+	stage "Checking PATH for native command shims..."
 	case ":${PATH}:" in
 	*":${LOCAL_BIN_DIR}:"*) ;;
 	*)
@@ -460,6 +470,7 @@ main() {
 		exit 0
 	fi
 
+	stage "Resolving native installer configuration..."
 	CONFIG_FILE="${OVERLORD_DIR}/config/${OPENCODE_CONFIG_NAME}"
 	if ! is_opencode_config_file "${CONFIG_FILE}"; then
 		echo "Error: ${CONFIG_FILE} is not a valid OpenCode provider catalog from config/" >&2
@@ -490,16 +501,18 @@ main() {
 		ensure_opencode_package
 		ensure_oh_my_openagent_package
 		ensure_codegraph_package
+		stage "Checking zellij availability..."
 		if ! command -v zellij >/dev/null 2>&1 && [[ ! -x "${LOCAL_BIN_DIR}/zellij" ]]; then
 			echo "Warning: zellij is not installed. Install it separately if you want the zellij escape hatch." >&2
 		fi
 	else
+		stage "Skipping native package installation..."
 		mkdir -p "${OH_MY_OPENAGENT_CACHE_DIR}" "${LOCAL_BIN_DIR}"
 		echo "Skipped package installation."
 	fi
 
 	warn_path
-	echo "Host OpenCode install complete."
+	stage "Native OpenCode install complete."
 	echo "Runtime config: ${RUNTIME_OPENCODE_CONFIG_DIR}"
 	echo "Env file:       ${RUNTIME_ENV_FILE}"
 }

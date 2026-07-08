@@ -113,8 +113,37 @@ tr '\000' '\n' < "/proc/${pid}/environ" | grep -qx "HOME=${container_home}" && \
     tr '\000' '\n' < "/proc/${pid}/environ" | grep -qx "XDG_CONFIG_HOME=${container_home}/.config" && \
     tr '\000' '\n' < "/proc/${pid}/environ" | grep -qx "XDG_CACHE_HOME=${container_home}/.cache" && \
     tr '\000' '\n' < "/proc/${pid}/environ" | grep -qx "XDG_DATA_HOME=${container_home}/.local/share" && \
-    tr '\000' '\n' < "/proc/${pid}/environ" | grep -qx "XDG_STATE_HOME=${container_home}/.local/state" && \
-    tr '\000' '\n' < "/proc/${pid}/environ" | grep -qx "CODEGRAPH_INSTALL_DIR=${codegraph_install_dir}" && \
-    tr '\000' '\n' < "/proc/${pid}/environ" | grep -qx "OMO_CODEGRAPH_BIN=${codegraph_bin}" && \
-    tr '\000' '\n' < "/proc/${pid}/environ" | grep -qx "CODEGRAPH_NODE_BIN=${codegraph_node_bin}"
+	tr '\000' '\n' < "/proc/${pid}/environ" | grep -qx "XDG_STATE_HOME=${container_home}/.local/state" && \
+	tr '\000' '\n' < "/proc/${pid}/environ" | grep -qx "CODEGRAPH_INSTALL_DIR=${codegraph_install_dir}" && \
+	tr '\000' '\n' < "/proc/${pid}/environ" | grep -qx "OMO_CODEGRAPH_BIN=${codegraph_bin}" && \
+	tr '\000' '\n' < "/proc/${pid}/environ" | grep -qx "CODEGRAPH_NODE_BIN=${codegraph_node_bin}"
+'''
+
+REQUEST_RESTART_IF_WORKSPACE_PROJECT_STALE_SCRIPT: Final = r'''pid_file="$1"
+port="$2"
+workspace_dir="$3"
+
+if [ ! -s "${pid_file}" ]; then
+    exit 0
+fi
+pid="$(cat "${pid_file}" 2>/dev/null || true)"
+if [ -z "${pid}" ] || ! kill -0 "${pid}" 2>/dev/null; then
+    exit 0
+fi
+if [ ! -r "${workspace_dir}/.git/opencode" ]; then
+    exit 0
+fi
+
+workspace_project_is_stale() {
+    path_response="$(curl --silent --fail --max-time 5 \
+        -H "x-opencode-directory: ${workspace_dir}" \
+        "http://127.0.0.1:${port}/path?directory=${workspace_dir}" 2>/dev/null || true)"
+    [ -n "${path_response}" ] || return 1
+    printf '%s' "${path_response}" | grep -Eq '"worktree"[[:space:]]*:[[:space:]]*"/"'
+}
+
+if workspace_project_is_stale; then
+    exit 1
+fi
+exit 0
 '''

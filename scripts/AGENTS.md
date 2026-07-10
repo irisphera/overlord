@@ -30,7 +30,7 @@ Headroom runtime behavior belongs to `scripts/overlord` only. The native install
 | Change Headroom runtime overlay | `ensure_runtime_config_dirs` and runtime config writer in `overlord` | Generated container files only; checked-in config remains authority |
 | Change `--config` selection rules | routing preset validation, arg parsing | Selects checked-in `oh-my-openagent*.jsonc` presets; rejects paths and invalid presets |
 | Change provider catalog or env forwarding | `config/opencode.json`, `PROVIDER_ENV_VARS` in `overlord` | Keep single provider catalog and forwarded env vars in sync |
-| Change local persistence/gitignore behavior | `ensure_state_dir`, `backup_container_data` | `.overlord/` creation, backup, and gitignore wiring live here |
+| Change local persistence/gitignore behavior | `ensure_state_dir`, `persisted_state_mounts` | `.overlord/` creation, direct-bind verification, and gitignore wiring live here |
 | Change runtime config injection | `ensure_runtime_config_dirs` in `overlord` | Host `config/*` -> in-container `~/.config/*` flow |
 | Change web publishing/startup behavior | `OPENCODE_WEB_*`, `resolve_published_web_port`, `resolve_network_host_ip`, `ensure_opencode_web_server` in `overlord` | Publishes host URLs for the OpenCode web server |
 
@@ -45,6 +45,9 @@ Headroom runtime behavior belongs to `scripts/overlord` only. The native install
 - Headroom mode is not default. Plain `overlord` should stop supported Headroom mode without requiring `fresh` or `purge`.
 - Current Headroom launches fail fast because no checked-in provider or preset has real traversal proof.
 - `.overlord/` state management is intentional and must remain git-ignored.
+- OpenCode and zsh state persist through direct writable bind mounts under the workspace `.overlord/` directory; lifecycle commands must never copy live state back onto those bind sources.
+- `fresh` and `purge` must verify the exact `/workspace`, OpenCode data, and zsh data bind mappings before proxy-marker cleanup or any destructive engine command. Missing, ambiguous, named-volume, read-only, or mismatched mappings fail closed and require container recreation with the current launcher.
+- Legacy-container migration is an explicit manual recovery procedure: quiesce first, copy unmounted state only to a separate staging directory, verify it, then remove the exact incompatible container. Never turn that procedure into an automatic launcher fallback.
 - Adding or removing providers is incomplete unless `config/opencode.json`, `PROVIDER_ENV_VARS`, and routing presets are updated together.
 
 ## MANUAL VERIFICATION
@@ -71,3 +74,4 @@ Headroom runtime behavior belongs to `scripts/overlord` only. The native install
 - Do not add provider/catalog options without updating validation and env forwarding in the same file.
 - Do not claim Headroom support for Azure, Vertex, Bedrock, LM Studio, or dynamic LMS routes without recorded traversal proof.
 - Do not add Headroom native-install behavior while docs still define it as launcher-only.
+- Do not restore `docker cp`/`podman cp` persistence fallbacks or weaken the destructive lifecycle mount preflight to a warning.

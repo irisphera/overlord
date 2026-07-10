@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from typing import Final
 
-ENSURE_OPENCODE_WEB_SERVER_SCRIPT: Final = r'''PID_FILE="$1"
+from .opencode_cmdline_matcher import OPENCODE_CMDLINE_MATCHER_SCRIPT
+
+
+ENSURE_OPENCODE_WEB_SERVER_SCRIPT: Final = OPENCODE_CMDLINE_MATCHER_SCRIPT + r'''PID_FILE="$1"
 LOG_FILE="$2"
 HOST="$3"
 PORT="$4"
@@ -11,28 +14,62 @@ DESIRED_MODE="$6"
 
 if [ -s "${PID_FILE}" ]; then
   PID=$(cat "${PID_FILE}" 2>/dev/null || true)
-  if [ -n "${PID}" ] && kill -0 "${PID}" 2>/dev/null && [ -r "/proc/${PID}/cmdline" ]; then
-    CMDLINE=$(tr '\000' ' ' < "/proc/${PID}/cmdline")
-    case "${CMDLINE}" in
-      *"opencode serve --hostname ${HOST} --port ${PORT}"*|\
-      *"opencode web --hostname ${HOST} --port ${PORT}"*)
-        mkdir -p "$(dirname "${MODE_FILE}")"
-        printf '%s\n' "${DESIRED_MODE}" >"${MODE_FILE}"
-        exit 0
-        ;;
-      *"opencode web --pure --hostname ${HOST} --port ${PORT}"*|\
-      *"opencode serve --pure --hostname ${HOST} --port ${PORT}"*)
-        kill "${PID}" 2>/dev/null || true
-        for _ in 1 2 3 4 5; do
-          if ! kill -0 "${PID}" 2>/dev/null; then
-            break
+  case "${PID}" in
+    '' | *[!0-9]*) rm -f "${PID_FILE}" ;;
+    *)
+      if classify_process_activity "/proc/${PID}/status"; then
+        ACTIVITY_STATUS=0
+      else
+        ACTIVITY_STATUS=$?
+      fi
+      case "${ACTIVITY_STATUS}" in
+        0)
+          if [ ! -r "/proc/${PID}/cmdline" ]; then
+            exit 1
           fi
-          sleep 1
-        done
-        ;;
-    esac
-  fi
-  rm -f "${PID_FILE}"
+        if classify_opencode_cmdline "/proc/${PID}/cmdline" "${HOST}" "${PORT}"; then
+          CLASSIFIER_STATUS=0
+        else
+          CLASSIFIER_STATUS=$?
+        fi
+        case "${CLASSIFIER_STATUS}" in
+          0)
+            mkdir -p "$(dirname "${MODE_FILE}")"
+            printf '%s\n' "${DESIRED_MODE}" >"${MODE_FILE}"
+            exit 0
+            ;;
+          1)
+            rm -f "${PID_FILE}"
+            ;;
+          2)
+            exit 1
+            ;;
+          3)
+            kill "${PID}" 2>/dev/null || true
+            for ATTEMPT in 1 2 3 4 5 6; do
+              if classify_process_activity "/proc/${PID}/status"; then
+                ACTIVITY_STATUS=0
+              else
+                ACTIVITY_STATUS=$?
+              fi
+              case "${ACTIVITY_STATUS}" in
+                0) [ "${ATTEMPT}" -eq 6 ] && exit 1 ;;
+                1) rm -f "${PID_FILE}"; break ;;
+                *) exit 1 ;;
+              esac
+              sleep 1
+            done
+            ;;
+          *)
+            exit 1
+            ;;
+        esac
+          ;;
+        1) rm -f "${PID_FILE}" ;;
+        *) exit 1 ;;
+      esac
+      ;;
+  esac
 fi
 
 mkdir -p "$(dirname "${PID_FILE}")"

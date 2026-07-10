@@ -13,12 +13,7 @@ LAUNCHER: Final = Path(__file__).resolve().parents[1] / "overlord"
 CONFIG_DIR: Final = Path(__file__).resolve().parents[2] / "config"
 
 EXPECTED_CONFIG_LIST: Final = """Available oh-my-openagent routing presets:
-  deepseek (oh-my-openagent.deepseek.jsonc)
-  gemini (oh-my-openagent.gemini.jsonc)
   default (oh-my-openagent.jsonc)
-  lms (oh-my-openagent.lms.jsonc)
-  opus (oh-my-openagent.opus.jsonc)
-  pro (oh-my-openagent.pro.jsonc)
 """
 
 HEADROOM_SCOPE_ERROR_PREFIX: Final = (
@@ -39,6 +34,9 @@ HEADROOM_UNSUPPORTED_SUFFIX: Final = (
     "--lms-model overrides.\n"
     "Future support must include actual Headroom traversal evidence before this launcher "
     "may start the Headroom proxy or OpenCode in Headroom mode.\n"
+)
+DEFAULT_GPT_56_HEADROOM_STATUS: Final = (
+    "--config default (oh-my-openagent.jsonc): azure/gpt-5.6-sol is unsupported/unverified for Headroom mode."
 )
 
 STARTUP_ENGINE_SUBCOMMANDS: Final = {"build", "run", "exec", "port"}
@@ -95,7 +93,7 @@ class CliCharacterizationTests(unittest.TestCase):
         self.assertEqual(
             result.stderr,
             "Error: --config now selects oh-my-openagent routing presets, not OpenCode catalogs\n"
-            "Use '--config pro', '--config gemini', '--config opus', or '--config default'.\n",
+            "Use '--config default'.\n",
         )
 
     def test_unknown_config_preset_is_rejected(self) -> None:
@@ -110,7 +108,7 @@ class CliCharacterizationTests(unittest.TestCase):
         )
 
     def test_config_and_lms_model_are_mutually_exclusive(self) -> None:
-        result = run_one("--config", "pro", "--lms-model", "qwen", "web")
+        result = run_one("--config", "default", "--lms-model", "qwen", "web")
 
         self.assertEqual(result.returncode, 1)
         self.assertEqual(result.stdout, "")
@@ -188,7 +186,7 @@ class CliCharacterizationTests(unittest.TestCase):
 
             self.assertEqual(result.returncode, 1)
             self.assertEqual(result.stdout, "")
-            self.assertEqual(result.stderr, headroom_unsupported_stderr("--config default (oh-my-openagent.jsonc): azure/gpt-5.5 is unsupported/unverified for Headroom mode."))
+            self.assertEqual(result.stderr, headroom_unsupported_stderr(DEFAULT_GPT_56_HEADROOM_STATUS))
             self.assert_no_startup_engine_invocations(workspace)
 
     def test_overlord_headroom_env_default_launch_fails_before_engine_startup(self) -> None:
@@ -197,7 +195,7 @@ class CliCharacterizationTests(unittest.TestCase):
 
             self.assertEqual(result.returncode, 1)
             self.assertEqual(result.stdout, "")
-            self.assertEqual(result.stderr, headroom_unsupported_stderr("--config default (oh-my-openagent.jsonc): azure/gpt-5.5 is unsupported/unverified for Headroom mode."))
+            self.assertEqual(result.stderr, headroom_unsupported_stderr(DEFAULT_GPT_56_HEADROOM_STATUS))
             self.assert_no_startup_engine_invocations(workspace)
 
     def test_headroom_lms_model_launch_fails_before_engine_startup(self) -> None:

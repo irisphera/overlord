@@ -8,7 +8,6 @@ from typing import Final, Literal
 
 from overlord_py.engine import ContainerEngine
 from overlord_py.headroom_scripts import (
-    HEADROOM_MODE_MARKER_CHECK_SCRIPT,
     HEADROOM_PROXY_ENSURE_SCRIPT,
     HEADROOM_PROXY_STOP_SCRIPT,
     HEADROOM_PROXY_WAIT_SCRIPT,
@@ -36,9 +35,6 @@ HEADROOM_PROXY_COMMAND_DISPLAY: Final = (
     f"--host {HEADROOM_INTERNAL_HOST} --port {HEADROOM_INTERNAL_PORT}"
 )
 EXEC_USER: Final = "overlord"
-OPENCODE_WEB_PID_FILE: Final = "/home/overlord/.local/share/opencode/overlord-serve.pid"
-OPENCODE_WEB_HOSTNAME: Final = "0.0.0.0"
-OPENCODE_WEB_PORT: Final = "4090"
 HEADROOM_SCOPE_ERROR: Final = (
     "Error: --headroom and OVERLORD_HEADROOM are only supported for default, web, "
     "and opencode launches.\n"
@@ -85,17 +81,7 @@ def selected_headroom_route_status(config_name: str, config_file_name: str, lms_
         return f"--lms-model {lms_model}: dynamic lmstudio/{lms_model} runtime override is unsupported/unverified for Headroom mode."
     match config_file_name:
         case "oh-my-openagent.jsonc":
-            return "--config default (oh-my-openagent.jsonc): azure/gpt-5.5 is unsupported/unverified for Headroom mode."
-        case "oh-my-openagent.pro.jsonc":
-            return "--config pro (oh-my-openagent.pro.jsonc): azure/gpt-5.4-pro and azure/gpt-5.5 are unsupported/unverified for Headroom mode."
-        case "oh-my-openagent.gemini.jsonc":
-            return "--config gemini (oh-my-openagent.gemini.jsonc): google-vertex/gemini-3.5-flash is unsupported/unverified for Headroom mode."
-        case "oh-my-openagent.opus.jsonc":
-            return "--config opus (oh-my-openagent.opus.jsonc): amazon-bedrock/global.anthropic.claude-opus-4-6-v1 is unsupported and absent from the checked-in provider catalog."
-        case "oh-my-openagent.deepseek.jsonc":
-            return "--config deepseek (oh-my-openagent.deepseek.jsonc): azure/gpt-5.5, azure/deepseek-v4-pro, and azure/deepseek-v4-flash are unsupported/unverified for Headroom mode."
-        case "oh-my-openagent.lms.jsonc":
-            return "--config lms (oh-my-openagent.lms.jsonc): lmstudio/qwopus3.5-9b-coder-mtp is unsupported/unverified for Headroom mode."
+            return "--config default (oh-my-openagent.jsonc): azure/gpt-5.6-sol is unsupported/unverified for Headroom mode."
         case _:
             return f"--config {config_name} ({config_file_name}): this checked-in routing preset is unsupported/unverified for Headroom mode."
 
@@ -163,13 +149,6 @@ def plan_stop_headroom_proxy(
     )
 
 
-def plan_headroom_mode_marker_check(engine: ContainerEngine, paths: WorkspacePaths, desired_mode: HeadroomMode) -> HeadroomScriptPlan:
-    return HeadroomScriptPlan(
-        argv=marker_exec_argv(engine, paths, desired_mode),
-        script=HEADROOM_MODE_MARKER_CHECK_SCRIPT,
-    )
-
-
 def headroom_exec_argv(
     engine: ContainerEngine,
     paths: WorkspacePaths,
@@ -192,26 +171,6 @@ def headroom_exec_argv(
                 "-s",
                 "--",
                 *script_args,
-            ]
-        )
-    )
-
-
-def marker_exec_argv(engine: ContainerEngine, paths: WorkspacePaths, desired_mode: HeadroomMode) -> tuple[str, ...]:
-    return tuple(
-        engine.argv(
-            [
-                "exec",
-                "-i",
-                paths.identity.container_name,
-                "sh",
-                "-s",
-                "--",
-                OPENCODE_WEB_PID_FILE,
-                HEADROOM_MODE_FILE,
-                desired_mode,
-                OPENCODE_WEB_HOSTNAME,
-                OPENCODE_WEB_PORT,
             ]
         )
     )

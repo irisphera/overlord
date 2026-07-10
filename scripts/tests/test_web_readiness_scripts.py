@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -12,12 +13,12 @@ from runtime_support import runtime_workspace
 
 
 SCRIPTS_DIR: Final = Path(__file__).resolve().parents[1]
+TERMINAL_MCP_STATUSES: Final = ("failed", "disabled", "needs_auth", "needs_client_registration")
 
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from overlord_py.web_mcp_scripts import RELEVANT_LOG_LINES_SCRIPT, VERIFY_OH_MY_OPENAGENT_SCRIPT  # noqa: E402
-from overlord_py.web_restart_scripts import REQUEST_RESTART_IF_WORKSPACE_PROJECT_STALE_SCRIPT  # noqa: E402
 
 
 CONNECTED_LSP_AND_AST_GREP_MCP_STATUS: Final = "\n".join(
@@ -25,6 +26,22 @@ CONNECTED_LSP_AND_AST_GREP_MCP_STATUS: Final = "\n".join(
         r"{",
         r'  "lsp": {"status": "connected"},',
         r'  "ast_grep": {"status": "connected"}',
+        r"}",
+        "",
+    )
+)
+
+CONNECTED_LSP_AND_CODEGRAPH_MCP_STATUS: Final = "\n".join(
+    (
+        r"{",
+        r'  "lsp": {',
+        r'    "status": "connected",',
+        r'    "tools": {"hover": true}',
+        r"  },",
+        r'  "codegraph": {',
+        r'    "status": "connected",',
+        r'    "metadata": {"transport": "stdio"}',
+        r"  }",
         r"}",
         "",
     )
@@ -48,17 +65,60 @@ AST_GREP_READY_LOG: Final = "\n".join(
     )
 )
 
+HISTORICAL_PLUGIN_FAILURE_LOG: Final = "INFO service=plugin path=oh-my-openagent@4.16.0 failed to load\n"
+
 
 class WebReadinessScriptTests(unittest.TestCase):
-    def test_live_mcp_status_accepts_ast_grep_as_code_navigation(self) -> None:
+    def test_live_mcp_status_accepts_nested_multiline_lsp_and_codegraph(self) -> None:
+        with runtime_workspace() as fixture:
+            install_fake_curl(fixture.workspace)
+
+            result = run_readiness_script(fixture.workspace.fake_bin, fixture.workspace.path, CONNECTED_LSP_AND_CODEGRAPH_MCP_STATUS)
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_required_mcp_terminal_statuses_return_terminal_exit_code(self) -> None:
+        with runtime_workspace() as fixture:
+            install_fake_curl(fixture.workspace)
+
+            for mcp_name in ("lsp", "codegraph"):
+                for status in TERMINAL_MCP_STATUSES:
+                    with self.subTest(mcp_name=mcp_name, status=status):
+                        mcp_status = {
+                            "lsp": {"status": "connected"},
+                            "codegraph": {"status": "connected"},
+                        }
+                        mcp_status[mcp_name] = {"status": status, "error": f"{mcp_name} is {status}"}
+
+                        result = run_readiness_script(fixture.workspace.fake_bin, fixture.workspace.path, json.dumps(mcp_status))
+
+                        self.assertEqual(result.returncode, 2, result.stderr)
+                        self.assertIn(f'"status": "{status}"', result.stderr)
+
+    def test_live_mcp_status_accepts_lsp_and_codegraph_without_requiring_ast_grep(self) -> None:
+        with runtime_workspace() as fixture:
+            install_fake_curl(fixture.workspace)
+            mcp_status = json.dumps(
+                {
+                    "lsp": {"status": "connected"},
+                    "codegraph": {"status": "connected"},
+                    "ast_grep": {"status": "failed"},
+                }
+            )
+
+            result = run_readiness_script(fixture.workspace.fake_bin, fixture.workspace.path, mcp_status)
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_ast_grep_without_codegraph_is_not_sufficient(self) -> None:
         with runtime_workspace() as fixture:
             install_fake_curl(fixture.workspace)
 
             result = run_readiness_script(fixture.workspace.fake_bin, fixture.workspace.path, CONNECTED_LSP_AND_AST_GREP_MCP_STATUS)
 
-            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.returncode, 1, result.stderr)
 
-    def test_log_fallback_accepts_current_ast_grep_as_code_navigation(self) -> None:
+    def test_recent_historical_success_log_cannot_decide_current_readiness(self) -> None:
         with runtime_workspace() as fixture:
             install_fake_curl(fixture.workspace)
             log_dir = fixture.workspace.path / "opencode-log"
@@ -67,7 +127,27 @@ class WebReadinessScriptTests(unittest.TestCase):
 
             result = run_readiness_script(fixture.workspace.fake_bin, fixture.workspace.path, PARTIAL_MCP_STATUS)
 
-            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.returncode, 1, result.stderr)
+
+    def test_recent_historical_failure_log_is_not_terminal(self) -> None:
+        with runtime_workspace() as fixture:
+            install_fake_curl(fixture.workspace)
+            log_dir = fixture.workspace.path / "opencode-log"
+            log_dir.mkdir()
+            (log_dir / "current.log").write_text(HISTORICAL_PLUGIN_FAILURE_LOG, encoding="utf-8")
+
+            result = run_readiness_script(fixture.workspace.fake_bin, fixture.workspace.path, PARTIAL_MCP_STATUS)
+
+            self.assertEqual(result.returncode, 1, result.stderr)
+
+    def test_malformed_mcp_json_is_transient(self) -> None:
+        with runtime_workspace() as fixture:
+            install_fake_curl(fixture.workspace)
+
+            result = run_readiness_script(fixture.workspace.fake_bin, fixture.workspace.path, '{"lsp":')
+
+            self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertIn("Malformed /mcp response", result.stderr)
 
     def test_log_fallback_ignores_stale_ast_grep_readiness_logs(self) -> None:
         with runtime_workspace() as fixture:
@@ -98,25 +178,6 @@ class WebReadinessScriptTests(unittest.TestCase):
             self.assertIn("key=lsp", result.stdout)
             self.assertNotIn("old_stale", result.stdout)
 
-    def test_workspace_project_stale_script_requests_restart_when_git_cache_resolves_global(self) -> None:
-        with runtime_workspace() as fixture:
-            install_fake_curl(fixture.workspace)
-            write_git_cache(fixture.workspace.path)
-
-            result = run_workspace_project_stale_script(fixture.workspace.path, r'{"worktree":"/","directory":"/workspace"}')
-
-            self.assertEqual(result.returncode, 1, result.stderr)
-
-    def test_workspace_project_stale_script_accepts_current_project_worktree(self) -> None:
-        with runtime_workspace() as fixture:
-            install_fake_curl(fixture.workspace)
-            write_git_cache(fixture.workspace.path)
-
-            result = run_workspace_project_stale_script(fixture.workspace.path, r'{"worktree":"/workspace","directory":"/workspace"}')
-
-            self.assertEqual(result.returncode, 0, result.stderr)
-
-
 def install_fake_curl(workspace: TempLauncherWorkspace) -> None:
     workspace.write_executable_in_fake_bin(
         "curl",
@@ -128,10 +189,11 @@ def install_fake_curl(workspace: TempLauncherWorkspace) -> None:
                 '        if [ "${FAKE_MCP_STATUS:-0}" -ne 0 ]; then',
                 '            exit "${FAKE_MCP_STATUS}"',
                 "        fi",
-                '        printf \'%s\\n\' "${FAKE_MCP_RESPONSE:-{}}"',
-                "        ;;",
-                '    *"/path?directory="*)',
-                '        printf \'%s\\n\' "${FAKE_PATH_RESPONSE:-{}}"',
+                '        if [ "${FAKE_MCP_RESPONSE+x}" = x ]; then',
+                '            printf \'%s\\n\' "${FAKE_MCP_RESPONSE}"',
+                "        else",
+                "            printf '{}\\n'",
+                "        fi",
                 "        ;;",
                 "    *)",
                 "        exit 0",
@@ -141,12 +203,6 @@ def install_fake_curl(workspace: TempLauncherWorkspace) -> None:
             )
         ),
     )
-
-
-def write_git_cache(workspace: Path) -> None:
-    git_dir = workspace / ".git"
-    git_dir.mkdir()
-    (git_dir / "opencode").write_text("project-cache\n", encoding="utf-8")
 
 
 def run_readiness_script(fake_bin: Path, workspace: Path, mcp_status: str) -> subprocess.CompletedProcess[str]:
@@ -171,23 +227,6 @@ def run_log_lines_script(workspace: Path) -> subprocess.CompletedProcess[str]:
         ["sh", "-s", "--", str(workspace / "overlord-serve.log"), str(workspace / "opencode-log")],
         cwd=workspace,
         input=RELEVANT_LOG_LINES_SCRIPT,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-
-
-def run_workspace_project_stale_script(workspace: Path, path_response: str) -> subprocess.CompletedProcess[str]:
-    pid_file = workspace / "overlord-serve.pid"
-    pid_file.write_text(f"{os.getpid()}\n", encoding="utf-8")
-    env = dict(os.environ)
-    env["PATH"] = f"{workspace / 'fake bin'}{os.pathsep}{env.get('PATH', '')}"
-    env["FAKE_PATH_RESPONSE"] = path_response
-    return subprocess.run(
-        ["sh", "-s", "--", str(pid_file), "4090", str(workspace)],
-        cwd=workspace,
-        env=env,
-        input=REQUEST_RESTART_IF_WORKSPACE_PROJECT_STALE_SCRIPT,
         check=False,
         capture_output=True,
         text=True,

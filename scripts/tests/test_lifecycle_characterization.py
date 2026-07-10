@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
@@ -95,7 +96,12 @@ class LifecycleCharacterizationTests(unittest.TestCase):
     def test_fresh_and_purge_preserve_overlord_state_and_issue_removal_commands(self) -> None:
         for command in ("fresh", "purge"):
             with self.subTest(command=command), launcher_workspace() as workspace:
-                workspace.install_fake_engine("docker", state="running", image_exists=True)
+                workspace.install_fake_engine(
+                    "docker",
+                    state="running",
+                    image_exists=True,
+                    raw_inspect_output=valid_mount_inspect(workspace.path),
+                )
                 sentinel = workspace.path / ".overlord" / "sentinel.txt"
                 sentinel.parent.mkdir()
                 sentinel.write_text("keep\n", encoding="utf-8")
@@ -105,8 +111,10 @@ class LifecycleCharacterizationTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertTrue(sentinel.exists())
                 docker = engine_records(workspace, "docker")
-                self.assertIn("cp", subcommands(docker))
+                self.assertNotIn("cp", subcommands(docker))
                 self.assertIn("rm", subcommands(docker))
+                self.assertEqual(docker[0]["argv"][0:2], ["docker", "inspect"])
+                self.assertLess(index_of(docker, "inspect"), index_of(docker, "rm"))
                 if command == "purge":
                     self.assertNotIn("stop", subcommands(docker))
                     self.assertTrue(any(record["argv"][1:3] == ["rm", "-f"] for record in docker))
@@ -253,6 +261,30 @@ def index_of(records: list[CommandRecord], subcommand: str) -> int:
         if len(record["argv"]) > 1 and record["argv"][1] == subcommand:
             return index
     raise AssertionError(f"Missing engine subcommand: {subcommand}")
+
+
+def valid_mount_inspect(workspace: Path) -> str:
+    return json.dumps(
+        [
+            {
+                "Mounts": [
+                    {"Type": "bind", "Source": str(workspace), "Destination": "/workspace", "RW": True},
+                    {
+                        "Type": "bind",
+                        "Source": str(workspace / ".overlord" / "opencode-data"),
+                        "Destination": "/home/overlord/.local/share/opencode",
+                        "RW": True,
+                    },
+                    {
+                        "Type": "bind",
+                        "Source": str(workspace / ".overlord" / "zsh-data"),
+                        "Destination": "/home/overlord/.zsh_data",
+                        "RW": True,
+                    },
+                ]
+            }
+        ]
+    )
 
 
 if __name__ == "__main__":

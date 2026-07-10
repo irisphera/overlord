@@ -163,7 +163,7 @@ RUN install_log="$(mktemp)" \
   && test -f /home/overlord/.agents/skills/setup-matt-pocock-skills/SKILL.md \
   && test -f /home/overlord/.agents/skills/tdd/SKILL.md
 
-ARG OH_MY_OPENAGENT_VERSION=4.11.1
+ARG OH_MY_OPENAGENT_VERSION=4.16.0
 RUN install_log="$(mktemp)" \
   && helper_package="oh-my-openagent@${OH_MY_OPENAGENT_VERSION}" \
   && helper_cache_dir="/home/overlord/.cache/opencode/packages/${helper_package}" \

@@ -22,7 +22,7 @@ from overlord_py.runtime_config import RestartState
 
 RESPONSIBILITY: Final = "ensure pinned runtime packages and request web restarts when repairs occur"
 OPENCODE_REQUIRED_VERSION: Final = "latest"
-OH_MY_OPENAGENT_REQUIRED_VERSION: Final = "4.11.1"
+OH_MY_OPENAGENT_REQUIRED_VERSION: Final = "4.16.0"
 OH_MY_OPENAGENT_PACKAGE: Final = f"oh-my-openagent@{OH_MY_OPENAGENT_REQUIRED_VERSION}"
 OH_MY_OPENAGENT_CACHE_DIR: Final = f"/home/overlord/.cache/opencode/packages/{OH_MY_OPENAGENT_PACKAGE}"
 OH_MY_OPENAGENT_BIN: Final = "/home/overlord/.local/bin/oh-my-openagent"

@@ -22,7 +22,6 @@ from overlord_py.engine import ContainerEngine  # noqa: E402
 from overlord_py.env_builder import package_environment  # noqa: E402
 from overlord_py.headroom import (  # noqa: E402
     HEADROOM_HEALTH_URL,
-    HEADROOM_MODE_FILE,
     HEADROOM_MODE_HEADROOM,
     HEADROOM_MODE_PLAIN,
     HEADROOM_PROXY_ARGS,
@@ -33,7 +32,6 @@ from overlord_py.headroom import (  # noqa: E402
     desired_headroom_mode,
     is_valid_headroom_mode,
     plan_ensure_headroom_proxy,
-    plan_headroom_mode_marker_check,
     plan_headroom_runtime_availability_check,
     plan_stop_headroom_proxy,
     plan_wait_for_headroom_proxy,
@@ -46,32 +44,7 @@ CHECKED_IN_PRESETS: Final = (
     (
         "default",
         "oh-my-openagent.jsonc",
-        "--config default (oh-my-openagent.jsonc): azure/gpt-5.5 is unsupported/unverified for Headroom mode.",
-    ),
-    (
-        "pro",
-        "oh-my-openagent.pro.jsonc",
-        "--config pro (oh-my-openagent.pro.jsonc): azure/gpt-5.4-pro and azure/gpt-5.5 are unsupported/unverified for Headroom mode.",
-    ),
-    (
-        "gemini",
-        "oh-my-openagent.gemini.jsonc",
-        "--config gemini (oh-my-openagent.gemini.jsonc): google-vertex/gemini-3.5-flash is unsupported/unverified for Headroom mode.",
-    ),
-    (
-        "opus",
-        "oh-my-openagent.opus.jsonc",
-        "--config opus (oh-my-openagent.opus.jsonc): amazon-bedrock/global.anthropic.claude-opus-4-6-v1 is unsupported and absent from the checked-in provider catalog.",
-    ),
-    (
-        "deepseek",
-        "oh-my-openagent.deepseek.jsonc",
-        "--config deepseek (oh-my-openagent.deepseek.jsonc): azure/gpt-5.5, azure/deepseek-v4-pro, and azure/deepseek-v4-flash are unsupported/unverified for Headroom mode.",
-    ),
-    (
-        "lms",
-        "oh-my-openagent.lms.jsonc",
-        "--config lms (oh-my-openagent.lms.jsonc): lmstudio/qwopus3.5-9b-coder-mtp is unsupported/unverified for Headroom mode.",
+        "--config default (oh-my-openagent.jsonc): azure/gpt-5.6-sol is unsupported/unverified for Headroom mode.",
     ),
 )
 
@@ -106,7 +79,7 @@ class HeadroomGuardTests(unittest.TestCase):
             self.assertEqual(
                 result.stderr,
                 headroom_unsupported_stderr(
-                    "--config default (oh-my-openagent.jsonc): azure/gpt-5.5 is unsupported/unverified for Headroom mode."
+                    "--config default (oh-my-openagent.jsonc): azure/gpt-5.6-sol is unsupported/unverified for Headroom mode."
                 ),
             )
             self.assert_no_startup_invocations(workspace)
@@ -158,13 +131,12 @@ class HeadroomPlanningTests(unittest.TestCase):
             self.assertIn(HEADROOM_PROXY_PID_FILE, plan.argv)
             self.assertIn(HEADROOM_PROXY_LOG_FILE, plan.argv)
 
-    def test_runtime_wait_stop_and_mode_marker_plans_match_bash_contract(self) -> None:
+    def test_runtime_wait_and_stop_plans_match_bash_contract(self) -> None:
         with planning_workspace() as fixture:
             package_env = fixture.package_env
             runtime = plan_headroom_runtime_availability_check(fixture.engine, fixture.paths, package_env)
             wait = plan_wait_for_headroom_proxy(fixture.engine, fixture.paths, package_env)
             stop = plan_stop_headroom_proxy(fixture.engine, fixture.paths, package_env)
-            mode = plan_headroom_mode_marker_check(fixture.engine, fixture.paths, HEADROOM_MODE_HEADROOM)
 
             self.assertIn("0.27.0", runtime.argv)
             self.assertIn("headroom --version", runtime.script)
@@ -173,9 +145,6 @@ class HeadroomPlanningTests(unittest.TestCase):
             self.assertIn("curl -fsS", wait.script)
             self.assertIn(HEADROOM_PROXY_PID_FILE, stop.argv)
             self.assertIn("kill -9", stop.script)
-            self.assertIn(HEADROOM_MODE_FILE, mode.argv)
-            self.assertIn("plain | headroom", mode.script)
-            self.assertIn("exit 1", mode.script)
 
     def test_container_run_args_do_not_publish_headroom_port(self) -> None:
         with planning_workspace() as fixture:
@@ -190,7 +159,7 @@ class HeadroomPlanningTests(unittest.TestCase):
 class HeadroomManualQaTests(unittest.TestCase):
     def test_manual_qa_surface_exercises_fail_fast_and_private_proxy_plan(self) -> None:
         with launcher_workspace() as workspace:
-            fail_fast = run_python(workspace, ("--headroom", "--config", "pro"), env={})
+            fail_fast = run_python(workspace, ("--headroom", "--config", "default"), env={})
             self.assertEqual(fail_fast.returncode, 1)
             self.assertEqual(workspace.read_command_log(), [])
 

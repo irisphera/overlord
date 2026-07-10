@@ -38,7 +38,7 @@ Use the same routing options as the launcher:
 
 ```bash
 ./scripts/install --list-configs
-./scripts/install --config pro
+./scripts/install --config default
 ./scripts/install --lms-model qwen3-8b
 ```
 
@@ -67,32 +67,22 @@ scripts/install       Install OpenCode setup directly on the host
 ```bash
 overlord --list-configs
 overlord --config default
-overlord --config pro
-overlord --config gemini
-overlord --config opus
-overlord --config deepseek
-overlord --config lms
 overlord --lms-model qwen3-8b web
 ```
 
 Available routing presets include:
 
 - `default` (`oh-my-openagent.jsonc`)
-- `pro` (`oh-my-openagent.pro.jsonc`)
-- `gemini` (`oh-my-openagent.gemini.jsonc`)
-- `opus` (`oh-my-openagent.opus.jsonc`)
-- `deepseek` (`oh-my-openagent.deepseek.jsonc`)
-- `lms` (`oh-my-openagent.lms.jsonc`)
 
 `--config <preset>` cannot be combined with `--lms-model`. LM Studio remains a separate dynamic escape hatch because the local model name is supplied at runtime.
 
-The checked-in `pro` routing preset upgrades high-reasoning and review/planning routes to Azure's `gpt-5.4-pro` while using the shared provider catalog from `config/opencode.json`. The `deepseek` preset keeps high-thinking routes on Azure `gpt-5.5`, sends medium-thinking routes to Azure `deepseek-v4-pro`, and sends low-thinking routes to Azure `deepseek-v4-flash`. The `lms` preset uses the LM Studio model `Qwopus3.6-27B-v2-MTP-GGUF`.
+The only checked-in routing preset is `default`, which routes every agent and category to Azure `gpt-5.6-sol` while retaining role-appropriate low, medium, high, and xhigh reasoning effort. LM Studio remains available only through the dynamic `--lms-model` escape hatch.
 
 ```bash
 export AZURE_API_KEY="..."
 export AZURE_RESOURCE_NAME="..."
 overlord fresh
-overlord --config pro
+overlord --config default
 ```
 
 Use `overlord fresh` before switching routing presets on an existing workspace container. The launcher only re-injects config files when creating or restarting the container, not while reusing an already-running one.
@@ -127,7 +117,9 @@ Plain `overlord` is the default mode. After a future supported Headroom run, rer
 
 Use `overlord purge && overlord` after image or toolchain changes, including Headroom version changes, so the shared image is rebuilt.
 
-Conversations, memory, and shell history are stored in `.overlord/` inside your project directory and survive `fresh` and `purge`.
+Conversations, memory, and shell history are stored in `.overlord/` inside your project directory and survive `fresh` and `purge`. These directories are mounted directly into the container; the launcher does not copy live container data during lifecycle commands.
+
+Before `fresh` or `purge` removes anything, Overlord inspects the existing container and verifies that `/workspace`, the OpenCode data directory, and the zsh data directory are writable bind mounts from the expected workspace paths. If that check fails, the command stops without changing persisted state, the host proxy, the container, or the image. Follow the legacy-container migration procedure below before removing an incompatible container; Overlord intentionally does not fall back to copying ambiguous live state.
 
 Anything you install inside the container (apt packages, pip packages, etc.) persists until you run `overlord fresh`. Running `overlord purge` also removes the image, so the next launch rebuilds everything.
 
@@ -177,9 +169,7 @@ Model/provider configuration lives in the single checked-in `config/opencode.jso
 
 Those checked-in files are the only authoritative config inputs. At launch, `scripts/overlord` copies `config/opencode.json` plus the selected routing preset into `/home/overlord/.config/opencode/*` inside the container because that is the runtime location OpenCode expects. Treat the in-container `~/.config/opencode/*` files as generated compatibility output, not as source of truth.
 
-The current default agent/category routing is controlled by `config/oh-my-openagent.jsonc`, and the checked-in default now points to `azure/gpt-5.5`. That routing only works if `AZURE_API_KEY` and `AZURE_RESOURCE_NAME` are available in your shell before launch. The checked-in Azure `gpt-5.5` entry currently targets the Azure deployment ID `gpt-5.5-1`, so change the model `id` in `config/opencode.json` if your deployment uses a different name.
-
-If you launch with `--config pro`, the launcher selects `config/oh-my-openagent.pro.jsonc`, so high-reasoning routes plus the planning/review agents `metis` and `momus` use `azure/gpt-5.4-pro` while the remaining routes use models declared in `config/opencode.json`. If you launch with `--config deepseek`, high-thinking routes use `azure/gpt-5.5` with high reasoning effort, medium-thinking routes use `azure/deepseek-v4-pro` with medium reasoning effort, and low-thinking routes use `azure/deepseek-v4-flash` with low reasoning effort.
+The current default agent/category routing is controlled by `config/oh-my-openagent.jsonc`, and every checked-in default route points to Azure `gpt-5.6-sol`. The catalog configures a 350,000-token context/input limit and a 128,000-token output limit. That routing only works if `AZURE_API_KEY` and `AZURE_RESOURCE_NAME` are available in your shell before launch. The model targets the Azure deployment ID `gpt-5.6-sol`, so change its `id` in `config/opencode.json` if your deployment uses a different name.
 
 Current configured providers remain unsupported for Headroom until traversal proof is recorded.
 
@@ -189,10 +179,10 @@ That includes Azure, Google Vertex AI, AWS Bedrock, LM Studio, and `--lms-model`
 
 | Provider | Models |
 |---|---|
-| **Azure OpenAI** | GPT 5.5, GPT 5.4, GPT 5.4 Pro, DeepSeek V4 Pro, DeepSeek V4 Flash |
+| **Azure OpenAI** | GPT 5.6 Sol |
 | **AWS Bedrock** | Claude Opus 4.8, Claude Haiku 4.5 |
 | **Google Vertex AI** | Gemini 3.1 Pro, Gemini 3 Flash, Gemini 3.5 Flash |
-| **LM Studio** | Qwopus3.6-27B-v2-MTP-GGUF, local models via OpenAI-compatible API |
+| **LM Studio** | qwopus3.5-9b-coder-mtp, local models via OpenAI-compatible API |
 
 ### Credentials
 
@@ -252,6 +242,10 @@ overlord purge && overlord
 overlord fresh
 overlord
 ```
+
+**`fresh` or `purge` refuses a legacy container:**
+
+The refusal means Overlord cannot prove that removal would preserve the current workspace's state. Inspect the reported container first. If its OpenCode or zsh data is not already stored in the current workspace's `.overlord/` bind mounts, stop the container and copy those directories into a separate staging directory—not directly into `.overlord/` and never back onto a bind source. Verify that archive before removing the exact legacy container with `docker rm` or `podman rm`, then rerun `overlord` so the current launcher creates correctly mounted state. Do not remove the legacy container if you have not accounted for data that exists only inside it.
 
 **Config validation errors:**
 Check that all agents/categories in `oh-my-openagent.jsonc` reference models defined in `opencode.json`.

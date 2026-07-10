@@ -35,7 +35,7 @@ PROVIDER_ENV_VARS: Final = (
     "TESTCONTAINERS_RYUK_DISABLED",
     "UV_CACHE_DIR",
 )
-MCP_CREDENTIAL_ENV_VARS: Final = ("CONTEXT7_API_KEY", "EXA_API_KEY", "TAVILY_API_KEY", "OPENCODE_SERVER_PASSWORD")
+MCP_CREDENTIAL_ENV_VARS: Final = ("CONTEXT7_API_KEY", "EXA_API_KEY", "TAVILY_API_KEY")
 OPTIONAL_TERMINAL_ENV_VARS: Final = ("COLORTERM", "TERM_PROGRAM", "TERM_PROGRAM_VERSION", "LANG", "LC_ALL")
 TITLE_HOOKS: Final = """export DISABLE_AUTO_TITLE=true
 _overlord_title() { printf "\\033]0;%s\\007" "${OVERLORD_WORKSPACE:-${PWD##*/}}" }
@@ -164,9 +164,11 @@ def env_flags(values: tuple[str, ...] | list[str]) -> tuple[str, ...]:
 
 def opencode_web_credential_env(host_env: Mapping[str, str]) -> list[str]:
     exa_api_key = host_env.get("EXA_API_KEY", "")
+    values = ["OVERLORD_HOST_EXA_API_KEY_PRESENT=0", "EXA_API_KEY="]
     if exa_api_key:
-        return ["OVERLORD_HOST_EXA_API_KEY_PRESENT=1", f"EXA_API_KEY={exa_api_key}"]
-    return ["OVERLORD_HOST_EXA_API_KEY_PRESENT=0", "EXA_API_KEY="]
+        values = ["OVERLORD_HOST_EXA_API_KEY_PRESENT=1", f"EXA_API_KEY={exa_api_key}"]
+    values.append(f"OPENCODE_SERVER_PASSWORD={host_env.get('OPENCODE_SERVER_PASSWORD', '')}")
+    return values
 
 
 def discover_gcloud_adc(host_env: Mapping[str, str], home: Path) -> Path | None:

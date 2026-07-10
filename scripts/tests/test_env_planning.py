@@ -25,7 +25,6 @@ from overlord_py.env_builder import (  # noqa: E402
 )
 from overlord_py.paths import build_workspace_paths, workspace_identity  # noqa: E402
 from overlord_py.state import (  # noqa: E402
-    backup_container_data_plan,
     clear_persisted_opencode_server_state,
     ensure_state_dir,
 )
@@ -33,6 +32,7 @@ from overlord_py.state import (  # noqa: E402
 
 SENTINEL_AZURE: Final = "sentinel-azure-secret"
 SENTINEL_EXA: Final = "sentinel-exa-secret"
+SENTINEL_OPENCODE_PASSWORD: Final = "sentinel-opencode-password"
 EXPECTED_PROVIDER_ENV_VARS: Final = (
     "AWS_REGION",
     "AWS_BEARER_TOKEN_BEDROCK",
@@ -108,7 +108,7 @@ class PathEngineStateTests(unittest.TestCase):
         self.assertFalse(injection_marker.exists())
         self.assertEqual(records[0]["argv"], ["podman", "inspect", "demo;touch shell-interpolation-happened"])
 
-    def test_state_dir_gitignore_append_only_backup_and_clear_preserve_sentinel(self) -> None:
+    def test_state_dir_gitignore_append_only_and_clear_preserve_sentinel(self) -> None:
         with TempLauncherWorkspace() as workspace:
             paths = build_workspace_paths(workspace.path, script_path=SCRIPTS_DIR / "overlord")
             gitignore = workspace.path / ".gitignore"
@@ -120,7 +120,6 @@ class PathEngineStateTests(unittest.TestCase):
             ensure_result = ensure_state_dir(paths.state)
             (paths.state.opencode_data / "overlord-serve.pid").write_text("123\n", encoding="utf-8")
             (paths.state.opencode_data / "overlord-serve.log").write_text("log\n", encoding="utf-8")
-            backup_plans = backup_container_data_plan("docker", "overlord-demo", paths.state)
             cleared = clear_persisted_opencode_server_state(paths.state)
             gitignore_content = gitignore.read_text(encoding="utf-8")
             sentinel_survived = sentinel.exists()
@@ -130,8 +129,6 @@ class PathEngineStateTests(unittest.TestCase):
         self.assertTrue(ensure_result.zsh_data_created)
         self.assertEqual(gitignore_content, "keep-me\n.overlord/\n")
         self.assertTrue(sentinel_survived)
-        self.assertEqual(backup_plans[0].argv, ["docker", "inspect", "overlord-demo"])
-        self.assertEqual(backup_plans[1].argv[0:3], ["docker", "cp", "overlord-demo:/home/overlord/.local/share/opencode/."])
         self.assertFalse(pid_exists)
         self.assertEqual({path.name for path in cleared}, {"overlord-serve.pid", "overlord-serve.log"})
 
@@ -139,7 +136,33 @@ class PathEngineStateTests(unittest.TestCase):
 class EnvironmentPlanningTests(unittest.TestCase):
     def test_provider_lists_match_bash_readme_and_mcp_credentials_are_explicit(self) -> None:
         self.assertEqual(PROVIDER_ENV_VARS, EXPECTED_PROVIDER_ENV_VARS)
-        self.assertEqual(MCP_CREDENTIAL_ENV_VARS, ("CONTEXT7_API_KEY", "EXA_API_KEY", "TAVILY_API_KEY", "OPENCODE_SERVER_PASSWORD"))
+        self.assertEqual(MCP_CREDENTIAL_ENV_VARS, ("CONTEXT7_API_KEY", "EXA_API_KEY", "TAVILY_API_KEY"))
+
+    def test_empty_opencode_password_is_explicit_once_for_web_only(self) -> None:
+        for host_env in ({}, {"OPENCODE_SERVER_PASSWORD": ""}):
+            with self.subTest(host_env=host_env), tempfile.TemporaryDirectory(prefix="overlord-env-home-") as temp_home:
+                home = Path(temp_home)
+
+                plan = build_environment_plan(host_env, home=home, workspace_name="demo")
+
+            self.assertEqual(plan.opencode_web_credential_values.count("OPENCODE_SERVER_PASSWORD="), 1)
+            self.assertEqual(plan.opencode_web_credential_flags.count("OPENCODE_SERVER_PASSWORD="), 1)
+            self.assertNotIn("OPENCODE_SERVER_PASSWORD=", plan.exec_env_values)
+
+    def test_nonempty_opencode_password_has_one_exact_web_assignment(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="overlord-env-home-") as temp_home:
+            home = Path(temp_home)
+
+            plan = build_environment_plan(
+                {"OPENCODE_SERVER_PASSWORD": SENTINEL_OPENCODE_PASSWORD},
+                home=home,
+                workspace_name="demo",
+            )
+
+        expected = f"OPENCODE_SERVER_PASSWORD={SENTINEL_OPENCODE_PASSWORD}"
+        self.assertEqual([value for value in plan.opencode_web_credential_values if value.startswith("OPENCODE_SERVER_PASSWORD=")], [expected])
+        self.assertEqual(plan.opencode_web_credential_flags.count(expected), 1)
+        self.assertNotIn(expected, plan.exec_env_values)
 
     def test_environment_plan_forwards_secrets_in_structures_without_redacted_leakage(self) -> None:
         with tempfile.TemporaryDirectory(prefix="overlord-env-home-") as temp_home:
@@ -151,6 +174,7 @@ class EnvironmentPlanningTests(unittest.TestCase):
                 "AZURE_RESOURCE_NAME": "azure-resource",
                 "CONTEXT7_API_KEY": "context7-secret",
                 "EXA_API_KEY": SENTINEL_EXA,
+                "OPENCODE_SERVER_PASSWORD": SENTINEL_OPENCODE_PASSWORD,
                 "TAVILY_API_KEY": "tavily-secret",
                 "GCP_PROJECT": "gcp-project",
                 "VERTEX_LOCATION": "us-central1",
@@ -162,6 +186,9 @@ class EnvironmentPlanningTests(unittest.TestCase):
         self.assertIn(f"EXA_API_KEY={SENTINEL_EXA}", plan.exec_env_values)
         self.assertIn("OVERLORD_HOST_EXA_API_KEY_PRESENT=1", plan.opencode_web_credential_values)
         self.assertIn(f"EXA_API_KEY={SENTINEL_EXA}", plan.opencode_web_credential_values)
+        self.assertIn(f"OPENCODE_SERVER_PASSWORD={SENTINEL_OPENCODE_PASSWORD}", plan.opencode_web_credential_values)
+        self.assertIn(f"OPENCODE_SERVER_PASSWORD={SENTINEL_OPENCODE_PASSWORD}", plan.opencode_web_credential_flags)
+        self.assertNotIn(f"OPENCODE_SERVER_PASSWORD={SENTINEL_OPENCODE_PASSWORD}", plan.exec_env_values)
         self.assertIn("GOOGLE_CLOUD_PROJECT=gcp-project", plan.exec_env_values)
         self.assertIn("GOOGLE_CLOUD_LOCATION=us-central1", plan.exec_env_values)
         self.assertEqual(plan.package_env["UV_CACHE_DIR"], "/home/overlord/.cache/uv")
@@ -172,6 +199,7 @@ class EnvironmentPlanningTests(unittest.TestCase):
         self.assertIn("LMSTUDIO_API_KEY=lm-studio", plan.exec_env_values)
         self.assertNotIn(SENTINEL_AZURE, plan.redacted_summary())
         self.assertNotIn(SENTINEL_EXA, plan.redacted_summary())
+        self.assertNotIn(SENTINEL_OPENCODE_PASSWORD, plan.redacted_summary())
 
     def test_google_adc_discovery_prefers_explicit_path_then_home_default(self) -> None:
         with tempfile.TemporaryDirectory(prefix="overlord-adc-") as temp_home:
@@ -200,7 +228,12 @@ class EnvironmentPlanningTests(unittest.TestCase):
             adc.parent.mkdir(parents=True)
             adc.write_text("{}\n", encoding="utf-8")
             plan = build_environment_plan(
-                {"HOME": str(home), "AZURE_API_KEY": SENTINEL_AZURE, "EXA_API_KEY": SENTINEL_EXA},
+                {
+                    "HOME": str(home),
+                    "AZURE_API_KEY": SENTINEL_AZURE,
+                    "EXA_API_KEY": SENTINEL_EXA,
+                    "OPENCODE_SERVER_PASSWORD": SENTINEL_OPENCODE_PASSWORD,
+                },
                 home=home,
                 workspace_name="My Project!",
             )
@@ -216,6 +249,7 @@ class EnvironmentPlanningTests(unittest.TestCase):
         self.assertIn("export HEADROOM_TELEMETRY=off", rendered)
         self.assertIn("export OVERLORD_WORKSPACE='My Project!'", rendered)
         self.assertIn("_overlord_title()", rendered)
+        self.assertNotIn(SENTINEL_OPENCODE_PASSWORD, rendered)
 
 
 if __name__ == "__main__":

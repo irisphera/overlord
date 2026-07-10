@@ -29,9 +29,6 @@ EXAMPLES:
 \tAZURE_API_KEY=... AZURE_RESOURCE_NAME=... overlord  # Start web UI with the default Azure routing
     overlord web                     # Start/reuse the OpenCode web UI explicitly
     overlord opencode                # Alias for 'overlord web'
-\t    overlord --config pro                   # Use config/oh-my-openagent.pro.jsonc
-\t    overlord --config gemini                # Use config/oh-my-openagent.gemini.jsonc
-\t    overlord --config opus                  # Use config/oh-my-openagent.opus.jsonc
 \t    overlord --lms-model qwen3-8b web       # Use LM Studio with an explicit runtime model
 \t    overlord --lms-model qwen3-8b zellij    # Same runtime model, with zellij
     overlord shell                   # Open a shell

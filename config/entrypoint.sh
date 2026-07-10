@@ -85,6 +85,11 @@ fi
 # Errors on read-only mounts (.gitconfig, .ssh) are expected and ignored.
 chown -R "$(id -u overlord):$(id -g overlord)" /home/overlord 2>/dev/null || true
 
+# Trust only the fixed workspace bind mount when its mountpoint ownership differs.
+if ! git config --system --get-all safe.directory | grep -Fqx -- "/workspace"; then
+	git config --system --add safe.directory /workspace
+fi
+
 # Drop privileges to overlord — ensures the process runs with the
 # remapped UID/GID that matches the workspace file ownership.
 export HOME=/home/overlord

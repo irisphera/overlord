@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 import os
 from pathlib import Path
@@ -12,11 +12,11 @@ from overlord_py.container_run_args import build_container_run_args
 from overlord_py.docker_bind_sources import resolve_bind_source_paths
 from overlord_py.engine import CommandResult, ContainerEngine
 from overlord_py.paths import WorkspacePaths
+from overlord_py.persisted_state_mounts import PersistedStateMounts, verify_persisted_state_mounts
 from overlord_py.progress import StageReporter, noop_stage, report_stage, stage_return_message
 from overlord_py.state import clear_persisted_opencode_server_state, ensure_state_dir
 
 RESPONSIBILITY: Final = "preserve image/container lifecycle, mounts, setup timing, and removal semantics"
-CONTAINER_HOME: Final = "/home/overlord"
 SETUP_SCRIPT_CONTAINER_PATH: Final = "/workspace/setup-devcontainer.sh"
 ROOT_SETUP_ENV: Final = (
     "HOME=/root",
@@ -27,6 +27,10 @@ ROOT_SETUP_ENV: Final = (
     "UV_CACHE_DIR=/root/.cache/uv",
     "PATH=/usr/local/.safe-chain/shims:/usr/local/.safe-chain/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/overlord/.bun/bin:/home/overlord/.local/bin",
 )
+
+
+def noop_after_verification() -> None:
+    return None
 SETUP_OWNERSHIP_REPAIR_SCRIPT: Final = (
     "chown -R overlord:overlord /home/overlord/.cache /home/overlord/.config /home/overlord/.local /home/overlord/.npm 2>/dev/null || true\n"
     "chmod -R a+rwX /home/overlord/.cache /home/overlord/.config /home/overlord/.local /home/overlord/.npm 2>/dev/null || true\n"
@@ -124,8 +128,36 @@ def ensure_running(
     return EnsureRunningResult(state_before=state, setup_ran=setup_ran, messages=tuple(messages))
 
 
-def fresh(engine: ContainerEngine, paths: WorkspacePaths, *, env: Mapping[str, str], stage: StageReporter = noop_stage) -> tuple[str, ...]:
-    messages = [*backup_container_data(engine, paths, env=env, stage=stage)]
+def fresh(
+    engine: ContainerEngine,
+    paths: WorkspacePaths,
+    *,
+    env: Mapping[str, str],
+    stage: StageReporter = noop_stage,
+    after_verification: Callable[[], None] = noop_after_verification,
+) -> tuple[str, ...]:
+    home = Path(env.get("HOME", str(Path.home())))
+    expected_sources = resolve_bind_source_paths(engine, paths, env=env, home=home)
+    verified_mounts = verify_persisted_state_mounts(
+        engine,
+        paths.identity.container_name,
+        expected_sources=expected_sources,
+        cwd=paths.workspace,
+        env=env,
+    )
+    after_verification()
+    return _fresh_verified(engine, paths, verified_mounts, env=env, stage=stage)
+
+
+def _fresh_verified(
+    engine: ContainerEngine,
+    paths: WorkspacePaths,
+    _verified_mounts: PersistedStateMounts,
+    *,
+    env: Mapping[str, str],
+    stage: StageReporter,
+) -> tuple[str, ...]:
+    messages: list[str] = []
     clear_persisted_opencode_server_state(paths.state)
     stop_message = f"Stopping container {paths.identity.container_name}..."
     messages.extend(report_stage(stage, stop_message))
@@ -137,8 +169,36 @@ def fresh(engine: ContainerEngine, paths: WorkspacePaths, *, env: Mapping[str, s
     return tuple(messages)
 
 
-def purge(engine: ContainerEngine, paths: WorkspacePaths, *, env: Mapping[str, str], stage: StageReporter = noop_stage) -> tuple[str, ...]:
-    messages = [*backup_container_data(engine, paths, env=env, stage=stage)]
+def purge(
+    engine: ContainerEngine,
+    paths: WorkspacePaths,
+    *,
+    env: Mapping[str, str],
+    stage: StageReporter = noop_stage,
+    after_verification: Callable[[], None] = noop_after_verification,
+) -> tuple[str, ...]:
+    home = Path(env.get("HOME", str(Path.home())))
+    expected_sources = resolve_bind_source_paths(engine, paths, env=env, home=home)
+    verified_mounts = verify_persisted_state_mounts(
+        engine,
+        paths.identity.container_name,
+        expected_sources=expected_sources,
+        cwd=paths.workspace,
+        env=env,
+    )
+    after_verification()
+    return _purge_verified(engine, paths, verified_mounts, env=env, stage=stage)
+
+
+def _purge_verified(
+    engine: ContainerEngine,
+    paths: WorkspacePaths,
+    _verified_mounts: PersistedStateMounts,
+    *,
+    env: Mapping[str, str],
+    stage: StageReporter,
+) -> tuple[str, ...]:
+    messages: list[str] = []
     remove_container_message = f"Removing container {paths.identity.container_name}..."
     messages.extend(report_stage(stage, remove_container_message, f"==> {remove_container_message}"))
     remove_container = engine.run(["rm", "-f", paths.identity.container_name], cwd=paths.workspace, env=env)
@@ -157,30 +217,6 @@ def purge(engine: ContainerEngine, paths: WorkspacePaths, *, env: Mapping[str, s
     ignore_failure(engine.run(["image", "prune", "-f", "--filter", "dangling=true"], cwd=paths.workspace, env=env))
     messages.append("==> Done. Run 'overlord' to rebuild and launch.")
     return tuple(messages)
-
-
-def backup_container_data(engine: ContainerEngine, paths: WorkspacePaths, *, env: Mapping[str, str], stage: StageReporter = noop_stage) -> tuple[str, ...]:
-    inspect = engine.run(["inspect", paths.identity.container_name], cwd=paths.workspace, env=env)
-    if inspect.returncode != 0:
-        return ()
-    report_stage(stage, f"Backing up session data from {paths.identity.container_name}...")
-    paths.state.opencode_data.mkdir(parents=True, exist_ok=True)
-    paths.state.zsh_data.mkdir(parents=True, exist_ok=True)
-    ignore_failure(
-        engine.run(
-            ["cp", f"{paths.identity.container_name}:{CONTAINER_HOME}/.local/share/opencode/.", f"{paths.state.opencode_data}/"],
-            cwd=paths.workspace,
-            env=env,
-        )
-    )
-    ignore_failure(
-        engine.run(
-            ["cp", f"{paths.identity.container_name}:{CONTAINER_HOME}/.zsh_data/.", f"{paths.state.zsh_data}/"],
-            cwd=paths.workspace,
-            env=env,
-        )
-    )
-    return stage_return_message(stage, "Backing up session data...")
 
 
 def run_workspace_setup_script(engine: ContainerEngine, paths: WorkspacePaths, *, env: Mapping[str, str], stage: StageReporter = noop_stage) -> tuple[tuple[str, ...], bool]:

@@ -1,4 +1,4 @@
-"""Persistent launcher state and backup operation seam."""
+"""Persistent launcher state and generated runtime marker seam."""
 
 from __future__ import annotations
 
@@ -6,10 +6,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
-from overlord_py.engine import EngineCommandPlan
 from overlord_py.paths import StatePaths
 
-RESPONSIBILITY: Final = "create .overlord state, preserve user data, and track generated runtime markers"
+RESPONSIBILITY: Final = "create .overlord state and track generated runtime markers"
 OPENCODE_WEB_PID_BASENAME: Final = "overlord-serve.pid"
 OPENCODE_WEB_LOG_BASENAME: Final = "overlord-serve.log"
 
@@ -52,24 +51,6 @@ def append_state_gitignore(gitignore: Path) -> bool:
         return True
     gitignore.write_text(".overlord/\n", encoding="utf-8")
     return True
-
-
-def backup_container_data_plan(engine: str, container_name: str, paths: StatePaths) -> list[EngineCommandPlan]:
-    return [
-        EngineCommandPlan([engine, "inspect", container_name]),
-        EngineCommandPlan([
-            engine,
-            "cp",
-            f"{container_name}:/home/overlord/.local/share/opencode/.",
-            f"{paths.opencode_data}/",
-        ]),
-        EngineCommandPlan([
-            engine,
-            "cp",
-            f"{container_name}:/home/overlord/.zsh_data/.",
-            f"{paths.zsh_data}/",
-        ]),
-    ]
 
 
 def clear_persisted_opencode_server_state(paths: StatePaths) -> list[Path]:

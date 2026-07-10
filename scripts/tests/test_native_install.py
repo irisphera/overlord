@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 from pathlib import Path
 from typing import Final
@@ -51,8 +52,8 @@ class NativeInstallStageTests(unittest.TestCase):
                     "==> Checking Bun for native package installation...",
                     "==> Installing OpenCode CLI package opencode-ai@latest...",
                     "FAKE_BUN add -g opencode-ai@latest",
-                    "==> Installing OpenCode plugin package oh-my-openagent@4.11.1...",
-                    "FAKE_BUN add oh-my-openagent@4.11.1 --safe-chain-skip-minimum-package-age",
+                    "==> Installing OpenCode plugin package oh-my-openagent@4.16.0...",
+                    "FAKE_BUN add oh-my-openagent@4.16.0 --safe-chain-skip-minimum-package-age",
                     "==> Installing CodeGraph CLI package @colbymchenry/codegraph@1.0.1...",
                     "FAKE_BUN add -g @colbymchenry/codegraph@1.0.1",
                     "==> Checking zellij availability...",
@@ -69,17 +70,28 @@ class NativeInstallStageTests(unittest.TestCase):
             self.assertEqual(
                 result.stdout,
                 "Available oh-my-openagent routing presets:\n"
-                "  deepseek (oh-my-openagent.deepseek.jsonc)\n"
-                "  gemini (oh-my-openagent.gemini.jsonc)\n"
-                "  default (oh-my-openagent.jsonc)\n"
-                "  lms (oh-my-openagent.lms.jsonc)\n"
-                "  opus (oh-my-openagent.opus.jsonc)\n"
-                "  pro (oh-my-openagent.pro.jsonc)\n",
+                "  default (oh-my-openagent.jsonc)\n",
             )
             self.assertNotIn("==>", result.stdout)
             self.assertFalse((workspace.path / "home" / ".config").exists())
             self.assertFalse((workspace.path / "home" / ".cache").exists())
             self.assertFalse((workspace.path / "home" / ".local").exists())
+
+    def test_lms_model_rewrites_checked_in_catalog_and_routes(self) -> None:
+        with native_workspace() as workspace:
+            result = run_install(workspace, "--lms-model", "qwen3-8b", "--skip-package-install")
+            opencode_config_dir = workspace.path / "home" / ".config" / "opencode"
+            installed_config = opencode_config_dir / "opencode.json"
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            lmstudio = json.loads(installed_config.read_text(encoding="utf-8"))["provider"]["lmstudio"]
+            self.assertEqual(lmstudio["name"], "LM Studio")
+            self.assertEqual(lmstudio["models"], {"qwen3-8b": {"name": "qwen3-8b"}})
+            for routing_file in ("oh-my-openagent.jsonc", "oh-my-opencode.jsonc"):
+                with self.subTest(routing_file=routing_file):
+                    routes = (opencode_config_dir / routing_file).read_text(encoding="utf-8")
+                    self.assertIn('"model": "lmstudio/qwen3-8b"', routes)
+                    self.assertNotIn('"model": "azure/gpt-5.6-sol"', routes)
 
 
 def native_workspace() -> TempLauncherWorkspace:
@@ -124,9 +136,9 @@ def fake_bun_script() -> str:
             "\tprintf '#!/usr/bin/env bash\\nprintf '\"'\"'1.2.3\\\\n'\"'\"'\\n' > \"${BUN_INSTALL}/bin/opencode\"",
             "\tchmod +x \"${BUN_INSTALL}/bin/opencode\"",
             "\t;;",
-            '"add oh-my-openagent@4.11.1 --safe-chain-skip-minimum-package-age")',
+            '"add oh-my-openagent@4.16.0 --safe-chain-skip-minimum-package-age")',
             "\tmkdir -p node_modules/oh-my-openagent/bin node_modules/.bin",
-            "\tprintf '{\"version\":\"4.11.1\"}\\n' > node_modules/oh-my-openagent/package.json",
+            "\tprintf '{\"version\":\"4.16.0\"}\\n' > node_modules/oh-my-openagent/package.json",
             "\tprintf '#!/usr/bin/env bash\\nexit 0\\n' > node_modules/.bin/oh-my-openagent",
             "\tchmod +x node_modules/.bin/oh-my-openagent",
             "\t;;",
@@ -152,7 +164,7 @@ def fake_node_script() -> str:
             "set -euo pipefail",
             "case \"$*\" in",
             "*-p*oh-my-openagent*)",
-            "\tprintf '4.11.1\\n'",
+            "\tprintf '4.16.0\\n'",
             "\t;;",
             "*-p*codegraph*)",
             "\tprintf '1.0.1\\n'",

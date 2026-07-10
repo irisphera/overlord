@@ -34,6 +34,10 @@ install_lsp_servers() {
     packages+=(basedpyright)
   fi
 
+  if ! command -v biome >/dev/null 2>&1; then
+    packages+=(@biomejs/biome)
+  fi
+
   if ((${#packages[@]} == 0)); then
     return
   fi

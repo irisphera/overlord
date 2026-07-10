@@ -13,7 +13,7 @@ OPENCODE_CONFIG_NAME: Final = "opencode.json"
 DEFAULT_OH_MY_CONFIG_NAME: Final = "oh-my-openagent.jsonc"
 OPENCODE_CONFIG_SCHEMA: Final = '"$schema":"https://opencode.ai/config.json"'
 OH_MY_CONFIG_SCHEMA: Final = '"$schema": "https://raw.githubusercontent.com/code-yeongyu/oh-my-openagent/dev/assets/oh-my-opencode.schema.json"'
-OH_MY_OPENAGENT_PACKAGE: Final = "oh-my-openagent@4.11.1"
+OH_MY_OPENAGENT_PACKAGE: Final = "oh-my-openagent@4.16.0"
 HEADROOM_OPENAI_BASE_URL: Final = "http://127.0.0.1:8787/v1"
 JSON_VALUE: TypeAlias = None | bool | int | float | str | list["JSON_VALUE"] | dict[str, "JSON_VALUE"]
 JSON_OBJECT: TypeAlias = dict[str, JSON_VALUE]
@@ -94,7 +94,7 @@ def resolve_oh_my_config_file(repo_root: Path, config_name: str) -> tuple[Path |
             return (
                 None,
                 "Error: --config now selects oh-my-openagent routing presets, not OpenCode catalogs\n"
-                "Use '--config pro', '--config gemini', '--config opus', or '--config default'.\n",
+                "Use '--config default'.\n",
             )
         case name if name.startswith("oh-my-openagent") and name.endswith(".jsonc"):
             candidate = root_config_dir / name
@@ -141,7 +141,7 @@ def render_opencode_runtime_config_text(source: str, options: OpencodeRenderOpti
 def rewrite_opencode_lms_catalog(source: str, lms_model: str) -> str:
     if not lms_model:
         return source
-    return source.replace('"lm-studio"', f'"{lms_model}"').replace('"LM Studio (Local)"', f'"{lms_model}"')
+    return source.replace('"qwopus3.5-9b-coder-mtp"', f'"{lms_model}"')
 
 
 def load_json_object(source: str) -> JSON_OBJECT:

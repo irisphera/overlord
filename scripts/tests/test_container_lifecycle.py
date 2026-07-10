@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import json
+import socket
 import sys
 import unittest
 from collections.abc import Mapping, Sequence
@@ -26,9 +28,11 @@ from overlord_py.container_lifecycle import (  # noqa: E402
     fresh,
     purge,
 )
+from overlord_py.docker_bind_sources import MOUNT_FORMAT  # noqa: E402
 from overlord_py.engine import CommandResult, ContainerEngine  # noqa: E402
 from overlord_py.env_builder import build_environment_plan  # noqa: E402
 from overlord_py.paths import WorkspacePaths, build_workspace_paths  # noqa: E402
+from overlord_py.persisted_state_mounts import MountSafetyFailure  # noqa: E402
 
 
 class ContainerLifecycleTests(unittest.TestCase):
@@ -152,9 +156,9 @@ class ContainerLifecycleTests(unittest.TestCase):
             self.assertIn("0.0.0.0::4090", args)
             self.assertIn("HOME=/home/overlord", args)
             self.assertIn("AZURE_API_KEY=sentinel-azure-secret", args)
-            self.assertFalse(any("8787" in arg for arg in args))
+            self.assertFalse(any(forbidden in arg for arg in args for forbidden in ("8787", "sentinel-opencode-password")))
 
-    def test_fresh_preserves_state_sentinel_backs_up_and_clears_stale_web_state(self) -> None:
+    def test_fresh_verifies_mounts_before_clearing_markers_and_removing_container(self) -> None:
         with lifecycle_workspace(state="running", image_exists=True) as fixture:
             sentinel = fixture.paths.state.root / "sentinel.txt"
             sentinel.parent.mkdir()
@@ -172,10 +176,36 @@ class ContainerLifecycleTests(unittest.TestCase):
             self.assertFalse(stale_log.exists())
             self.assertIn(f"Removing container {fixture.paths.identity.container_name}...", messages)
             self.assertIn("Done. Run 'overlord' to start fresh.", messages)
-            self.assertIn("cp", subcommands(fixture.records()))
-            self.assertIn("stop", subcommands(fixture.records()))
-            self.assertIn("rm", subcommands(fixture.records()))
-            self.assertNotIn("rmi", subcommands(fixture.records()))
+            self.assertEqual(
+                argv_list(fixture.records()),
+                [
+                    *preflight_argv(fixture.paths),
+                    ["docker", "stop", fixture.paths.identity.container_name],
+                    ["docker", "rm", fixture.paths.identity.container_name],
+                ],
+            )
+
+    def test_fresh_inspect_failure_preserves_markers_and_prevents_destruction(self) -> None:
+        scenarios = (("missing", None), ("running", "{"), ("running", '[{"Mounts":[]}]'))
+        for state, raw_inspect_output in scenarios:
+            with self.subTest(state=state, raw_inspect_output=raw_inspect_output), lifecycle_workspace(
+                state=state,
+                image_exists=True,
+                raw_inspect_output=raw_inspect_output,
+            ) as fixture:
+                # Given
+                stale_pid = fixture.paths.state.opencode_data / "overlord-serve.pid"
+                stale_log = fixture.paths.state.opencode_data / "overlord-serve.log"
+                stale_pid.parent.mkdir(parents=True)
+                stale_pid.write_text("123\n", encoding="utf-8")
+                stale_log.write_text("log\n", encoding="utf-8")
+
+                # When / Then
+                with self.assertRaises(MountSafetyFailure):
+                    _ = fresh(fixture.engine, fixture.paths, env=fixture.runner_env)
+                self.assertTrue(stale_pid.exists())
+                self.assertTrue(stale_log.exists())
+                self.assertEqual(argv_list(fixture.records()), preflight_argv(fixture.paths))
 
     def test_purge_removes_image_prunes_and_preserves_state_sentinel(self) -> None:
         with lifecycle_workspace(state="running", image_exists=True) as fixture:
@@ -188,8 +218,30 @@ class ContainerLifecycleTests(unittest.TestCase):
             self.assertTrue(sentinel.exists())
             self.assertIn(f"==> Removing image {fixture.paths.identity.image_name}...", messages)
             self.assertIn("==> Done. Run 'overlord' to rebuild and launch.", messages)
-            self.assertIn("rmi", subcommands(fixture.records()))
-            self.assertIn(["docker", "image", "prune", "-f", "--filter", "dangling=true"], argv_list(fixture.records()))
+            image_ref = f"localhost/{fixture.paths.identity.image_name}:latest"
+            self.assertEqual(
+                argv_list(fixture.records()),
+                [
+                    *preflight_argv(fixture.paths),
+                    ["docker", "rm", "-f", fixture.paths.identity.container_name],
+                    ["docker", "image", "inspect", image_ref],
+                    ["docker", "rmi", "-f", image_ref],
+                    ["docker", "image", "prune", "-f", "--filter", "dangling=true"],
+                ],
+            )
+
+    def test_purge_inspect_failure_prevents_every_destructive_command(self) -> None:
+        scenarios = (("missing", None), ("running", "{"), ("running", '[{"Mounts":[]}]'))
+        for state, raw_inspect_output in scenarios:
+            with self.subTest(state=state, raw_inspect_output=raw_inspect_output), lifecycle_workspace(
+                state=state,
+                image_exists=True,
+                raw_inspect_output=raw_inspect_output,
+            ) as fixture:
+                # When / Then
+                with self.assertRaises(MountSafetyFailure):
+                    _ = purge(fixture.engine, fixture.paths, env=fixture.runner_env)
+                self.assertEqual(argv_list(fixture.records()), preflight_argv(fixture.paths))
 
     def test_purge_force_removes_stopped_container_before_image(self) -> None:
         with lifecycle_workspace(state="exited", image_exists=True) as fixture:
@@ -197,6 +249,26 @@ class ContainerLifecycleTests(unittest.TestCase):
 
             self.assertIn(["docker", "rm", "-f", fixture.paths.identity.container_name], argv_list(fixture.records()))
             self.assertIn(["docker", "rmi", "-f", f"localhost/{fixture.paths.identity.image_name}:latest"], argv_list(fixture.records()))
+
+    def test_purge_skips_absent_image_removal_and_still_prunes(self) -> None:
+        # Given
+        with lifecycle_workspace(state="running", image_exists=False) as fixture:
+            image_ref = f"localhost/{fixture.paths.identity.image_name}:latest"
+
+            # When
+            messages = purge(fixture.engine, fixture.paths, env=fixture.runner_env)
+
+            # Then
+            self.assertIn(f"==> Image {fixture.paths.identity.image_name} is already absent.", messages)
+            self.assertEqual(
+                argv_list(fixture.records()),
+                [
+                    *preflight_argv(fixture.paths),
+                    ["docker", "rm", "-f", fixture.paths.identity.container_name],
+                    ["docker", "image", "inspect", image_ref],
+                    ["docker", "image", "prune", "-f", "--filter", "dangling=true"],
+                ],
+            )
 
     def test_purge_failure_when_image_removal_fails_reports_runtime_error(self) -> None:
         with lifecycle_workspace(state="running", image_exists=True, rmi_fails=True) as fixture:
@@ -215,7 +287,7 @@ class LifecycleFixture:
         self.runner_env = runner_env
         self.engine = ContainerEngine("docker")
         self.environment = build_environment_plan(
-            {"HOME": str(home), "TERM": "xterm-256color", "AZURE_API_KEY": "sentinel-azure-secret"},
+            {"HOME": str(home), "TERM": "xterm-256color", "AZURE_API_KEY": "sentinel-azure-secret", "OPENCODE_SERVER_PASSWORD": "sentinel-opencode-password"},
             home=home,
             workspace_name=paths.identity.workspace_name,
         )
@@ -233,17 +305,26 @@ class lifecycle_workspace:
         host_files: bool = False,
         setup_script: bool = False,
         rmi_fails: bool = False,
+        raw_inspect_output: str | None = None,
     ) -> None:
         self._state = state
         self._image_exists = image_exists
         self._host_files = host_files
         self._setup_script = setup_script
         self._rmi_fails = rmi_fails
+        self._raw_inspect_output = raw_inspect_output
         self._workspace = TempLauncherWorkspace(workspace_name="Lifecycle Project")
 
     def __enter__(self) -> LifecycleFixture:
         workspace = self._workspace.__enter__()
-        workspace.install_fake_engine("docker", state=self._state, image_exists=self._image_exists, rmi_fails=self._rmi_fails)
+        raw_inspect_output = valid_mount_inspect(workspace.path) if self._raw_inspect_output is None else self._raw_inspect_output
+        workspace.install_fake_engine(
+            "docker",
+            state=self._state,
+            image_exists=self._image_exists,
+            rmi_fails=self._rmi_fails,
+            raw_inspect_output=raw_inspect_output,
+        )
         home = workspace.path / "host-home"
         home.mkdir()
         if self._host_files:
@@ -303,6 +384,37 @@ def first_record(records: list[CommandRecord], subcommand: str) -> CommandRecord
         if len(record["argv"]) > 1 and record["argv"][1] == subcommand:
             return record
     raise AssertionError(f"Missing engine subcommand: {subcommand}")
+
+
+def preflight_argv(paths: WorkspacePaths) -> list[list[str]]:
+    return [
+        ["docker", "inspect", "--format", MOUNT_FORMAT, socket.gethostname()],
+        ["docker", "inspect", paths.identity.container_name],
+    ]
+
+
+def valid_mount_inspect(workspace: Path) -> str:
+    return json.dumps(
+        [
+            {
+                "Mounts": [
+                    {"Type": "bind", "Source": str(workspace), "Destination": "/workspace", "RW": True},
+                    {
+                        "Type": "bind",
+                        "Source": str(workspace / ".overlord" / "opencode-data"),
+                        "Destination": "/home/overlord/.local/share/opencode",
+                        "RW": True,
+                    },
+                    {
+                        "Type": "bind",
+                        "Source": str(workspace / ".overlord" / "zsh-data"),
+                        "Destination": "/home/overlord/.zsh_data",
+                        "RW": True,
+                    },
+                ]
+            }
+        ]
+    )
 
 
 if __name__ == "__main__":

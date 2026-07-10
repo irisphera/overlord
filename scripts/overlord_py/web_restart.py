@@ -13,7 +13,7 @@ from overlord_py.web_scripts import (
     REQUEST_RESTART_IF_WORKSPACE_PROJECT_STALE_SCRIPT,
     RESTART_OPENCODE_WEB_SCRIPT,
 )
-from overlord_py.web_types import EngineRunner, OPENCODE_WEB_HOSTNAME, OPENCODE_WEB_PID_FILE, OPENCODE_WEB_PORT, WebServerError
+from overlord_py.web_types import EngineRunner, OPENCODE_WEB_HOSTNAME, OPENCODE_WEB_PID_FILE, OPENCODE_WEB_PORT, OPENCODE_WEB_WAIT_SECONDS, WebServerError
 
 
 def request_opencode_web_restart_if_mode_changed(
@@ -58,27 +58,26 @@ def request_opencode_web_restart_if_plugin_env_missing(
     return stage_return_message(stage, message)
 
 
-def request_opencode_web_restart_if_workspace_project_stale(
+def workspace_project_is_stale(
     engine: EngineRunner,
     paths: WorkspacePaths,
-    restart: RestartState,
     *,
     env: Mapping[str, str],
-    stage: StageReporter = noop_stage,
-) -> tuple[str, ...]:
-    if restart.required:
-        return ()
-    stage(f"Checking OpenCode web restart need for workspace project cache in {paths.identity.container_name}...")
-    result = engine.run(workspace_project_stale_check_args(paths), cwd=paths.workspace, env=env, input_text=REQUEST_RESTART_IF_WORKSPACE_PROJECT_STALE_SCRIPT)
-    if result.returncode == 0:
-        return ()
-    restart.request()
-    message = (
-        "Restarting existing OpenCode web server because its /workspace project cache resolved as global "
-        f"even though .git/opencode is present in {paths.identity.container_name}..."
+    credential_flags: Sequence[str],
+) -> bool:
+    result = engine.run(
+        workspace_project_stale_check_args(paths, credential_flags),
+        cwd=paths.workspace,
+        env=env,
+        input_text=REQUEST_RESTART_IF_WORKSPACE_PROJECT_STALE_SCRIPT,
     )
-    stage(message)
-    return stage_return_message(stage, message)
+    match result.returncode:
+        case 0:
+            return False
+        case 1:
+            return True
+        case returncode:
+            raise WebServerError(result.stderr or result.stdout or f"Workspace-project probe failed with exit code {returncode}")
 
 
 def restart_opencode_web_if_needed(
@@ -92,7 +91,23 @@ def restart_opencode_web_if_needed(
     if not restart.required:
         return ()
     stage(f"Restarting OpenCode web server in {paths.identity.container_name}...")
-    result = engine.run(["exec", "-i", paths.identity.container_name, "sh", "-s", "--", OPENCODE_WEB_PID_FILE, HEADROOM_MODE_FILE], cwd=paths.workspace, env=env, input_text=RESTART_OPENCODE_WEB_SCRIPT)
+    result = engine.run(
+        [
+            "exec",
+            "-i",
+            paths.identity.container_name,
+            "sh",
+            "-s",
+            "--",
+            OPENCODE_WEB_PID_FILE,
+            HEADROOM_MODE_FILE,
+            OPENCODE_WEB_HOSTNAME,
+            OPENCODE_WEB_PORT,
+        ],
+        cwd=paths.workspace,
+        env=env,
+        input_text=RESTART_OPENCODE_WEB_SCRIPT,
+    )
     if result.returncode != 0:
         raise WebServerError(result.stderr or result.stdout or "OpenCode web restart failed")
     restart.required = False
@@ -105,8 +120,8 @@ def mode_check_args(paths: WorkspacePaths, desired_mode: str) -> list[str]:
 
 
 def plugin_env_check_args(paths: WorkspacePaths, credential_flags: Sequence[str]) -> list[str]:
-    return ["exec", "-i", *credential_flags, paths.identity.container_name, "sh", "-s", "--", OPENCODE_WEB_PID_FILE, CONTAINER_HOME, CODEGRAPH_INSTALL_DIR, CODEGRAPH_BIN, CODEGRAPH_NODE_BIN]
+    return ["exec", "-i", *credential_flags, paths.identity.container_name, "sh", "-s", "--", OPENCODE_WEB_PID_FILE, OPENCODE_WEB_HOSTNAME, OPENCODE_WEB_PORT, CONTAINER_HOME, CODEGRAPH_INSTALL_DIR, CODEGRAPH_BIN, CODEGRAPH_NODE_BIN]
 
 
-def workspace_project_stale_check_args(paths: WorkspacePaths) -> list[str]:
-    return ["exec", "-i", paths.identity.container_name, "sh", "-s", "--", OPENCODE_WEB_PID_FILE, OPENCODE_WEB_PORT, "/workspace"]
+def workspace_project_stale_check_args(paths: WorkspacePaths, credential_flags: Sequence[str]) -> list[str]:
+    return ["exec", "-i", *credential_flags, paths.identity.container_name, "sh", "-s", "--", OPENCODE_WEB_PID_FILE, OPENCODE_WEB_HOSTNAME, OPENCODE_WEB_PORT, "/workspace", str(OPENCODE_WEB_WAIT_SECONDS)]

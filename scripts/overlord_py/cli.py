@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
@@ -21,6 +22,8 @@ from overlord_py.errors import CliParseResult
 from overlord_py.headroom import desired_headroom_mode, headroom_scope_error, selected_headroom_route_status, unsupported_headroom_stderr
 
 USAGE_LINE: Final = "Usage: overlord [--headroom] [--list-configs | --config PRESET | --lms-model MODEL] [command]"
+LMS_MODEL_PATTERN: Final = re.compile(r"[A-Za-z0-9._:@/+-]+")
+LMS_MODEL_ERROR: Final = "Error: --lms-model may only contain letters, numbers, '.', '_', ':', '@', '/', '+', or '-'.\n"
 
 
 class Command(StrEnum):
@@ -154,6 +157,8 @@ def parse_raw_args(argv: Sequence[str], *, env: Mapping[str, str]) -> RawArgs | 
                 value_result = option_value(argv, index, "--lms-model")
                 if isinstance(value_result, CliParseResult):
                     return value_result
+                if LMS_MODEL_PATTERN.fullmatch(value_result) is None:
+                    return failure(LMS_MODEL_ERROR)
                 lms_model = value_result
                 index += 2
             case "-h" | "--help":

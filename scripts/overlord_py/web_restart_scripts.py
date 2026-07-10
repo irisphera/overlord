@@ -2,7 +2,14 @@ from __future__ import annotations
 
 from typing import Final
 
-REQUEST_RESTART_IF_MODE_CHANGED_SCRIPT: Final = r'''pid_file="$1"
+from .opencode_cmdline_matcher import OPENCODE_CMDLINE_MATCHER_SCRIPT
+from .web_restart_action_script import RESTART_OPENCODE_WEB_SCRIPT as _RESTART_OPENCODE_WEB_SCRIPT
+
+
+RESTART_OPENCODE_WEB_SCRIPT: Final = _RESTART_OPENCODE_WEB_SCRIPT
+
+
+REQUEST_RESTART_IF_MODE_CHANGED_SCRIPT: Final = OPENCODE_CMDLINE_MATCHER_SCRIPT + r'''pid_file="$1"
 mode_file="$2"
 desired_mode="$3"
 host="$4"
@@ -11,15 +18,6 @@ port="$5"
 is_valid_mode() {
     case "$1" in
     plain | headroom) return 0 ;;
-    *) return 1 ;;
-    esac
-}
-
-is_expected_opencode_cmdline() {
-    cmdline="$1"
-    case "${cmdline}" in
-    *"opencode serve --hostname ${host} --port ${port}"* | \
-    *"opencode web --hostname ${host} --port ${port}"*) return 0 ;;
     *) return 1 ;;
     esac
 }
@@ -34,16 +32,28 @@ if [ ! -s "${pid_file}" ]; then
 fi
 
 pid="$(cat "${pid_file}" 2>/dev/null || true)"
-if [ -z "${pid}" ] || ! kill -0 "${pid}" 2>/dev/null || [ ! -r "/proc/${pid}/cmdline" ]; then
+if [ -z "${pid}" ] || ! kill -0 "${pid}" 2>/dev/null; then
     rm -f "${pid_file}" "${mode_file}"
     exit 0
 fi
-
-cmdline="$(tr '\000' ' ' <"/proc/${pid}/cmdline")"
-if ! is_expected_opencode_cmdline "${cmdline}"; then
-    rm -f "${mode_file}"
+if [ ! -r "/proc/${pid}/cmdline" ]; then
     exit 1
 fi
+
+if classify_opencode_cmdline "/proc/${pid}/cmdline" "${host}" "${port}"; then
+    classifier_status=0
+else
+    classifier_status=$?
+fi
+case "${classifier_status}" in
+0) ;;
+1)
+    rm -f "${mode_file}"
+    exit 1
+    ;;
+2 | 3) exit 1 ;;
+*) exit 1 ;;
+esac
 
 if [ ! -s "${mode_file}" ]; then
     exit 1
@@ -57,93 +67,155 @@ fi
 test "${current_mode}" = "${desired_mode}"
 '''
 
-RESTART_OPENCODE_WEB_SCRIPT: Final = r'''set -e
+REQUEST_RESTART_IF_PLUGIN_ENV_MISSING_SCRIPT: Final = OPENCODE_CMDLINE_MATCHER_SCRIPT + r'''pid_file="$1"
+host="$2"
+port="$3"
+container_home="$4"
+codegraph_install_dir="$5"
+codegraph_bin="$6"
+codegraph_node_bin="$7"
 
-pid_file="$1"
-mode_file="$2"
-if [ -s "${pid_file}" ]; then
-    pid="$(cat "${pid_file}" 2>/dev/null || true)"
-    if [ -n "${pid}" ] && kill -0 "${pid}" 2>/dev/null; then
-        kill "${pid}" 2>/dev/null || true
-        for _ in 1 2 3 4 5; do
-            if ! kill -0 "${pid}" 2>/dev/null; then
-                break
-            fi
-            sleep 1
-        done
-    fi
-fi
-rm -f "${pid_file}" "${mode_file}"
-'''
-
-REQUEST_RESTART_IF_PLUGIN_ENV_MISSING_SCRIPT: Final = r'''pid_file="$1"
-container_home="$2"
-codegraph_install_dir="$3"
-codegraph_bin="$4"
-codegraph_node_bin="$5"
 if [ ! -s "${pid_file}" ]; then
     exit 0
 fi
 pid="$(cat "${pid_file}" 2>/dev/null || true)"
-if [ -z "${pid}" ] || ! kill -0 "${pid}" 2>/dev/null; then
+case "${pid}" in
+'' | *[!0-9]*) exit 0 ;;
+esac
+if ! kill -0 "${pid}" 2>/dev/null; then
     exit 0
 fi
+if [ ! -r "/proc/${pid}/cmdline" ]; then
+    exit 1
+fi
+if classify_opencode_cmdline "/proc/${pid}/cmdline" "${host}" "${port}"; then
+    classifier_status=0
+else
+    classifier_status=$?
+fi
+case "${classifier_status}" in
+0) ;;
+1) exit 0 ;;
+2 | 3) exit 1 ;;
+*) exit 1 ;;
+esac
 if [ ! -r "/proc/${pid}/environ" ]; then
-    exit 0
+    exit 1
 fi
-
-process_has_env_name() {
-    name="$1"
-    tr '\000' '\n' < "/proc/${pid}/environ" | grep -Eq "^${name}="
-}
+if ! process_environ="$(tr '\000' '\n' <"/proc/${pid}/environ" 2>/dev/null)"; then
+    exit 1
+fi
 
 process_has_env_value() {
     name="$1"
     value="$2"
-    tr '\000' '\n' < "/proc/${pid}/environ" | grep -Fxq "${name}=${value}"
+    printf '%s\n' "${process_environ}" | grep -Fxq "${name}=${value}"
 }
 
 if [ "${OVERLORD_HOST_EXA_API_KEY_PRESENT:-0}" = "1" ]; then
     process_has_env_value EXA_API_KEY "${EXA_API_KEY:-}" || exit 1
 else
-    ! process_has_env_name EXA_API_KEY || exit 1
+    process_has_env_value EXA_API_KEY "" || exit 1
 fi
 
-tr '\000' '\n' < "/proc/${pid}/environ" | grep -qx "HOME=${container_home}" && \
-    tr '\000' '\n' < "/proc/${pid}/environ" | grep -qx "XDG_CONFIG_HOME=${container_home}/.config" && \
-    tr '\000' '\n' < "/proc/${pid}/environ" | grep -qx "XDG_CACHE_HOME=${container_home}/.cache" && \
-    tr '\000' '\n' < "/proc/${pid}/environ" | grep -qx "XDG_DATA_HOME=${container_home}/.local/share" && \
-	tr '\000' '\n' < "/proc/${pid}/environ" | grep -qx "XDG_STATE_HOME=${container_home}/.local/state" && \
-	tr '\000' '\n' < "/proc/${pid}/environ" | grep -qx "CODEGRAPH_INSTALL_DIR=${codegraph_install_dir}" && \
-	tr '\000' '\n' < "/proc/${pid}/environ" | grep -qx "OMO_CODEGRAPH_BIN=${codegraph_bin}" && \
-	tr '\000' '\n' < "/proc/${pid}/environ" | grep -qx "CODEGRAPH_NODE_BIN=${codegraph_node_bin}"
+process_has_env_value OPENCODE_SERVER_PASSWORD "${OPENCODE_SERVER_PASSWORD:-}" || exit 1
+
+printf '%s\n' "${process_environ}" | grep -qx "HOME=${container_home}" && \
+    printf '%s\n' "${process_environ}" | grep -qx "XDG_CONFIG_HOME=${container_home}/.config" && \
+    printf '%s\n' "${process_environ}" | grep -qx "XDG_CACHE_HOME=${container_home}/.cache" && \
+    printf '%s\n' "${process_environ}" | grep -qx "XDG_DATA_HOME=${container_home}/.local/share" && \
+	printf '%s\n' "${process_environ}" | grep -qx "XDG_STATE_HOME=${container_home}/.local/state" && \
+	printf '%s\n' "${process_environ}" | grep -qx "CODEGRAPH_INSTALL_DIR=${codegraph_install_dir}" && \
+	printf '%s\n' "${process_environ}" | grep -qx "OMO_CODEGRAPH_BIN=${codegraph_bin}" && \
+	printf '%s\n' "${process_environ}" | grep -qx "CODEGRAPH_NODE_BIN=${codegraph_node_bin}"
 '''
 
-REQUEST_RESTART_IF_WORKSPACE_PROJECT_STALE_SCRIPT: Final = r'''pid_file="$1"
-port="$2"
-workspace_dir="$3"
+REQUEST_RESTART_IF_WORKSPACE_PROJECT_STALE_SCRIPT: Final = OPENCODE_CMDLINE_MATCHER_SCRIPT + r'''pid_file="$1"
+host="$2"
+port="$3"
+workspace_dir="$4"
+request_timeout_seconds="$5"
 
 if [ ! -s "${pid_file}" ]; then
     exit 0
 fi
 pid="$(cat "${pid_file}" 2>/dev/null || true)"
-if [ -z "${pid}" ] || ! kill -0 "${pid}" 2>/dev/null; then
+case "${pid}" in
+'' | *[!0-9]*) exit 0 ;;
+esac
+if ! kill -0 "${pid}" 2>/dev/null; then
     exit 0
 fi
+if [ ! -r "/proc/${pid}/cmdline" ]; then
+    exit 2
+fi
+if classify_opencode_cmdline "/proc/${pid}/cmdline" "${host}" "${port}"; then
+    classifier_status=0
+else
+    classifier_status=$?
+fi
+case "${classifier_status}" in
+0) ;;
+1) exit 0 ;;
+2 | 3) exit 2 ;;
+*) exit 2 ;;
+esac
 if [ ! -r "${workspace_dir}/.git/opencode" ]; then
     exit 0
 fi
 
 workspace_project_is_stale() {
-    path_response="$(curl --silent --fail --max-time 5 \
-        -H "x-opencode-directory: ${workspace_dir}" \
-        "http://127.0.0.1:${port}/path?directory=${workspace_dir}" 2>/dev/null || true)"
-    [ -n "${path_response}" ] || return 1
-    printf '%s' "${path_response}" | grep -Eq '"worktree"[[:space:]]*:[[:space:]]*"/"'
+    if [ -n "${OPENCODE_SERVER_PASSWORD:-}" ]; then
+        if ! path_response="$(curl --silent --fail --max-time "${request_timeout_seconds}" \
+            --user "opencode:${OPENCODE_SERVER_PASSWORD}" \
+            -H "x-opencode-directory: ${workspace_dir}" \
+            "http://127.0.0.1:${port}/path?directory=${workspace_dir}" 2>/dev/null)"; then
+            return 2
+        fi
+    else
+        if ! path_response="$(curl --silent --fail --max-time "${request_timeout_seconds}" \
+            -H "x-opencode-directory: ${workspace_dir}" \
+            "http://127.0.0.1:${port}/path?directory=${workspace_dir}" 2>/dev/null)"; then
+            return 2
+        fi
+    fi
+    [ -n "${path_response}" ] || return 2
+    printf '%s' "${path_response}" | node -e '
+const expectedWorktree = process.argv[1];
+let input = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => { input += chunk; });
+process.stdin.on("end", () => {
+    let response;
+    try {
+        response = JSON.parse(input);
+    } catch {
+        process.exitCode = 2;
+        return;
+    }
+    if (response === null || Array.isArray(response) || typeof response !== "object") {
+        process.exitCode = 2;
+        return;
+    }
+    const worktree = response.worktree;
+    if (typeof worktree !== "string") {
+        process.exitCode = 2;
+        return;
+    }
+    if (worktree === "/") {
+        process.exitCode = 1;
+        return;
+    }
+    process.exitCode = worktree === expectedWorktree ? 0 : 2;
+});
+' "${workspace_dir}"
+    node_status=$?
+    case "${node_status}" in
+    0 | 1 | 2) return "${node_status}" ;;
+    *) return 2 ;;
+    esac
 }
 
-if workspace_project_is_stale; then
-    exit 1
-fi
-exit 0
+workspace_project_is_stale
+exit $?
 '''

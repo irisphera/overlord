@@ -33,6 +33,7 @@ class FakeConfig(TypedDict):
     image_exists: NotRequired[bool]
     port_output: NotRequired[str]
     rmi_fails: NotRequired[bool]
+    raw_inspect_output: NotRequired[str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,6 +42,30 @@ class HarnessRun:
     stdout: str
     stderr: str
     log_path: Path
+
+
+def valid_persisted_state_inspect(workspace: Path) -> str:
+    return json.dumps(
+        [
+            {
+                "Mounts": [
+                    {"Type": "bind", "Source": str(workspace), "Destination": "/workspace", "RW": True},
+                    {
+                        "Type": "bind",
+                        "Source": str(workspace / ".overlord" / "opencode-data"),
+                        "Destination": "/home/overlord/.local/share/opencode",
+                        "RW": True,
+                    },
+                    {
+                        "Type": "bind",
+                        "Source": str(workspace / ".overlord" / "zsh-data"),
+                        "Destination": "/home/overlord/.zsh_data",
+                        "RW": True,
+                    },
+                ]
+            }
+        ]
+    )
 
 
 class TempLauncherWorkspace:
@@ -94,8 +119,11 @@ class TempLauncherWorkspace:
         image_exists: bool = False,
         port_output: str = "0.0.0.0:49152\n",
         rmi_fails: bool = False,
+        raw_inspect_output: str | None = None,
     ) -> Path:
         config: FakeConfig = {"kind": "engine", "stdout": "", "stderr": "", "status": 0, "state": state, "image_exists": image_exists, "port_output": port_output, "rmi_fails": rmi_fails}
+        if raw_inspect_output is not None:
+            config["raw_inspect_output"] = raw_inspect_output
         return self._write_fake_executable(name, config)
 
     def write_executable(self, name: str, content: str) -> Path:
@@ -217,6 +245,8 @@ _FAKE_EXECUTABLE_SOURCE = textwrap.dedent(
         if len(argv) >= 2 and argv[1] == "inspect":
             if state == "missing":
                 return (1, "", "")
+            if "--format" not in argv and "raw_inspect_output" in config:
+                return (0, str(config["raw_inspect_output"]), "")
             return (0, f"{state}\n", "")
         if len(argv) >= 2 and argv[1] == "port":
             return (0 if port_output else 1, port_output, "")

@@ -46,7 +46,7 @@ CLI_ONLY_CASES: Final = (
     CliCase("config_path", ("--config", "../config/oh-my-openagent.jsonc"), {}),
     CliCase("opencode_catalog_config", ("--config", "opencode.json"), {}),
     CliCase("unknown_config", ("--config", "missing"), {}),
-    CliCase("config_lms_exclusive", ("--config", "pro", "--lms-model", "qwen", "web"), {}),
+    CliCase("config_lms_exclusive", ("--config", "default", "--lms-model", "qwen", "web"), {}),
     CliCase("removed_provider_override", ("web", "gemini"), {}),
     CliCase("extra_arg", ("web", "extra"), {}),
     CliCase("unknown_command", ("status",), {}),
@@ -108,6 +108,27 @@ class CliParserUnitTests(unittest.TestCase):
             ),
         )
 
+    def test_lms_model_rejects_characters_outside_native_installer_whitelist(self) -> None:
+        result = parse_cli(("--lms-model", 'bad"model', "web"), env={}, repo_root=SCRIPTS_DIR.parent)
+
+        self.assertEqual(result.status, 1)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(
+            result.stderr,
+            "Error: --lms-model may only contain letters, numbers, '.', '_', ':', '@', '/', '+', or '-'.\n",
+        )
+        self.assertIsNone(result.options)
+
+    def test_lms_model_accepts_native_installer_punctuation(self) -> None:
+        result = parse_cli(("--lms-model", "org/model:v1+test@local", "web"), env={}, repo_root=SCRIPTS_DIR.parent)
+
+        self.assertEqual(result.status, 0)
+        self.assertIsNotNone(result.options)
+        if result.options is None:
+            self.fail("expected parsed options")
+        self.assertEqual(result.options.lms_model, "org/model:v1+test@local")
+        self.assertEqual(result.options.model_override, "lmstudio/org/model:v1+test@local")
+
     def test_headroom_non_web_commands_return_scope_error(self) -> None:
         for command in ("shell", "zellij", "fresh", "purge"):
             with self.subTest(command=command):
@@ -136,7 +157,11 @@ class CliPythonEntrypointGoldenTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0)
             self.assertIn("--list-configs     List available oh-my-openagent routing presets", result.stdout)
             self.assertIn("--lms-model MODEL  Rewrite all oh-my-openagent routes to lmstudio/MODEL", result.stdout)
-            self.assertIn("overlord --config pro", result.stdout)
+            self.assertIn("overlord --config default", result.stdout)
+            self.assertNotIn("overlord --config gemini", result.stdout)
+            self.assertNotIn("overlord --config opus", result.stdout)
+            self.assertNotIn("overlord --config pro", result.stdout)
+            self.assertNotIn("overlord --config deepseek", result.stdout)
             self.assertIn("overlord --lms-model qwen3-8b web", result.stdout)
 
 

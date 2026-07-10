@@ -10,7 +10,7 @@ DEFAULT_OH_MY_CONFIG_NAME="oh-my-openagent.jsonc"
 OPENCODE_CONFIG_SCHEMA='"$schema":"https://opencode.ai/config.json"'
 OH_MY_CONFIG_SCHEMA="\"\$schema\": \"https://raw.githubusercontent.com/code-yeongyu/oh-my-openagent/dev/assets/oh-my-opencode.schema.json\""
 OPENCODE_REQUIRED_VERSION="latest"
-OH_MY_OPENAGENT_REQUIRED_VERSION="4.11.1"
+OH_MY_OPENAGENT_REQUIRED_VERSION="4.16.0"
 OH_MY_OPENAGENT_PACKAGE="oh-my-openagent@${OH_MY_OPENAGENT_REQUIRED_VERSION}"
 CODEGRAPH_REQUIRED_VERSION="1.0.1"
 CODEGRAPH_PACKAGE="@colbymchenry/codegraph@${CODEGRAPH_REQUIRED_VERSION}"
@@ -58,7 +58,7 @@ WRITES:
 	~/.config/opencode/oh-my-opencode.jsonc
 	~/.config/opencode/overlord-env
 	~/.config/zellij/config.kdl
-	~/.cache/opencode/packages/oh-my-openagent@4.11.1/
+	~/.cache/opencode/packages/oh-my-openagent@4.16.0/
 	~/.local/bin/opencode
 	~/.local/bin/oh-my-openagent
 	~/.local/bin/codegraph
@@ -235,8 +235,7 @@ write_opencode_config() {
 	tmp_file="$(mktemp)"
 	if [[ -n "${LMS_MODEL}" ]]; then
 		escaped_model="$(escape_sed_replacement "${LMS_MODEL}")"
-		sed -e 's|"lm-studio"|"'"${escaped_model}"'"|g' \
-			-e 's|"LM Studio (Local)"|"'"${escaped_model}"'"|g' \
+		sed 's|"qwopus3.5-9b-coder-mtp"|"'"${escaped_model}"'"|g' \
 			"${CONFIG_FILE}" >"${tmp_file}"
 	else
 		cp "${CONFIG_FILE}" "${tmp_file}"

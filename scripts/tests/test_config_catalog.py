@@ -14,6 +14,15 @@ from test_cli_characterization import EXPECTED_CONFIG_LIST
 SCRIPTS_DIR: Final = Path(__file__).resolve().parents[1]
 REPO_ROOT: Final = SCRIPTS_DIR.parent
 CONFIG_DIR: Final = REPO_ROOT / "config"
+AZURE_GPT_MODEL_KEY: Final = "gpt-5.6-sol"
+OBSOLETE_AZURE_MODEL_KEYS: Final = (
+    "gpt-5.4-pro",
+    "gpt-5.5",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+    "deepseek-v4-pro",
+    "deepseek-v4-flash",
+)
 
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
@@ -49,7 +58,7 @@ class ConfigCatalogTests(unittest.TestCase):
         self.assertEqual(
             catalog_error,
             "Error: --config now selects oh-my-openagent routing presets, not OpenCode catalogs\n"
-            "Use '--config pro', '--config gemini', '--config opus', or '--config default'.\n",
+            "Use '--config default'.\n",
         )
         self.assertIsNone(missing_result)
         self.assertEqual(
@@ -83,13 +92,30 @@ class ConfigCatalogTests(unittest.TestCase):
             "Run 'overlord --list-configs' to list available routing presets.\n",
         )
 
-    def test_oh_my_runtime_content_preserves_default_pro_gemini_sources(self) -> None:
-        for config_name, filename in (
-            ("default", "oh-my-openagent.jsonc"),
-            ("pro", "oh-my-openagent.pro.jsonc"),
-            ("gemini", "oh-my-openagent.gemini.jsonc"),
-            ("oh-my-openagent.pro.jsonc", "oh-my-openagent.pro.jsonc"),
-        ):
+    def test_azure_catalog_and_default_routes_use_only_gpt_56_sol(self) -> None:
+        catalog = json.loads((CONFIG_DIR / OPENCODE_CONFIG_NAME).read_text(encoding="utf-8"))
+        azure_models = catalog["provider"]["azure"]["models"]
+        default_preset = (CONFIG_DIR / DEFAULT_OH_MY_CONFIG_NAME).read_text(encoding="utf-8")
+
+        self.assertEqual(tuple(azure_models), (AZURE_GPT_MODEL_KEY,))
+        self.assertEqual(azure_models[AZURE_GPT_MODEL_KEY]["id"], AZURE_GPT_MODEL_KEY)
+        self.assertEqual(
+            azure_models[AZURE_GPT_MODEL_KEY]["limit"],
+            {"context": 350000, "input": 350000, "output": 128000},
+        )
+        self.assertEqual(default_preset.count('"model": "azure/gpt-5.6-sol"'), 21)
+        self.assertEqual(default_preset.count('"reasoningEffort": "xhigh"'), 2)
+        self.assertEqual(default_preset.count('"reasoningEffort": "high"'), 10)
+        self.assertEqual(default_preset.count('"reasoningEffort": "medium"'), 7)
+        self.assertEqual(default_preset.count('"reasoningEffort": "low"'), 2)
+
+        for model_key in OBSOLETE_AZURE_MODEL_KEYS:
+            with self.subTest(model_key=model_key):
+                self.assertNotIn(model_key, azure_models)
+                self.assertNotIn(f'azure/{model_key}', default_preset)
+
+    def test_oh_my_runtime_content_preserves_retained_sources(self) -> None:
+        for config_name, filename in (("default", "oh-my-openagent.jsonc"),):
             with self.subTest(config_name=config_name):
                 selected, error = resolve_oh_my_config_file(REPO_ROOT, config_name)
                 self.assertEqual(error, "")
@@ -120,7 +146,7 @@ class ConfigCatalogTests(unittest.TestCase):
     def test_opencode_runtime_config_disabled_repairs_plugin_and_removes_headroom_overlay(self) -> None:
         source = (CONFIG_DIR / OPENCODE_CONFIG_NAME).read_text(encoding="utf-8")
         source_with_overlay = source.replace(
-            '  "plugin": [\n    "oh-my-openagent@4.11.1"\n  ],',
+            '  "plugin": [\n    "oh-my-openagent@4.16.0"\n  ],',
             '  "plugin": [\n    "other-plugin",\n    "oh-my-openagent@0.0.1",\n    "oh-my-openagent@4.11.1"\n  ],',
         ).replace(
             '  "provider": {',
@@ -130,7 +156,7 @@ class ConfigCatalogTests(unittest.TestCase):
         rendered = render_opencode_runtime_config_text(source_with_overlay, OpencodeRenderOptions(headroom_enabled=False))
         parsed = json.loads(rendered)
 
-        self.assertEqual(parsed["plugin"], ["other-plugin", "oh-my-openagent@4.11.1"])
+        self.assertEqual(parsed["plugin"], ["other-plugin", "oh-my-openagent@4.16.0"])
         self.assertNotIn("headroom", parsed["provider"])
         self.assertTrue(rendered.endswith("\n"))
 
@@ -143,9 +169,9 @@ class ConfigCatalogTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual(disabled["plugin"], ["oh-my-openagent@4.11.1"])
+        self.assertEqual(disabled["plugin"], ["oh-my-openagent@4.16.0"])
         self.assertNotIn("headroom", disabled["provider"])
-        self.assertEqual(enabled["plugin"], ["oh-my-openagent@4.11.1"])
+        self.assertEqual(enabled["plugin"], ["oh-my-openagent@4.16.0"])
         self.assertEqual(
             enabled["provider"]["headroom"],
             {
@@ -156,24 +182,17 @@ class ConfigCatalogTests(unittest.TestCase):
             },
         )
 
-    def test_opencode_runtime_lms_catalog_rewrite_preserves_current_bash_substitutions(self) -> None:
-        source = '{"$schema":"https://opencode.ai/config.json","plugin":[],"provider":{"lmstudio":{"name":"LM Studio (Local)","models":{"lm-studio":{"name":"lm-studio"}}}}}\n'
+    def test_opencode_runtime_lms_catalog_rewrite_uses_checked_in_model_entry(self) -> None:
+        rendered = render_opencode_runtime_config(
+            CONFIG_DIR / OPENCODE_CONFIG_NAME,
+            OpencodeRenderOptions(lms_model="qwen3-8b"),
+        )
+        lmstudio = json.loads(rendered)["provider"]["lmstudio"]
 
-        rendered = render_opencode_runtime_config_text(source, OpencodeRenderOptions(lms_model="qwen3-8b"))
-
-        self.assertNotIn("LM Studio (Local)", rendered)
-        self.assertNotIn("lm-studio", rendered)
-        self.assertIn("qwen3-8b", rendered)
+        self.assertEqual(lmstudio["name"], "LM Studio")
+        self.assertEqual(lmstudio["models"], {"qwen3-8b": {"name": "qwen3-8b"}})
 
     def test_selected_headroom_status_inputs_cover_checked_in_presets_and_lms_override(self) -> None:
-        self.assertEqual(
-            selected_headroom_route_status("pro", "oh-my-openagent.pro.jsonc", ""),
-            "--config pro (oh-my-openagent.pro.jsonc): azure/gpt-5.4-pro and azure/gpt-5.5 are unsupported/unverified for Headroom mode.",
-        )
-        self.assertEqual(
-            selected_headroom_route_status("gemini", "oh-my-openagent.gemini.jsonc", ""),
-            "--config gemini (oh-my-openagent.gemini.jsonc): google-vertex/gemini-3.5-flash is unsupported/unverified for Headroom mode.",
-        )
         self.assertEqual(
             selected_headroom_route_status(DEFAULT_OH_MY_CONFIG_NAME, "oh-my-openagent.jsonc", "qwen3-8b"),
             "--lms-model qwen3-8b: dynamic lmstudio/qwen3-8b runtime override is unsupported/unverified for Headroom mode.",
@@ -182,7 +201,7 @@ class ConfigCatalogTests(unittest.TestCase):
 
 class ConfigManualQaTests(unittest.TestCase):
     def test_manual_qa_scenario_renders_dual_oh_my_outputs_without_source_mutation(self) -> None:
-        selected, error = resolve_oh_my_config_file(REPO_ROOT, "pro")
+        selected, error = resolve_oh_my_config_file(REPO_ROOT, "default")
         self.assertEqual(error, "")
         if selected is None:
             self.fail("expected selected config")
@@ -191,7 +210,7 @@ class ConfigManualQaTests(unittest.TestCase):
         runtime_oh_my_opencode = render_oh_my_runtime_config(selected)
 
         self.assertEqual(runtime_oh_my_openagent, runtime_oh_my_opencode)
-        self.assertEqual(runtime_oh_my_openagent, (CONFIG_DIR / "oh-my-openagent.pro.jsonc").read_text(encoding="utf-8"))
+        self.assertEqual(runtime_oh_my_openagent, (CONFIG_DIR / "oh-my-openagent.jsonc").read_text(encoding="utf-8"))
         self.assertEqual(available_configs_text(REPO_ROOT), EXPECTED_CONFIG_LIST)
 
 if __name__ == "__main__":

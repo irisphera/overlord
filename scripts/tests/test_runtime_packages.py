@@ -54,7 +54,7 @@ class RuntimeConfigTests(unittest.TestCase):
             self.assertIn(RUNTIME_OH_MY_OPENAGENT_CONFIG_FILE, cat_targets(fixture.engine))
             self.assertIn(RUNTIME_GCLOUD_ADC_FILE, cat_targets(fixture.engine))
             self.assertIn(RUNTIME_ZELLIJ_CONFIG_FILE, cat_targets(fixture.engine))
-            self.assertTrue(any(run.input_text and "oh-my-openagent@4.11.1" in run.input_text for run in fixture.engine.runs))
+            self.assertTrue(any(run.input_text and "oh-my-openagent@4.16.0" in run.input_text for run in fixture.engine.runs))
             self.assertTrue(any(run.input_text and "export AZURE_API_KEY='sentinel azure'" in run.input_text for run in fixture.engine.runs))
             self.assertTrue(any(run.input_text and "export GOOGLE_APPLICATION_CREDENTIALS=/home/overlord/.config/gcloud/application_default_credentials.json" in run.input_text for run in fixture.engine.runs))
             self.assertTrue(any("grep -q overlord-env" in " ".join(run.args) for run in fixture.engine.runs))
@@ -69,7 +69,7 @@ class RuntimeConfigTests(unittest.TestCase):
             oh_my_openagent = stdin_for_target(fixture.engine, RUNTIME_OH_MY_OPENAGENT_CONFIG_FILE)
             oh_my_opencode = stdin_for_target(fixture.engine, RUNTIME_OH_MY_OPENCODE_CONFIG_FILE)
 
-            self.assertIn("oh-my-openagent@4.11.1", opencode_text)
+            self.assertIn("oh-my-openagent@4.16.0", opencode_text)
             self.assertEqual(oh_my_openagent, oh_my_opencode)
             self.assertIn('"model": "lmstudio/qwen3-8b"', oh_my_openagent)
 
@@ -120,11 +120,26 @@ class RuntimeConfigTests(unittest.TestCase):
             opencode_text = stdin_for_target(fixture.engine, RUNTIME_OPENCODE_CONFIG_FILE)
 
             self.assertIn('"plugin": [', opencode_text)
-            self.assertIn('"oh-my-openagent@4.11.1"', opencode_text)
+            self.assertIn('"oh-my-openagent@4.16.0"', opencode_text)
             self.assertNotIn('"headroom"', opencode_text)
 
 
 class PackageRepairTests(unittest.TestCase):
+    def test_old_oh_my_openagent_version_installs_4_16_0_and_sets_restart_state(self) -> None:
+        engine = RecordingEngine(
+            responses=[
+                ('package_json="${package_dir}/package.json"', FakeResponse(returncode=1, stdout="4.11.1\n")),
+            ]
+        )
+        with runtime_workspace(engine=engine) as fixture:
+            restart = RestartState()
+
+            messages = ensure_oh_my_openagent_runtime_package(engine, fixture.paths, fixture.package_env, restart, env=fixture.runner_env)
+
+            self.assertTrue(restart.required)
+            self.assertEqual(messages[0], f"Ensuring OpenCode plugin package oh-my-openagent@4.16.0 in {fixture.paths.identity.container_name}...")
+            self.assertTrue(any("oh-my-openagent@4.16.0" in run.args for run in engine.runs))
+
     def test_missing_packages_install_pinned_commands_and_set_restart_state(self) -> None:
         engine = RecordingEngine(
             responses=[

@@ -12,7 +12,6 @@ from overlord_py.web_readiness import verify_oh_my_openagent_loaded
 from overlord_py.web_restart import (
     request_opencode_web_restart_if_mode_changed,
     request_opencode_web_restart_if_plugin_env_missing,
-    request_opencode_web_restart_if_workspace_project_stale,
     restart_opencode_web_if_needed,
 )
 from overlord_py.web_scripts import ENSURE_OPENCODE_WEB_SERVER_SCRIPT
@@ -108,7 +107,6 @@ __all__ = [
     "plan_opencode_web_server",
     "request_opencode_web_restart_if_mode_changed",
     "request_opencode_web_restart_if_plugin_env_missing",
-    "request_opencode_web_restart_if_workspace_project_stale",
     "resolve_access_port_for_engine",
     "resolve_network_host_ip",
     "resolve_published_web_port",

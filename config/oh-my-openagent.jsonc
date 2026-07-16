@@ -16,7 +16,7 @@
     // HIGH reasoning — deep logical work, complex problem-solving
     "ultrabrain": {
       "model": "azure/gpt-5.6-sol",
-      "reasoningEffort": "xhigh"
+      "reasoningEffort": "max"
     },
     "unspecified-high": {
       "model": "azure/gpt-5.6-sol",
@@ -37,44 +37,44 @@
     },
     // LOW reasoning — trivial, fast tasks
     "quick": {
-      "model": "azure/gpt-5.6-sol",
-      "reasoningEffort": "low"
+      "model": "azure/gpt-5.6-terra",
+      "reasoningEffort": "high"
     },
     "unspecified-low": {
-      "model": "azure/gpt-5.6-sol",
-      "reasoningEffort": "medium"
+      "model": "azure/gpt-5.6-terra",
+      "reasoningEffort": "high"
     }
   },
   "agents": {
     // HIGH reasoning — orchestration, architecture, planning, deep execution
     "sisyphus": {
       "model": "azure/gpt-5.6-sol",
-      "reasoningEffort": "high"
+      "reasoningEffort": "medium"
     },
     "atlas": {
       "model": "azure/gpt-5.6-sol",
-      "reasoningEffort": "high"
+      "reasoningEffort": "medium"
     },
     "oracle": {
       "model": "azure/gpt-5.6-sol",
-      "reasoningEffort": "high"
+      "reasoningEffort": "max"
     },
     "prometheus": {
       "model": "azure/gpt-5.6-sol",
-      "reasoningEffort": "high"
+      "reasoningEffort": "max"
     },
     "hephaestus": {
       "model": "azure/gpt-5.6-sol",
-      "reasoningEffort": "high"
+      "reasoningEffort": "medium"
     },
     "plan": {
       "model": "azure/gpt-5.6-sol",
-      "reasoningEffort": "high"
+      "reasoningEffort": "max"
     },
     // MEDIUM reasoning — validation, building, general work
     "sisyphus-junior": {
       "model": "azure/gpt-5.6-sol",
-      "reasoningEffort": "high"
+      "reasoningEffort": "medium"
     },
     "OpenCode-Builder": {
       "model": "azure/gpt-5.6-sol",
@@ -86,11 +86,11 @@
     },
     "metis": {
       "model": "azure/gpt-5.6-sol",
-      "reasoningEffort": "high"
+      "reasoningEffort": "xhigh"
     },
     "momus": {
       "model": "azure/gpt-5.6-sol",
-      "reasoningEffort": "xhigh"
+      "reasoningEffort": "max"
     },
     "multimodal-looker": {
       "model": "azure/gpt-5.6-sol",
@@ -98,12 +98,12 @@
     },
     // LOW reasoning — search, lookup, exploration (speed over depth)
     "explore": {
-      "model": "azure/gpt-5.6-sol",
-      "reasoningEffort": "low",
+      "model": "azure/gpt-5.6-terra",
+      "reasoningEffort": "high",
       "category": "unspecified-low"
     },
     "librarian": {
-      "model": "azure/gpt-5.6-sol",
+      "model": "azure/gpt-5.6-terra",
       "reasoningEffort": "high",
       "category": "unspecified-low"
     }

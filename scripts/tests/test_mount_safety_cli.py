@@ -34,6 +34,30 @@ from overlord_py.persisted_state_mounts import MountSafetyFailure  # noqa: E402
 
 
 class MountSafetyCliTests(unittest.TestCase):
+    def test_purge_succeeds_when_workspace_container_is_already_absent(self) -> None:
+        with TempLauncherWorkspace() as workspace:
+            # Given
+            workspace.install_fake_engine("docker", state="missing", image_exists=True)
+            paths = launcher_paths(workspace)
+            paths.state.root.mkdir()
+            sentinel = paths.state.root / "sentinel.txt"
+            sentinel.write_text("keep\n", encoding="utf-8")
+
+            # When
+            result = run_cli(workspace, Command.PURGE)
+
+            # Then
+            commands = engine_argv(workspace)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertNotIn("mount-safety check failed", result.stderr)
+            self.assertTrue(sentinel.exists())
+            self.assertNotIn(["docker", "inspect", paths.identity.container_name], commands)
+            self.assertNotIn(["docker", "rm", "-f", paths.identity.container_name], commands)
+            self.assertIn(
+                ["docker", "rmi", "-f", f"localhost/{paths.identity.image_name}:latest"],
+                commands,
+            )
+
     def test_failed_cli_mount_inspection_refuses_without_traceback_or_side_effects(self) -> None:
         for command in (Command.FRESH, Command.PURGE):
             with self.subTest(command=command), TempLauncherWorkspace() as workspace:
@@ -58,7 +82,7 @@ class MountSafetyCliTests(unittest.TestCase):
                 self.assertNotIn("Traceback", result.stderr)
                 self.assertTrue(paths.state.host_proxy_pid_file.exists())
                 self.assertTrue(paths.state.host_proxy_port_file.exists())
-                self.assertEqual(engine_argv(workspace), preflight_argv(paths))
+                self.assertEqual(engine_argv(workspace), preflight_argv(paths, command))
 
     def test_failed_run_launcher_mount_inspection_does_not_stop_host_proxy(self) -> None:
         for command in (Command.FRESH, Command.PURGE):
@@ -77,7 +101,7 @@ class MountSafetyCliTests(unittest.TestCase):
                 with patch.object(main, "stop_host_web_proxy") as stop_proxy, self.assertRaises(MountSafetyFailure):
                     _ = main.run_launcher(engine, paths, options(command), runner_env(workspace))
                 stop_proxy.assert_not_called()
-                self.assertEqual(engine_argv(workspace), preflight_argv(paths))
+                self.assertEqual(engine_argv(workspace), preflight_argv(paths, command))
 
     def test_valid_mounts_stop_host_proxy_after_inspect_before_destruction(self) -> None:
         for command in (Command.FRESH, Command.PURGE):
@@ -103,10 +127,11 @@ class MountSafetyCliTests(unittest.TestCase):
                 # Then
                 self.assertEqual(status, 0)
                 stop_proxy.assert_called_once_with(paths)
-                self.assertEqual(argv_at_proxy_stop, preflight_argv(paths))
+                self.assertEqual(argv_at_proxy_stop, preflight_argv(paths, command))
                 commands = engine_argv(workspace)
-                self.assertEqual(commands[:2], preflight_argv(paths))
-                self.assertEqual(commands[2][1:3], ["rm", "-f"] if command is Command.PURGE else ["stop", paths.identity.container_name])
+                expected_preflight = preflight_argv(paths, command)
+                self.assertEqual(commands[: len(expected_preflight)], expected_preflight)
+                self.assertEqual(commands[len(expected_preflight)][1:3], ["rm", "-f"] if command is Command.PURGE else ["stop", paths.identity.container_name])
 
 
 def options(command: Command) -> CliOptions:
@@ -142,8 +167,14 @@ def engine_argv(workspace: TempLauncherWorkspace) -> list[list[str]]:
     return [record["argv"] for record in workspace.read_command_log() if record["executable"] == "docker"]
 
 
-def preflight_argv(paths: WorkspacePaths) -> list[list[str]]:
-    return [
+def preflight_argv(paths: WorkspacePaths, command: Command) -> list[list[str]]:
+    mount_preflight = [
         ["docker", "inspect", "--format", MOUNT_FORMAT, socket.gethostname()],
         ["docker", "inspect", paths.identity.container_name],
     ]
+    if command is Command.PURGE:
+        return [
+            ["docker", "inspect", "--format", "{{.State.Status}}", paths.identity.container_name],
+            *mount_preflight,
+        ]
+    return mount_preflight

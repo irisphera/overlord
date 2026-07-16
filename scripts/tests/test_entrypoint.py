@@ -12,13 +12,63 @@ from typing import Final
 REPO_ROOT: Final = Path(__file__).resolve().parents[2]
 DOCKERFILE: Final = REPO_ROOT / "Dockerfile"
 ENTRYPOINT: Final = REPO_ROOT / "config" / "entrypoint.sh"
+TOOL_VERSIONS: Final = REPO_ROOT / "config" / "tool-versions.env"
 
 
 class EntrypointTests(unittest.TestCase):
-    def test_dockerfile_pins_oh_my_openagent_4_16_0(self) -> None:
+    def test_dockerfile_derives_package_versions_from_manifest(self) -> None:
         dockerfile = DOCKERFILE.read_text(encoding="utf-8")
+        versions = dict(line.split("=", maxsplit=1) for line in TOOL_VERSIONS.read_text(encoding="utf-8").splitlines())
+        manifest_copy = "COPY --chown=overlord:overlord config/tool-versions.env /tmp/tool-versions.env"
+        default_skills_install = "Installing default OpenCode skills (mattpocock/skills)..."
+        setup_devcontainer_verification = "RUN test -s /home/overlord/.agents/skills/setup-devcontainer/SKILL.md"
 
-        self.assertIn("ARG OH_MY_OPENAGENT_VERSION=4.16.0", dockerfile)
+        self.assertIn(manifest_copy, dockerfile)
+        sourced_runs = tuple(run for run in dockerfile.split("\nRUN ") if run.startswith(". /tmp/tool-versions.env"))
+        self.assertEqual(len(sourced_runs), 3)
+        self.assertLess(dockerfile.index(default_skills_install), dockerfile.index(manifest_copy))
+        self.assertLess(dockerfile.index(setup_devcontainer_verification), dockerfile.index(manifest_copy))
+        manifest_instructions = tuple(
+            line
+            for line in dockerfile[dockerfile.index(manifest_copy) :].splitlines()
+            if line.startswith(("COPY ", "RUN "))
+        )
+        self.assertEqual(manifest_instructions[0], manifest_copy)
+        self.assertEqual(len(manifest_instructions[:4]), 4)
+        self.assertTrue(all(line.startswith("RUN . /tmp/tool-versions.env") for line in manifest_instructions[1:4]))
+        for version in versions.values():
+            self.assertNotIn(version, dockerfile)
+        for variable_name in versions:
+            self.assertNotIn(f"ARG {variable_name}", dockerfile)
+            self.assertNotIn(f"ENV {variable_name}", dockerfile)
+        for package_install in (
+            'bun add -g "opencode-ai@${OPENCODE_VERSION}"',
+            'helper_package="oh-my-openagent@${OH_MY_OPENAGENT_VERSION}"',
+            'bun add -g "@colbymchenry/codegraph@${CODEGRAPH_VERSION}"',
+        ):
+            self.assertTrue(any(package_install in sourced_run for sourced_run in sourced_runs))
+
+    def test_dockerfile_configures_manifest_package_installs_for_safe_chain(self) -> None:
+        dockerfile = DOCKERFILE.read_text(encoding="utf-8")
+        bun_install = "ENV BUN_INSTALL=/home/overlord/.bun"
+        bun_install_bin = "ENV BUN_INSTALL_BIN=/home/overlord/.bun/bin"
+        bun_path = 'ENV PATH="/usr/local/.safe-chain/shims:/usr/local/.safe-chain/bin:/home/overlord/.bun/bin:'
+
+        self.assertIn(bun_install, dockerfile)
+        self.assertIn(bun_install_bin, dockerfile)
+        self.assertIn(bun_path, dockerfile)
+        self.assertLess(dockerfile.index(bun_install), dockerfile.index(bun_install_bin))
+        self.assertLess(dockerfile.index(bun_install_bin), dockerfile.index(bun_path))
+        sourced_runs = tuple(run for run in dockerfile.split("\nRUN ") if run.startswith(". /tmp/tool-versions.env"))
+        package_installs = (
+            'bun add -g "opencode-ai@${OPENCODE_VERSION}"',
+            'bun add "${helper_package}"',
+            'bun add -g "@colbymchenry/codegraph@${CODEGRAPH_VERSION}"',
+        )
+        for package_install in package_installs:
+            matching_runs = tuple(run for run in sourced_runs if package_install in run)
+            self.assertEqual(len(matching_runs), 1)
+            self.assertEqual(matching_runs[0].count("--safe-chain-skip-minimum-package-age"), 1)
 
     def test_auto_detected_root_owned_workspace_sample_does_not_remap_overlord_to_root(self) -> None:
         with tempfile.TemporaryDirectory(prefix="overlord-entrypoint-") as temp_dir:
@@ -75,6 +125,25 @@ class EntrypointTests(unittest.TestCase):
             self.assertLess(logged_commands.index(add_command), logged_commands.index(handoff_command))
             self.assertNotIn("git config --global", logged_commands)
             self.assertNotIn("safe.directory *", logged_commands)
+
+
+class RepositoryOwnedSkillDockerfileTests(unittest.TestCase):
+    def test_repository_skill_is_copied_and_verified_separately_from_pinned_skills(self) -> None:
+        dockerfile = DOCKERFILE.read_text(encoding="utf-8")
+        pinned_install = "skills_source=\"$(printf '%s\\043%s' mattpocock/skills v1.0.1)\""
+        local_copy = (
+            "COPY --chown=overlord:overlord skills/setup-devcontainer/SKILL.md "
+            "/home/overlord/.agents/skills/setup-devcontainer/SKILL.md"
+        )
+        local_verification = "RUN test -s /home/overlord/.agents/skills/setup-devcontainer/SKILL.md"
+
+        self.assertIn(pinned_install, dockerfile)
+        self.assertIn("npx --yes skills@1.5.11 add", dockerfile)
+        self.assertNotIn("--skill 'setup-devcontainer'", dockerfile)
+        self.assertIn(local_copy, dockerfile)
+        self.assertIn(local_verification, dockerfile)
+        self.assertLess(dockerfile.index(pinned_install), dockerfile.index(local_copy))
+        self.assertLess(dockerfile.index(local_copy), dockerfile.index(local_verification))
 
 
 def install_fake_entrypoint_commands(fake_bin: Path, command_log: Path) -> None:

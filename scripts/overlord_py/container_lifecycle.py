@@ -177,32 +177,33 @@ def purge(
     stage: StageReporter = noop_stage,
     after_verification: Callable[[], None] = noop_after_verification,
 ) -> tuple[str, ...]:
-    home = Path(env.get("HOME", str(Path.home())))
-    expected_sources = resolve_bind_source_paths(engine, paths, env=env, home=home)
-    verified_mounts = verify_persisted_state_mounts(
-        engine,
-        paths.identity.container_name,
-        expected_sources=expected_sources,
-        cwd=paths.workspace,
-        env=env,
-    )
+    container_name = paths.identity.container_name
+    if engine.name == "docker":
+        state = container_state(engine, paths, env=env)
+        if state == "missing":
+            existence = engine.run(["container", "ls", "--all", "--filter", f"name={container_name}", "--format", "{{.Names}}"], cwd=paths.workspace, env=env)
+            require_success(existence, "check container existence")
+            container_exists = container_name in existence.stdout.splitlines()
+        else:
+            container_exists = True
+    else:
+        existence = engine.run(["container", "exists", container_name], cwd=paths.workspace, env=env)
+        if existence.returncode not in {0, 1}:
+            require_success(existence, "check container existence")
+        container_exists = existence.returncode == 0
+    if container_exists:
+        home = Path(env.get("HOME", str(Path.home())))
+        expected_sources = resolve_bind_source_paths(engine, paths, env=env, home=home)
+        _ = verify_persisted_state_mounts(engine, container_name, expected_sources=expected_sources, cwd=paths.workspace, env=env)
     after_verification()
-    return _purge_verified(engine, paths, verified_mounts, env=env, stage=stage)
-
-
-def _purge_verified(
-    engine: ContainerEngine,
-    paths: WorkspacePaths,
-    _verified_mounts: PersistedStateMounts,
-    *,
-    env: Mapping[str, str],
-    stage: StageReporter,
-) -> tuple[str, ...]:
     messages: list[str] = []
-    remove_container_message = f"Removing container {paths.identity.container_name}..."
-    messages.extend(report_stage(stage, remove_container_message, f"==> {remove_container_message}"))
-    remove_container = engine.run(["rm", "-f", paths.identity.container_name], cwd=paths.workspace, env=env)
-    require_success(remove_container, "remove container")
+    if container_exists:
+        remove_container_message = f"Removing container {container_name}..."
+        messages.extend(report_stage(stage, remove_container_message, f"==> {remove_container_message}"))
+        require_success(engine.run(["rm", "-f", container_name], cwd=paths.workspace, env=env), "remove container")
+    else:
+        absent_container_message = f"Container {container_name} is already absent."
+        messages.extend(report_stage(stage, absent_container_message, f"==> {absent_container_message}"))
     image_ref = local_image_ref(paths)
     stage(f"Checking image {paths.identity.image_name}...")
     image = engine.run(["image", "inspect", image_ref], cwd=paths.workspace, env=env)

@@ -14,11 +14,11 @@ from test_cli_characterization import EXPECTED_CONFIG_LIST
 SCRIPTS_DIR: Final = Path(__file__).resolve().parents[1]
 REPO_ROOT: Final = SCRIPTS_DIR.parent
 CONFIG_DIR: Final = REPO_ROOT / "config"
-AZURE_GPT_MODEL_KEY: Final = "gpt-5.6-sol"
+AZURE_SOL_MODEL_KEY: Final = "gpt-5.6-sol"
+AZURE_TERRA_MODEL_KEY: Final = "gpt-5.6-terra"
 OBSOLETE_AZURE_MODEL_KEYS: Final = (
     "gpt-5.4-pro",
     "gpt-5.5",
-    "gpt-5.6-terra",
     "gpt-5.6-luna",
     "deepseek-v4-pro",
     "deepseek-v4-flash",
@@ -42,6 +42,7 @@ from overlord_py.config_catalog import (  # noqa: E402
 )
 from overlord_py.headroom import selected_headroom_route_status  # noqa: E402
 
+DEFAULT_PLUGIN_SPEC: Final = OpencodeRenderOptions().plugin_spec
 
 class ConfigCatalogTests(unittest.TestCase):
     def test_available_configs_matches_bash_characterized_output(self) -> None:
@@ -92,18 +93,25 @@ class ConfigCatalogTests(unittest.TestCase):
             "Run 'overlord --list-configs' to list available routing presets.\n",
         )
 
-    def test_azure_catalog_and_default_routes_use_only_gpt_56_sol(self) -> None:
+    def test_azure_catalog_includes_sol_and_terra_while_default_routes_use_sol(self) -> None:
         catalog = json.loads((CONFIG_DIR / OPENCODE_CONFIG_NAME).read_text(encoding="utf-8"))
         azure_models = catalog["provider"]["azure"]["models"]
         default_preset = (CONFIG_DIR / DEFAULT_OH_MY_CONFIG_NAME).read_text(encoding="utf-8")
 
-        self.assertEqual(tuple(azure_models), (AZURE_GPT_MODEL_KEY,))
-        self.assertEqual(azure_models[AZURE_GPT_MODEL_KEY]["id"], AZURE_GPT_MODEL_KEY)
+        self.assertEqual(tuple(azure_models), (AZURE_SOL_MODEL_KEY, AZURE_TERRA_MODEL_KEY))
+        sol = azure_models[AZURE_SOL_MODEL_KEY]
+        terra = azure_models[AZURE_TERRA_MODEL_KEY]
+        self.assertEqual(sol["id"], AZURE_SOL_MODEL_KEY)
+        self.assertEqual(terra["id"], AZURE_TERRA_MODEL_KEY)
         self.assertEqual(
-            azure_models[AZURE_GPT_MODEL_KEY]["limit"],
-            {"context": 350000, "input": 350000, "output": 128000},
+            sol["limit"],
+            {"context": 272000, "input": 272000, "output": 128000},
         )
+        for field in ("options", "reasoning", "tool_call", "attachment", "modalities", "limit"):
+            with self.subTest(field=field):
+                self.assertEqual(terra[field], sol[field])
         self.assertEqual(default_preset.count('"model": "azure/gpt-5.6-sol"'), 21)
+        self.assertNotIn('"model": "azure/gpt-5.6-terra"', default_preset)
         self.assertEqual(default_preset.count('"reasoningEffort": "xhigh"'), 2)
         self.assertEqual(default_preset.count('"reasoningEffort": "high"'), 10)
         self.assertEqual(default_preset.count('"reasoningEffort": "medium"'), 7)
@@ -145,18 +153,15 @@ class ConfigCatalogTests(unittest.TestCase):
 
     def test_opencode_runtime_config_disabled_repairs_plugin_and_removes_headroom_overlay(self) -> None:
         source = (CONFIG_DIR / OPENCODE_CONFIG_NAME).read_text(encoding="utf-8")
-        source_with_overlay = source.replace(
-            '  "plugin": [\n    "oh-my-openagent@4.16.0"\n  ],',
-            '  "plugin": [\n    "other-plugin",\n    "oh-my-openagent@0.0.1",\n    "oh-my-openagent@4.11.1"\n  ],',
-        ).replace(
-            '  "provider": {',
-            '  "provider": {\n    "headroom": {"npm": "old", "models": {"stale": {}}},',
-        )
+        source_catalog = json.loads(source)
+        source_catalog["plugin"] = ["other-plugin", "oh-my-openagent@0.0.1", "oh-my-openagent@4.11.1"]
+        source_catalog["provider"]["headroom"] = {"npm": "old", "models": {"stale": {}}}
+        source_with_overlay = json.dumps(source_catalog)
 
         rendered = render_opencode_runtime_config_text(source_with_overlay, OpencodeRenderOptions(headroom_enabled=False))
         parsed = json.loads(rendered)
 
-        self.assertEqual(parsed["plugin"], ["other-plugin", "oh-my-openagent@4.16.0"])
+        self.assertEqual(parsed["plugin"], ["other-plugin", DEFAULT_PLUGIN_SPEC])
         self.assertNotIn("headroom", parsed["provider"])
         self.assertTrue(rendered.endswith("\n"))
 
@@ -169,9 +174,9 @@ class ConfigCatalogTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual(disabled["plugin"], ["oh-my-openagent@4.16.0"])
+        self.assertEqual(disabled["plugin"], [DEFAULT_PLUGIN_SPEC])
         self.assertNotIn("headroom", disabled["provider"])
-        self.assertEqual(enabled["plugin"], ["oh-my-openagent@4.16.0"])
+        self.assertEqual(enabled["plugin"], [DEFAULT_PLUGIN_SPEC])
         self.assertEqual(
             enabled["provider"]["headroom"],
             {

@@ -131,6 +131,7 @@ RUN sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master
   && sed -i 's/plugins=(git)/plugins=(git zsh-autosuggestions zsh-syntax-highlighting zsh-completions docker npm)/' ~/.zshrc
 
 ENV BUN_INSTALL=/home/overlord/.bun
+ENV BUN_INSTALL_BIN=/home/overlord/.bun/bin
 ENV PATH="/usr/local/.safe-chain/shims:/usr/local/.safe-chain/bin:/home/overlord/.bun/bin:/home/overlord/.local/bin:$PATH"
 ENV UV_LINK_MODE=copy
 ENV UV_CACHE_DIR=/home/overlord/.cache/uv
@@ -147,14 +148,6 @@ RUN install_log="$(mktemp)" \
   && printf '%s\n' "${headroom_version}" | grep -F "${HEADROOM_VERSION}" \
   && HEADROOM_TELEMETRY=off headroom proxy --help | grep -F -- "--no-telemetry"
 
-# Install opencode-ai
-RUN install_log="$(mktemp)" \
-  && echo "Installing OpenCode CLI package (opencode-ai@latest)..." \
-  && if ! bun add -g opencode-ai@latest >"${install_log}" 2>&1; then cat "${install_log}"; rm -f "${install_log}"; exit 1; fi \
-  && rm -f "${install_log}" \
-  && opencode_version="$(opencode --version 2>/dev/null || true)" \
-  && printf 'OpenCode CLI version: %s\n' "${opencode_version:-unknown}"
-
 RUN install_log="$(mktemp)" \
   && skills_source="$(printf '%s\043%s' mattpocock/skills v1.0.1)" \
   && echo "Installing default OpenCode skills (mattpocock/skills)..." \
@@ -163,8 +156,21 @@ RUN install_log="$(mktemp)" \
   && test -f /home/overlord/.agents/skills/setup-matt-pocock-skills/SKILL.md \
   && test -f /home/overlord/.agents/skills/tdd/SKILL.md
 
-ARG OH_MY_OPENAGENT_VERSION=4.16.0
-RUN install_log="$(mktemp)" \
+COPY --chown=overlord:overlord skills/setup-devcontainer/SKILL.md /home/overlord/.agents/skills/setup-devcontainer/SKILL.md
+RUN test -s /home/overlord/.agents/skills/setup-devcontainer/SKILL.md
+
+COPY --chown=overlord:overlord config/tool-versions.env /tmp/tool-versions.env
+
+RUN . /tmp/tool-versions.env \
+  && install_log="$(mktemp)" \
+  && echo "Installing OpenCode CLI package (opencode-ai@${OPENCODE_VERSION})..." \
+  && if ! bun add -g "opencode-ai@${OPENCODE_VERSION}" --safe-chain-skip-minimum-package-age >"${install_log}" 2>&1; then cat "${install_log}"; rm -f "${install_log}"; exit 1; fi \
+  && rm -f "${install_log}" \
+  && opencode_version="$(opencode --version 2>/dev/null || true)" \
+  && printf 'OpenCode CLI version: %s\n' "${opencode_version:-unknown}"
+
+RUN . /tmp/tool-versions.env \
+  && install_log="$(mktemp)" \
   && helper_package="oh-my-openagent@${OH_MY_OPENAGENT_VERSION}" \
   && helper_cache_dir="/home/overlord/.cache/opencode/packages/${helper_package}" \
   && mkdir -p "${helper_cache_dir}" /home/overlord/.local/bin \
@@ -177,9 +183,10 @@ RUN install_log="$(mktemp)" \
   && helper_version="$(node -p "require('./node_modules/oh-my-openagent/package.json').version" 2>/dev/null || true)" \
   && printf 'oh-my-openagent version: %s\n' "${helper_version:-unknown}"
 
-RUN install_log="$(mktemp)" \
-  && echo "Installing CodeGraph CLI package (@colbymchenry/codegraph@1.0.1)..." \
-  && if ! bun add -g @colbymchenry/codegraph@1.0.1 >"${install_log}" 2>&1; then cat "${install_log}"; rm -f "${install_log}"; exit 1; fi \
+RUN . /tmp/tool-versions.env \
+  && install_log="$(mktemp)" \
+  && echo "Installing CodeGraph CLI package (@colbymchenry/codegraph@${CODEGRAPH_VERSION})..." \
+  && if ! bun add -g "@colbymchenry/codegraph@${CODEGRAPH_VERSION}" --safe-chain-skip-minimum-package-age >"${install_log}" 2>&1; then cat "${install_log}"; rm -f "${install_log}"; exit 1; fi \
   && rm -f "${install_log}" \
   && ln -sf /home/overlord/.bun/bin/codegraph /home/overlord/.local/bin/codegraph \
   && codegraph_version="$(node -p "require('/home/overlord/.bun/install/global/node_modules/@colbymchenry/codegraph/package.json').version" 2>/dev/null || true)" \

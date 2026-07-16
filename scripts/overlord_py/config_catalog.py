@@ -8,12 +8,15 @@ from pathlib import Path
 import re
 from typing import Final, TypeAlias
 
+from .tool_versions import load_tool_versions
+
 RESPONSIBILITY: Final = "list and validate checked-in routing presets and provider catalog inputs"
 OPENCODE_CONFIG_NAME: Final = "opencode.json"
 DEFAULT_OH_MY_CONFIG_NAME: Final = "oh-my-openagent.jsonc"
 OPENCODE_CONFIG_SCHEMA: Final = '"$schema":"https://opencode.ai/config.json"'
 OH_MY_CONFIG_SCHEMA: Final = '"$schema": "https://raw.githubusercontent.com/code-yeongyu/oh-my-openagent/dev/assets/oh-my-opencode.schema.json"'
-OH_MY_OPENAGENT_PACKAGE: Final = "oh-my-openagent@4.16.0"
+TOOL_VERSIONS: Final = load_tool_versions()
+OH_MY_OPENAGENT_PACKAGE: Final = TOOL_VERSIONS.oh_my_openagent_package
 HEADROOM_OPENAI_BASE_URL: Final = "http://127.0.0.1:8787/v1"
 JSON_VALUE: TypeAlias = None | bool | int | float | str | list["JSON_VALUE"] | dict[str, "JSON_VALUE"]
 JSON_OBJECT: TypeAlias = dict[str, JSON_VALUE]

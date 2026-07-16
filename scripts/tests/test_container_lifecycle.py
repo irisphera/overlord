@@ -222,7 +222,7 @@ class ContainerLifecycleTests(unittest.TestCase):
             self.assertEqual(
                 argv_list(fixture.records()),
                 [
-                    *preflight_argv(fixture.paths),
+                    *purge_preflight_argv(fixture.paths),
                     ["docker", "rm", "-f", fixture.paths.identity.container_name],
                     ["docker", "image", "inspect", image_ref],
                     ["docker", "rmi", "-f", image_ref],
@@ -231,7 +231,7 @@ class ContainerLifecycleTests(unittest.TestCase):
             )
 
     def test_purge_inspect_failure_prevents_every_destructive_command(self) -> None:
-        scenarios = (("missing", None), ("running", "{"), ("running", '[{"Mounts":[]}]'))
+        scenarios = (("running", "{"), ("running", '[{"Mounts":[]}]'))
         for state, raw_inspect_output in scenarios:
             with self.subTest(state=state, raw_inspect_output=raw_inspect_output), lifecycle_workspace(
                 state=state,
@@ -241,7 +241,7 @@ class ContainerLifecycleTests(unittest.TestCase):
                 # When / Then
                 with self.assertRaises(MountSafetyFailure):
                     _ = purge(fixture.engine, fixture.paths, env=fixture.runner_env)
-                self.assertEqual(argv_list(fixture.records()), preflight_argv(fixture.paths))
+                self.assertEqual(argv_list(fixture.records()), purge_preflight_argv(fixture.paths))
 
     def test_purge_force_removes_stopped_container_before_image(self) -> None:
         with lifecycle_workspace(state="exited", image_exists=True) as fixture:
@@ -263,7 +263,7 @@ class ContainerLifecycleTests(unittest.TestCase):
             self.assertEqual(
                 argv_list(fixture.records()),
                 [
-                    *preflight_argv(fixture.paths),
+                    *purge_preflight_argv(fixture.paths),
                     ["docker", "rm", "-f", fixture.paths.identity.container_name],
                     ["docker", "image", "inspect", image_ref],
                     ["docker", "image", "prune", "-f", "--filter", "dangling=true"],
@@ -390,6 +390,13 @@ def preflight_argv(paths: WorkspacePaths) -> list[list[str]]:
     return [
         ["docker", "inspect", "--format", MOUNT_FORMAT, socket.gethostname()],
         ["docker", "inspect", paths.identity.container_name],
+    ]
+
+
+def purge_preflight_argv(paths: WorkspacePaths) -> list[list[str]]:
+    return [
+        ["docker", "inspect", "--format", "{{.State.Status}}", paths.identity.container_name],
+        *preflight_argv(paths),
     ]
 
 

@@ -16,7 +16,7 @@ Headroom runtime behavior belongs to `scripts/overlord` only. The native install
 - Headroom option: `--headroom` or strict `OVERLORD_HEADROOM` for web/opencode only; current provider status is fail-fast
 - Engine selection: Podman preferred, Docker fallback
 - `install`
-- Host-native Bash setup: installs checked-in OpenCode provider config, selected oh-my-openagent routing preset, zellij config, and Bun-managed OpenCode packages directly under the user's home directory
+- Host-native Bash setup: installs checked-in OpenCode provider config, selected oh-my-openagent routing preset, zellij config, repository-owned skills, and Bun-managed OpenCode packages directly under the user's home directory
 
 ## WHERE TO LOOK
 
@@ -39,6 +39,7 @@ Headroom runtime behavior belongs to `scripts/overlord` only. The native install
 - This script is authoritative over `README.md` for the current launcher surface.
 - `install` is an installer/configurator, not a web launcher; it should not create containers, images, `.overlord/` state, or Docker/Podman lifecycle hooks.
 - `install` must not install Headroom, expose a Headroom flag, wrap host OpenCode, or mutate host Headroom config.
+- `install` copies repository-owned skills with `install_file` before the package-install conditional, so `--skip-package-install` still installs them with existing backup and idempotency behavior.
 - Lifecycle is wrapper-first: users run `overlord`, not raw `docker`/`podman`, for normal create/start/attach/remove flow.
 - The persistent container is launched detached as `sleep infinity`; interactive modes are entered later with `exec`.
 - Web mode is the default path: `overlord`, `overlord web`, and `overlord opencode` should resolve to the same published OpenCode web-server flow and print local/network URLs.
@@ -46,7 +47,7 @@ Headroom runtime behavior belongs to `scripts/overlord` only. The native install
 - Current Headroom launches fail fast because no checked-in provider or preset has real traversal proof.
 - `.overlord/` state management is intentional and must remain git-ignored.
 - OpenCode and zsh state persist through direct writable bind mounts under the workspace `.overlord/` directory; lifecycle commands must never copy live state back onto those bind sources.
-- `fresh` and `purge` must verify the exact `/workspace`, OpenCode data, and zsh data bind mappings before proxy-marker cleanup or any destructive engine command. Missing, ambiguous, named-volume, read-only, or mismatched mappings fail closed and require container recreation with the current launcher.
+- `fresh`, and `purge` when its target container exists, must verify the exact `/workspace`, OpenCode data, and zsh data bind mappings before proxy-marker cleanup or any destructive engine command. An already-absent `purge` may continue proxy-marker and image cleanup only after the engine proves absence; existence-query errors and invalid mappings fail closed.
 - Legacy-container migration is an explicit manual recovery procedure: quiesce first, copy unmounted state only to a separate staging directory, verify it, then remove the exact incompatible container. Never turn that procedure into an automatic launcher fallback.
 - Adding or removing providers is incomplete unless `config/opencode.json`, `PROVIDER_ENV_VARS`, and routing presets are updated together.
 
@@ -61,7 +62,7 @@ Headroom runtime behavior belongs to `scripts/overlord` only. The native install
 - `overlord --headroom` and `OVERLORD_HEADROOM=1 overlord`: verify current provider fail-fast before proxy/OpenCode startup.
 - Future supported Headroom mode: verify one private proxy, `HEADROOM_TELEMETRY=off`, `--no-telemetry`, no host-published 8787, and plain rerun disables it.
 - `scripts/install --list-configs`: verify native installer preset listing without host writes.
-- `tmp_home=$(mktemp -d); HOME=$tmp_home XDG_CONFIG_HOME=$tmp_home/.config XDG_CACHE_HOME=$tmp_home/.cache scripts/install --skip-package-install`: verify native config injection in an isolated home.
+- `tmp_home=$(mktemp -d); HOME=$tmp_home XDG_CONFIG_HOME=$tmp_home/.config XDG_CACHE_HOME=$tmp_home/.cache scripts/install --skip-package-install`: verify native config and repository-owned skill installation in an isolated home.
 - `python3 -m unittest discover -s scripts/tests`: verify Python launcher regression coverage.
 - `overlord fresh && overlord`: verify clean-container reset.
 - `overlord purge && overlord`: verify full rebuild after runtime wiring or image-affecting changes.

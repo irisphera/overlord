@@ -19,15 +19,18 @@ from overlord_py.package_scripts import (
 from overlord_py.paths import WorkspacePaths
 from overlord_py.progress import StageReporter, noop_stage, stage_return_message
 from overlord_py.runtime_config import RestartState
+from .tool_versions import load_tool_versions
 
 RESPONSIBILITY: Final = "ensure pinned runtime packages and request web restarts when repairs occur"
-OPENCODE_REQUIRED_VERSION: Final = "latest"
-OH_MY_OPENAGENT_REQUIRED_VERSION: Final = "4.16.0"
-OH_MY_OPENAGENT_PACKAGE: Final = f"oh-my-openagent@{OH_MY_OPENAGENT_REQUIRED_VERSION}"
+TOOL_VERSIONS: Final = load_tool_versions()
+OPENCODE_REQUIRED_VERSION: Final = TOOL_VERSIONS.opencode_version
+OPENCODE_PACKAGE: Final = TOOL_VERSIONS.opencode_package
+OH_MY_OPENAGENT_REQUIRED_VERSION: Final = TOOL_VERSIONS.oh_my_openagent_version
+OH_MY_OPENAGENT_PACKAGE: Final = TOOL_VERSIONS.oh_my_openagent_package
 OH_MY_OPENAGENT_CACHE_DIR: Final = f"/home/overlord/.cache/opencode/packages/{OH_MY_OPENAGENT_PACKAGE}"
 OH_MY_OPENAGENT_BIN: Final = "/home/overlord/.local/bin/oh-my-openagent"
-CODEGRAPH_REQUIRED_VERSION: Final = "1.0.1"
-CODEGRAPH_PACKAGE: Final = f"@colbymchenry/codegraph@{CODEGRAPH_REQUIRED_VERSION}"
+CODEGRAPH_REQUIRED_VERSION: Final = TOOL_VERSIONS.codegraph_version
+CODEGRAPH_PACKAGE: Final = TOOL_VERSIONS.codegraph_package
 DEFAULT_SKILLS_SOURCE: Final = "mattpocock/skills#v1.0.1"
 DEFAULT_SKILLS_NPX_PACKAGE: Final = "skills@1.5.11"
 DEFAULT_SKILLS_MARKERS: Final = (
@@ -49,16 +52,16 @@ def ensure_opencode_runtime_version(
     env: Mapping[str, str],
     stage: StageReporter = noop_stage,
 ) -> tuple[str, ...]:
-    stage(f"Checking OpenCode CLI package opencode-ai@{OPENCODE_REQUIRED_VERSION} in {paths.identity.container_name}...")
+    stage(f"Checking OpenCode CLI package {OPENCODE_PACKAGE} in {paths.identity.container_name}...")
     current_version = opencode_current_version(engine, paths, package_env, env=env)
-    if opencode_version_satisfied(engine, paths, package_env, current_version, env=env):
+    if current_version == OPENCODE_REQUIRED_VERSION:
         return ()
-    stage(f"Installing OpenCode CLI package opencode-ai@{OPENCODE_REQUIRED_VERSION} in {paths.identity.container_name}...")
+    stage(f"Installing OpenCode CLI package {OPENCODE_PACKAGE} in {paths.identity.container_name}...")
     install = run_package_script(engine, paths, package_env, (OPENCODE_REQUIRED_VERSION,), OPENCODE_INSTALL_SCRIPT, env=env)
     require_success(install, "OpenCode package install failed")
     installed_version = opencode_current_version(engine, paths, package_env, env=env)
     restart.request()
-    message = f"Ensuring OpenCode CLI package opencode-ai@{OPENCODE_REQUIRED_VERSION} in {paths.identity.container_name}..."
+    message = f"Ensuring OpenCode CLI package {OPENCODE_PACKAGE} in {paths.identity.container_name}..."
     return (*stage_return_message(stage, message), f"OpenCode CLI version: {installed_version or 'unknown'}")
 
 
@@ -201,22 +204,6 @@ def opencode_current_version(
         return node_version
     fallback = run_package_command(engine, paths, package_env, ("opencode", "--version"), env=env)
     return fallback.stdout.strip()
-
-
-def opencode_version_satisfied(
-    engine: EngineRunner,
-    paths: WorkspacePaths,
-    package_env: Mapping[str, str],
-    current_version: str,
-    *,
-    env: Mapping[str, str],
-) -> bool:
-    if OPENCODE_REQUIRED_VERSION != "latest":
-        return current_version == OPENCODE_REQUIRED_VERSION
-    latest = run_package_command(engine, paths, package_env, ("npm", "view", "opencode-ai", "version"), env=env).stdout.strip()
-    if latest:
-        return current_version == latest
-    return bool(current_version)
 
 
 def package_json_version(

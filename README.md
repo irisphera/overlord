@@ -58,7 +58,7 @@ To change `--config` or `--lms-model` for an existing workspace, run `overlord f
 
 ## Native host install
 
-Run the installer from this repository. It installs the checked-in provider catalog, selected routing preset, zellij configuration, and an environment file under the host's XDG configuration home.
+Run the installer from this repository. It installs the checked-in provider catalog, selected routing preset, zellij configuration, environment file, and repository-owned `setup-devcontainer` skill.
 
 ```bash
 scripts/install
@@ -69,7 +69,9 @@ scripts/install --lms-model qwen3-8b
 
 A full install requires Bun in `PATH`. It installs OpenCode, oh-my-openagent, and CodeGraph with Bun, then creates command shims in `~/.local/bin` when their installed targets are available.
 
-Use `--skip-package-install` to write only configuration and environment files. This mode does not require Bun and does not install OpenCode, oh-my-openagent, or CodeGraph.
+Pinned versions for those three tools are maintained in `config/tool-versions.env`; changing that one file updates both the container image and native installation paths.
+
+Use `--skip-package-install` to write static configuration, environment, and skill files only. This mode does not require Bun and does not install OpenCode, oh-my-openagent, or CodeGraph.
 
 ```bash
 scripts/install --skip-package-install
@@ -78,6 +80,8 @@ scripts/install --skip-package-install
 The installer writes `opencode.json`, `oh-my-openagent.jsonc`, `oh-my-opencode.jsonc`, and `overlord-env` to `${XDG_CONFIG_HOME:-$HOME/.config}/opencode/`.
 
 It writes zellij configuration to `${XDG_CONFIG_HOME:-$HOME/.config}/zellij/config.kdl`.
+
+It installs the `setup-devcontainer` skill to `$HOME/.agents/skills/setup-devcontainer/SKILL.md`, including in `--skip-package-install` mode.
 
 Existing files or links at those destinations are timestamp-backed up before replacement. `overlord-env` is written with mode `600`; source it before host `opencode` if the shell does not already provide the required settings.
 
@@ -98,7 +102,7 @@ The current and only preset is `default` (`oh-my-openagent.jsonc`).
 
 The default routes agents and categories to Azure `gpt-5.6-sol` with role-specific reasoning effort. The Azure deployment ID must be `gpt-5.6-sol`, or you must change its `id` in `config/opencode.json`.
 
-The catalog includes Azure GPT-5.6 Sol; Bedrock Claude Opus 4.8 and Haiku 4.5; Vertex Gemini 3.1 Pro, 3.5 Flash, and 3 Flash; and LM Studio `qwopus3.5-9b-coder-mtp`.
+The catalog includes Azure GPT-5.6 Sol and Terra; Bedrock Claude Opus 4.8 and Haiku 4.5; Vertex Gemini 3.1 Pro, 3.5 Flash, and 3 Flash; and LM Studio `qwopus3.5-9b-coder-mtp`.
 
 Managed container files are `/home/overlord/.config/opencode/opencode.json`, `oh-my-openagent.jsonc`, and `oh-my-opencode.jsonc`, plus `/home/overlord/.config/zellij/config.kdl`.
 
@@ -162,7 +166,7 @@ OpenCode data and zsh data are direct writable bind mounts from `.overlord/`, so
 
 Packages installed into a container outside persisted mounts disappear with `fresh`.
 
-Before `fresh` or `purge`, Overlord verifies exactly one writable bind mount for `/workspace`, OpenCode data, and zsh data, each from the expected workspace source.
+Before `fresh`, or before `purge` removes an existing container, Overlord verifies exactly one writable bind mount for `/workspace`, OpenCode data, and zsh data, each from the expected workspace source. If `purge` proves the container is already absent, it skips mount inspection and continues image cleanup.
 
 Missing, ambiguous, read-only, named-volume, or mismatched mounts fail closed without destructive lifecycle action.
 
@@ -189,7 +193,7 @@ Testcontainers defaults are `DOCKER_HOST=unix:///var/run/docker.sock`, `TESTCONT
 
 Set `TESTCONTAINERS_RYUK_DISABLED=true` only when daemon policy blocks Ryuk.
 
-For repository-specific dependencies, add an executable `setup-devcontainer.sh` to the workspace root.
+For repository-specific dependencies, run `/setup-devcontainer` in OpenCode. The repository-owned skill inspects explicit manifests and tool configuration, then creates an executable, idempotent `setup-devcontainer.sh` when absent or minimally updates it when present. It preserves unrelated setup behavior and reports unsupported or contradictory evidence instead of guessing install commands.
 
 During container creation or restart, Overlord runs `/workspace/setup-devcontainer.sh` as root, then repairs `/home/overlord` ownership.
 
@@ -201,9 +205,9 @@ The container image includes OpenCode, oh-my-openagent, CodeGraph, Node.js 22, B
 
 It also includes git, zsh, zellij, neovim, ripgrep, jq, ast-grep, ShellCheck, and shfmt.
 
-Project-specific language servers and stacks are intentionally not image defaults. Install them in the workspace through `setup-devcontainer.sh` when the project requires them.
+Project-specific language servers and stacks are intentionally not image defaults. Use `/setup-devcontainer` to maintain `setup-devcontainer.sh`; review the result because Overlord executes it as root from `/workspace`. The skill validates Bash syntax and uses ShellCheck and shfmt when available.
 
-The container also includes global skills from pinned `mattpocock/skills`. Run `/setup-matt-pocock-skills` inside OpenCode to create repo-specific skill setup; the native installer does not install these skills.
+The container includes the repository-owned `setup-devcontainer` skill at `/home/overlord/.agents/skills/setup-devcontainer/SKILL.md` and global skills from pinned `mattpocock/skills`. Run `/setup-matt-pocock-skills` inside OpenCode to create repo-specific skill setup; the native installer installs only the repository-owned skill.
 
 Open zellij with `overlord zellij`. Its checked-in configuration uses zsh, maps `Ctrl+b` to tab mode, and leaves `Ctrl+t` available for application passthrough.
 
@@ -273,6 +277,8 @@ scripts/install --list-configs
 tmp_home=$(mktemp -d)
 HOME="$tmp_home" XDG_CONFIG_HOME="$tmp_home/.config" XDG_CACHE_HOME="$tmp_home/.cache" \
   scripts/install --skip-package-install
+cmp skills/setup-devcontainer/SKILL.md \
+  "$tmp_home/.agents/skills/setup-devcontainer/SKILL.md"
 
 # Confirm the following launch reports "Creating container...".
 overlord fresh

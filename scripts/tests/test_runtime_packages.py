@@ -26,10 +26,12 @@ from overlord_py.runtime_config import (  # noqa: E402
 from overlord_py.packages import (  # noqa: E402
     CODEGRAPH_BIN,
     CODEGRAPH_PACKAGE,
+    CODEGRAPH_REQUIRED_VERSION,
     HEADROOM_REQUIRED_VERSION,
     OH_MY_OPENAGENT_BIN,
     OH_MY_OPENAGENT_CACHE_DIR,
     OH_MY_OPENAGENT_PACKAGE,
+    OH_MY_OPENAGENT_REQUIRED_VERSION,
     OPENCODE_REQUIRED_VERSION,
     PackageRepairError,
     ensure_codegraph_runtime_package,
@@ -54,7 +56,12 @@ class RuntimeConfigTests(unittest.TestCase):
             self.assertIn(RUNTIME_OH_MY_OPENAGENT_CONFIG_FILE, cat_targets(fixture.engine))
             self.assertIn(RUNTIME_GCLOUD_ADC_FILE, cat_targets(fixture.engine))
             self.assertIn(RUNTIME_ZELLIJ_CONFIG_FILE, cat_targets(fixture.engine))
-            self.assertTrue(any(run.input_text and "oh-my-openagent@4.16.0" in run.input_text for run in fixture.engine.runs))
+            self.assertTrue(
+                any(
+                    run.input_text and OH_MY_OPENAGENT_PACKAGE in run.input_text
+                    for run in fixture.engine.runs
+                )
+            )
             self.assertTrue(any(run.input_text and "export AZURE_API_KEY='sentinel azure'" in run.input_text for run in fixture.engine.runs))
             self.assertTrue(any(run.input_text and "export GOOGLE_APPLICATION_CREDENTIALS=/home/overlord/.config/gcloud/application_default_credentials.json" in run.input_text for run in fixture.engine.runs))
             self.assertTrue(any("grep -q overlord-env" in " ".join(run.args) for run in fixture.engine.runs))
@@ -69,7 +76,7 @@ class RuntimeConfigTests(unittest.TestCase):
             oh_my_openagent = stdin_for_target(fixture.engine, RUNTIME_OH_MY_OPENAGENT_CONFIG_FILE)
             oh_my_opencode = stdin_for_target(fixture.engine, RUNTIME_OH_MY_OPENCODE_CONFIG_FILE)
 
-            self.assertIn("oh-my-openagent@4.16.0", opencode_text)
+            self.assertIn(OH_MY_OPENAGENT_PACKAGE, opencode_text)
             self.assertEqual(oh_my_openagent, oh_my_opencode)
             self.assertIn('"model": "lmstudio/qwen3-8b"', oh_my_openagent)
 
@@ -120,12 +127,48 @@ class RuntimeConfigTests(unittest.TestCase):
             opencode_text = stdin_for_target(fixture.engine, RUNTIME_OPENCODE_CONFIG_FILE)
 
             self.assertIn('"plugin": [', opencode_text)
-            self.assertIn('"oh-my-openagent@4.16.0"', opencode_text)
+            self.assertIn(f'"{OH_MY_OPENAGENT_PACKAGE}"', opencode_text)
             self.assertNotIn('"headroom"', opencode_text)
 
 
 class PackageRepairTests(unittest.TestCase):
-    def test_old_oh_my_openagent_version_installs_4_16_0_and_sets_restart_state(self) -> None:
+    def test_mismatched_opencode_version_installs_manifest_pin_and_sets_restart_state(self) -> None:
+        engine = RecordingEngine(
+            responses=[
+                ("require('/home/overlord/.bun/install/global/node_modules/opencode-ai/package.json').version", FakeResponse(stdout="0.0.0\n")),
+            ]
+        )
+        with runtime_workspace(engine=engine) as fixture:
+            restart = RestartState()
+
+            messages = ensure_opencode_runtime_version(engine, fixture.paths, fixture.package_env, restart, env=fixture.runner_env)
+
+            self.assertTrue(restart.required)
+            self.assertEqual(
+                messages[0],
+                f"Ensuring OpenCode CLI package opencode-ai@{OPENCODE_REQUIRED_VERSION} in {fixture.paths.identity.container_name}...",
+            )
+            self.assertTrue(any('"${bun_bin}" add -g "opencode-ai@${required_version}"' in (run.input_text or "") for run in engine.runs))
+
+    def test_exact_opencode_version_skips_install_and_restart(self) -> None:
+        engine = RecordingEngine(
+            responses=[
+                (
+                    "require('/home/overlord/.bun/install/global/node_modules/opencode-ai/package.json').version",
+                    FakeResponse(stdout=f"{OPENCODE_REQUIRED_VERSION}\n"),
+                ),
+            ]
+        )
+        with runtime_workspace(engine=engine) as fixture:
+            restart = RestartState()
+
+            messages = ensure_opencode_runtime_version(engine, fixture.paths, fixture.package_env, restart, env=fixture.runner_env)
+
+            self.assertEqual(messages, ())
+            self.assertFalse(restart.required)
+            self.assertFalse(any('"${bun_bin}" add -g "opencode-ai@${required_version}"' in (run.input_text or "") for run in engine.runs))
+
+    def test_old_oh_my_openagent_version_installs_manifest_pin_and_sets_restart_state(self) -> None:
         engine = RecordingEngine(
             responses=[
                 ('package_json="${package_dir}/package.json"', FakeResponse(returncode=1, stdout="4.11.1\n")),
@@ -137,14 +180,17 @@ class PackageRepairTests(unittest.TestCase):
             messages = ensure_oh_my_openagent_runtime_package(engine, fixture.paths, fixture.package_env, restart, env=fixture.runner_env)
 
             self.assertTrue(restart.required)
-            self.assertEqual(messages[0], f"Ensuring OpenCode plugin package oh-my-openagent@4.16.0 in {fixture.paths.identity.container_name}...")
-            self.assertTrue(any("oh-my-openagent@4.16.0" in run.args for run in engine.runs))
+            self.assertEqual(
+                messages[0],
+                f"Ensuring OpenCode plugin package {OH_MY_OPENAGENT_PACKAGE} in "
+                f"{fixture.paths.identity.container_name}...",
+            )
+            self.assertTrue(any(OH_MY_OPENAGENT_PACKAGE in run.args for run in engine.runs))
 
     def test_missing_packages_install_pinned_commands_and_set_restart_state(self) -> None:
         engine = RecordingEngine(
             responses=[
                 ("require('/home/overlord/.bun/install/global/node_modules/opencode-ai/package.json').version", FakeResponse(stdout="")),
-                ("npm view opencode-ai version", FakeResponse(stdout="")),
                 ('package_json="${package_dir}/package.json"', FakeResponse(returncode=1)),
                 ('required_version="$1"\npublic_bin="$2"', FakeResponse(returncode=1)),
             ]
@@ -166,12 +212,22 @@ class PackageRepairTests(unittest.TestCase):
             self.assertTrue(any(OH_MY_OPENAGENT_CACHE_DIR in run.args for run in engine.runs))
             self.assertTrue(any(OH_MY_OPENAGENT_BIN in run.args for run in engine.runs))
             self.assertTrue(any(CODEGRAPH_BIN in run.args for run in engine.runs))
+            self.assertFalse(any("npm view opencode-ai" in run.args for run in engine.runs))
+
+    def test_runtime_package_specs_derive_from_manifest(self) -> None:
+        manifest_versions = dict(
+            line.split("=", maxsplit=1)
+            for line in (SCRIPTS_DIR.parent / "config" / "tool-versions.env").read_text(encoding="utf-8").splitlines()
+        )
+
+        self.assertEqual(OPENCODE_REQUIRED_VERSION, manifest_versions["OPENCODE_VERSION"])
+        self.assertEqual(OH_MY_OPENAGENT_REQUIRED_VERSION, manifest_versions["OH_MY_OPENAGENT_VERSION"])
+        self.assertEqual(CODEGRAPH_REQUIRED_VERSION, manifest_versions["CODEGRAPH_VERSION"])
 
     def test_package_install_failure_surfaces_captured_log(self) -> None:
         engine = RecordingEngine(
             responses=[
                 ("require('/home/overlord/.bun/install/global/node_modules/opencode-ai/package.json').version", FakeResponse(stdout="")),
-                ("npm view opencode-ai version", FakeResponse(stdout="")),
                 ('"${bun_bin}" add -g "opencode-ai@${required_version}"', FakeResponse(returncode=1, stderr="install exploded\n")),
             ]
         )

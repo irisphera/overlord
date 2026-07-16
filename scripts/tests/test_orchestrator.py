@@ -15,6 +15,10 @@ from harness import CommandRecord, HarnessRun, TempLauncherWorkspace, valid_pers
 SCRIPTS_DIR: Final = Path(__file__).resolve().parents[1]
 PYTHONPATH_ENV: Final = {"PYTHONPATH": str(SCRIPTS_DIR)}
 PYTHON_ENTRYPOINT: Final = (sys.executable, "-m", "overlord_py.main")
+TOOL_VERSIONS: Final = dict(
+    line.split("=", maxsplit=1)
+    for line in (SCRIPTS_DIR.parent / "config" / "tool-versions.env").read_text(encoding="utf-8").splitlines()
+)
 
 
 class OrchestratorEntrypointTests(unittest.TestCase):
@@ -35,11 +39,11 @@ class OrchestratorEntrypointTests(unittest.TestCase):
                     "==> Creating container overlord-",
                     "==> Injecting initial runtime config...",
                     "==> Checking oh-my-openagent runtime config...",
-                    "==> Checking OpenCode plugin package oh-my-openagent@4.16.0 in overlord-",
-                    "==> Checking CodeGraph CLI package @colbymchenry/codegraph@1.0.1 in overlord-",
+                    f"==> Checking OpenCode plugin package oh-my-openagent@{TOOL_VERSIONS['OH_MY_OPENAGENT_VERSION']} in overlord-",
+                    f"==> Checking CodeGraph CLI package @colbymchenry/codegraph@{TOOL_VERSIONS['CODEGRAPH_VERSION']} in overlord-",
                     "==> Stopping Headroom proxy for plain OpenCode mode in overlord-",
                     "==> Checking default OpenCode skills from mattpocock/skills#v1.0.1 in overlord-",
-                    "==> Checking OpenCode CLI package opencode-ai@latest in overlord-",
+                    f"==> Checking OpenCode CLI package opencode-ai@{TOOL_VERSIONS['OPENCODE_VERSION']} in overlord-",
                     "==> Restarting OpenCode web server in overlord-",
                     "==> Ensuring OpenCode web server is running in overlord-",
                     "==> Resolving published OpenCode web port for overlord-",
@@ -104,7 +108,12 @@ class OrchestratorEntrypointTests(unittest.TestCase):
                 result = run_python(workspace, args=(command,), env=host_env(workspace))
 
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(result.stdout.count("==> Checking OpenCode CLI package opencode-ai@latest in overlord-"), expected_count)
+                self.assertEqual(
+                    result.stdout.count(
+                        f"==> Checking OpenCode CLI package opencode-ai@{TOOL_VERSIONS['OPENCODE_VERSION']} in overlord-"
+                    ),
+                    expected_count,
+                )
 
     def test_fresh_and_purge_dispatch_before_image_build_or_runtime_repair(self) -> None:
         for command in ("fresh", "purge"):

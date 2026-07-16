@@ -9,11 +9,12 @@ OPENCODE_CONFIG_NAME="opencode.json"
 DEFAULT_OH_MY_CONFIG_NAME="oh-my-openagent.jsonc"
 OPENCODE_CONFIG_SCHEMA='"$schema":"https://opencode.ai/config.json"'
 OH_MY_CONFIG_SCHEMA="\"\$schema\": \"https://raw.githubusercontent.com/code-yeongyu/oh-my-openagent/dev/assets/oh-my-opencode.schema.json\""
-OPENCODE_REQUIRED_VERSION="latest"
-OH_MY_OPENAGENT_REQUIRED_VERSION="4.16.0"
-OH_MY_OPENAGENT_PACKAGE="oh-my-openagent@${OH_MY_OPENAGENT_REQUIRED_VERSION}"
-CODEGRAPH_REQUIRED_VERSION="1.0.1"
-CODEGRAPH_PACKAGE="@colbymchenry/codegraph@${CODEGRAPH_REQUIRED_VERSION}"
+TOOL_VERSIONS_MANIFEST="${OVERLORD_DIR}/config/tool-versions.env"
+# shellcheck source=/dev/null
+. "${TOOL_VERSIONS_MANIFEST}"
+OPENCODE_PACKAGE="opencode-ai@${OPENCODE_VERSION}"
+OH_MY_OPENAGENT_PACKAGE="oh-my-openagent@${OH_MY_OPENAGENT_VERSION}"
+CODEGRAPH_PACKAGE="@colbymchenry/codegraph@${CODEGRAPH_VERSION}"
 
 XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-${HOME}/.config}"
 XDG_CACHE_HOME="${XDG_CACHE_HOME:-${HOME}/.cache}"
@@ -21,6 +22,7 @@ XDG_DATA_HOME="${XDG_DATA_HOME:-${HOME}/.local/share}"
 XDG_STATE_HOME="${XDG_STATE_HOME:-${HOME}/.local/state}"
 BUN_INSTALL="${BUN_INSTALL:-${HOME}/.bun}"
 LOCAL_BIN_DIR="${HOME}/.local/bin"
+RUNTIME_SETUP_DEVCONTAINER_SKILL="${HOME}/.agents/skills/setup-devcontainer/SKILL.md"
 
 RUNTIME_OPENCODE_CONFIG_DIR="${XDG_CONFIG_HOME}/opencode"
 RUNTIME_OPENCODE_CONFIG_FILE="${RUNTIME_OPENCODE_CONFIG_DIR}/opencode.json"
@@ -40,7 +42,7 @@ stage() {
 }
 
 show_help() {
-	cat <<'USAGE'
+	cat <<USAGE
 install - Install Overlord's OpenCode setup directly on this machine
 
 USAGE: install [--list-configs | --config PRESET | --lms-model MODEL] [--skip-package-install]
@@ -49,7 +51,7 @@ OPTIONS:
 	--list-configs          List available oh-my-openagent routing presets
 	--config PRESET         Use an oh-my-openagent routing preset with config/opencode.json
 	--lms-model MODEL       Rewrite all oh-my-openagent routes to lmstudio/MODEL
-	--skip-package-install  Only install configs and env files; do not install packages
+	--skip-package-install  Only install static configs, env, and repository-owned skills; do not install packages
 	-h, --help              Show this help
 
 WRITES:
@@ -58,13 +60,14 @@ WRITES:
 	~/.config/opencode/oh-my-opencode.jsonc
 	~/.config/opencode/overlord-env
 	~/.config/zellij/config.kdl
-	~/.cache/opencode/packages/oh-my-openagent@4.16.0/
+	~/.agents/skills/setup-devcontainer/SKILL.md
+	~/.cache/opencode/packages/${OH_MY_OPENAGENT_PACKAGE}/
 	~/.local/bin/opencode
 	~/.local/bin/oh-my-openagent
 	~/.local/bin/codegraph
 
 Existing files are backed up before they are replaced.
-Bun must already be installed and available in PATH.
+Bun is required unless --skip-package-install is used.
 USAGE
 }
 
@@ -235,10 +238,11 @@ write_opencode_config() {
 	tmp_file="$(mktemp)"
 	if [[ -n "${LMS_MODEL}" ]]; then
 		escaped_model="$(escape_sed_replacement "${LMS_MODEL}")"
-		sed 's|"qwopus3.5-9b-coder-mtp"|"'"${escaped_model}"'"|g' \
+		sed 's|"qwopus3.5-9b-coder-mtp"|"'"${escaped_model}"'"|g; s|"plugin": \[\]|"plugin": ["'"${OH_MY_OPENAGENT_PACKAGE}"'"]|' \
 			"${CONFIG_FILE}" >"${tmp_file}"
 	else
-		cp "${CONFIG_FILE}" "${tmp_file}"
+		sed 's|"plugin": \[\]|"plugin": ["'"${OH_MY_OPENAGENT_PACKAGE}"'"]|' \
+			"${CONFIG_FILE}" >"${tmp_file}"
 	fi
 	install_file "${tmp_file}" "${RUNTIME_OPENCODE_CONFIG_FILE}" 600
 	rm -f "${tmp_file}"
@@ -342,8 +346,8 @@ ensure_opencode_package() {
 	local opencode_bin
 	local installed_version
 
-	stage "Installing OpenCode CLI package opencode-ai@${OPENCODE_REQUIRED_VERSION}..."
-	bun add -g "opencode-ai@${OPENCODE_REQUIRED_VERSION}"
+	stage "Installing OpenCode CLI package ${OPENCODE_PACKAGE}..."
+	bun add -g "${OPENCODE_PACKAGE}"
 	opencode_bin="${BUN_INSTALL}/bin/opencode"
 	if [[ -x "${opencode_bin}" ]]; then
 		safe_symlink "${opencode_bin}" "${LOCAL_BIN_DIR}/opencode"
@@ -494,6 +498,8 @@ main() {
 	write_oh_my_config
 	write_zellij_config
 	write_env_file
+	stage "Installing setup-devcontainer skill..."
+	install_file "${OVERLORD_DIR}/skills/setup-devcontainer/SKILL.md" "${RUNTIME_SETUP_DEVCONTAINER_SKILL}" 644
 
 	if [[ "${SKIP_PACKAGE_INSTALL}" -eq 0 ]]; then
 		ensure_bun

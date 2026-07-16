@@ -6,7 +6,7 @@
 
 ## OVERVIEW
 
-Overlord has one documented launcher path for running OpenCode containers: the bind-mounted local `overlord` workflow. It also has a native host installer for users who do not want OpenCode containerized. The repo has three authored control surfaces: root image/docs, runtime-injected config under `config/`, and launcher/lifecycle logic under `scripts/`.
+Overlord has one documented launcher path for running OpenCode containers: the bind-mounted local `overlord` workflow. It also has a native host installer for users who do not want OpenCode containerized. The repo has four authored control surfaces: root image/docs, runtime-injected config under `config/`, default skills under `skills/`, and launcher/lifecycle logic under `scripts/`.
 
 Headroom is image-provided cloud/devcontainer tooling. It is strict opt-in through `scripts/overlord` and currently fail-fast for all checked-in providers until real traversal proof exists.
 
@@ -16,6 +16,7 @@ Headroom is image-provided cloud/devcontainer tooling. It is strict opt-in throu
 overlord/
 ├── Dockerfile      # Local bind-mounted image/toolchain source of truth
 ├── config/         # Host-authored config copied into container at launch
+├── skills/         # Repository-owned default OpenCode skills
 ├── scripts/        # Host-side launcher shim, Python launcher modules, tests, and native installer
 ├── .overlord/      # Per-workspace runtime state, git-ignored
 ├── README.md       # User-facing install and operations guide
@@ -34,6 +35,7 @@ overlord/
 | Change Headroom launcher behavior | `scripts/overlord` | Owns `--headroom`, `OVERLORD_HEADROOM`, proxy lifecycle, fail-fast checks, and runtime overlay |
 | Change OpenCode provider/model catalog | `config/opencode.json` | Single checked-in provider catalog copied into runtime config path |
 | Change agent/category routing | `config/oh-my-openagent*.jsonc` | Source-controlled routing presets copied into runtime config path |
+| Change repository-owned default skills | `skills/` | Wire authored skill changes into both `Dockerfile` and `scripts/install` |
 | Change local container bootstrap permissions | `config/entrypoint.sh` | Root bootstrap, UID/GID remap, ownership repair, `gosu` handoff |
 | Change zellij UX | `config/zellij-config.kdl` | Non-default `Ctrl+b` tab mode and `Ctrl+t` passthrough |
 | Inspect local persisted sessions/history | `.overlord/` | Runtime state only, not authored source |
@@ -45,6 +47,8 @@ overlord/
 - One persistent local container is kept per workspace directory, with session/history state stored under `.overlord/`.
 - `scripts/overlord` is authoritative over `README.md` for the local command surface; launcher behavior lives under `scripts/overlord_py/`.
 - `Dockerfile` and root docs own image/toolchain guidance; child AGENTS files should not repeat that material.
+- `skills/setup-devcontainer/SKILL.md` is authoritative; container and native copies are generated distribution outputs and remain separate from pinned third-party skills.
+- Project-specific tooling belongs in workspace `setup-devcontainer.sh`, which runs as root from `/workspace` only on container create or restart.
 - Headroom provider support requires real traversal evidence before docs or launcher guards may claim support for a preset.
 
 ## ANTI-PATTERNS (THIS PROJECT)

@@ -4,13 +4,11 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import Final
 
-from overlord_py.headroom import HEADROOM_MODE_FILE
 from overlord_py.paths import WorkspacePaths
 from overlord_py.web_http import resolve_network_host_ip, wait_for_opencode_web, wait_for_opencode_web_ui
 from overlord_py.web_proxy import ensure_host_web_proxy, stop_host_web_proxy, wait_for_host_web_proxy
 from overlord_py.web_readiness import verify_oh_my_openagent_loaded
 from overlord_py.web_restart import (
-    request_opencode_web_restart_if_mode_changed,
     request_opencode_web_restart_if_plugin_env_missing,
     restart_opencode_web_if_needed,
 )
@@ -48,7 +46,7 @@ def resolve_published_web_port(engine: EngineRunner, paths: WorkspacePaths, *, e
     raise WebServerError(f"Error: could not resolve the published host port for {paths.identity.container_name}.\nRun 'overlord fresh' once, then retry.")
 
 
-def plan_opencode_web_server(paths: WorkspacePaths, exec_env_flags: Sequence[str], credential_flags: Sequence[str], desired_mode: str) -> WebScriptPlan:
+def plan_opencode_web_server(paths: WorkspacePaths, exec_env_flags: Sequence[str], credential_flags: Sequence[str]) -> WebScriptPlan:
     return WebScriptPlan(
         argv=(
             "exec",
@@ -67,8 +65,6 @@ def plan_opencode_web_server(paths: WorkspacePaths, exec_env_flags: Sequence[str
             OPENCODE_WEB_LOG_FILE,
             OPENCODE_WEB_HOSTNAME,
             OPENCODE_WEB_PORT,
-            HEADROOM_MODE_FILE,
-            desired_mode,
         ),
         script=ENSURE_OPENCODE_WEB_SERVER_SCRIPT,
     )
@@ -105,7 +101,6 @@ __all__ = [
     "ensure_host_web_proxy",
     "format_access_urls",
     "plan_opencode_web_server",
-    "request_opencode_web_restart_if_mode_changed",
     "request_opencode_web_restart_if_plugin_env_missing",
     "resolve_access_port_for_engine",
     "resolve_network_host_ip",

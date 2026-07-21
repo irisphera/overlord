@@ -14,7 +14,6 @@ CONTAINER_HOME: Final = "/home/overlord"
 CODEGRAPH_INSTALL_DIR: Final = "/home/overlord/.omo/codegraph"
 CODEGRAPH_BIN: Final = "/home/overlord/.local/bin/codegraph"
 CODEGRAPH_NODE_BIN: Final = "/usr/bin/node"
-HEADROOM_TELEMETRY_VALUE: Final = "off"
 RUNTIME_GCLOUD_ADC_FILE: Final = "/home/overlord/.config/gcloud/application_default_credentials.json"
 PROVIDER_ENV_VARS: Final = (
     "AWS_REGION",
@@ -123,7 +122,6 @@ def package_environment() -> dict[str, str]:
         "CODEGRAPH_INSTALL_DIR": CODEGRAPH_INSTALL_DIR,
         "OMO_CODEGRAPH_BIN": CODEGRAPH_BIN,
         "CODEGRAPH_NODE_BIN": CODEGRAPH_NODE_BIN,
-        "HEADROOM_TELEMETRY": HEADROOM_TELEMETRY_VALUE,
     }
 
 
@@ -141,7 +139,6 @@ def base_exec_env(host_env: Mapping[str, str], workspace_name: str) -> list[str]
         f"CODEGRAPH_INSTALL_DIR={CODEGRAPH_INSTALL_DIR}",
         f"OMO_CODEGRAPH_BIN={CODEGRAPH_BIN}",
         f"CODEGRAPH_NODE_BIN={CODEGRAPH_NODE_BIN}",
-        f"HEADROOM_TELEMETRY={HEADROOM_TELEMETRY_VALUE}",
     ]
 
 
@@ -191,7 +188,6 @@ def render_overlord_env(plan: EnvironmentPlan) -> str:
             f"export CODEGRAPH_INSTALL_DIR={quote_env(CODEGRAPH_INSTALL_DIR)}",
             f"export OMO_CODEGRAPH_BIN={quote_env(CODEGRAPH_BIN)}",
             f"export CODEGRAPH_NODE_BIN={quote_env(CODEGRAPH_NODE_BIN)}",
-            f"export HEADROOM_TELEMETRY={quote_env(HEADROOM_TELEMETRY_VALUE)}",
             f"export OVERLORD_WORKSPACE={quote_env(plan.workspace_name)}",
             TITLE_HOOKS.rstrip("\n"),
         )

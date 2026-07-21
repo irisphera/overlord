@@ -17,7 +17,6 @@ OPENCODE_CONFIG_SCHEMA: Final = '"$schema":"https://opencode.ai/config.json"'
 OH_MY_CONFIG_SCHEMA: Final = '"$schema": "https://raw.githubusercontent.com/code-yeongyu/oh-my-openagent/dev/assets/oh-my-opencode.schema.json"'
 TOOL_VERSIONS: Final = load_tool_versions()
 OH_MY_OPENAGENT_PACKAGE: Final = TOOL_VERSIONS.oh_my_openagent_package
-HEADROOM_OPENAI_BASE_URL: Final = "http://127.0.0.1:8787/v1"
 JSON_VALUE: TypeAlias = None | bool | int | float | str | list["JSON_VALUE"] | dict[str, "JSON_VALUE"]
 JSON_OBJECT: TypeAlias = dict[str, JSON_VALUE]
 MODEL_LINE_PATTERN: Final = re.compile(r'"model": ".*"')
@@ -25,8 +24,6 @@ MODEL_LINE_PATTERN: Final = re.compile(r'"model": ".*"')
 
 @dataclass(frozen=True, slots=True)
 class OpencodeRenderOptions:
-    headroom_enabled: bool = False
-    headroom_base_url: str = HEADROOM_OPENAI_BASE_URL
     plugin_spec: str = OH_MY_OPENAGENT_PACKAGE
     lms_model: str = ""
 
@@ -134,10 +131,6 @@ def render_opencode_runtime_config_text(source: str, options: OpencodeRenderOpti
     rewritten_source = rewrite_opencode_lms_catalog(source, render_options.lms_model)
     catalog = load_json_object(rewritten_source)
     catalog["plugin"] = opencode_plugins_with_oh_my(catalog.get("plugin"), render_options.plugin_spec)
-    catalog["provider"] = opencode_provider_with_headroom(
-        catalog.get("provider"),
-        render_options,
-    )
     return json.dumps(catalog, indent=2) + "\n"
 
 
@@ -163,18 +156,3 @@ def opencode_plugins_with_oh_my(plugin_value: JSON_VALUE, plugin_spec: str) -> l
             plugins.append(plugin)
     plugins.append(plugin_spec)
     return plugins
-
-
-def opencode_provider_with_headroom(provider_value: JSON_VALUE, options: OpencodeRenderOptions) -> JSON_OBJECT:
-    providers: JSON_OBJECT = dict(provider_value) if isinstance(provider_value, dict) else {}
-    if options.headroom_enabled:
-        providers["headroom"] = {
-            "npm": "@ai-sdk/openai-compatible",
-            "name": "Headroom",
-            "options": {"baseURL": options.headroom_base_url},
-            "models": {},
-        }
-        return providers
-    if "headroom" in providers:
-        del providers["headroom"]
-    return providers

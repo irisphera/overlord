@@ -9,8 +9,6 @@ ENSURE_OPENCODE_WEB_SERVER_SCRIPT: Final = OPENCODE_CMDLINE_MATCHER_SCRIPT + r''
 LOG_FILE="$2"
 HOST="$3"
 PORT="$4"
-MODE_FILE="$5"
-DESIRED_MODE="$6"
 
 if [ -s "${PID_FILE}" ]; then
   PID=$(cat "${PID_FILE}" 2>/dev/null || true)
@@ -34,8 +32,6 @@ if [ -s "${PID_FILE}" ]; then
         fi
         case "${CLASSIFIER_STATUS}" in
           0)
-            mkdir -p "$(dirname "${MODE_FILE}")"
-            printf '%s\n' "${DESIRED_MODE}" >"${MODE_FILE}"
             exit 0
             ;;
           1)
@@ -76,6 +72,4 @@ mkdir -p "$(dirname "${PID_FILE}")"
 : >"${LOG_FILE}"
 nohup opencode serve --hostname "${HOST}" --port "${PORT}" >"${LOG_FILE}" 2>&1 &
 echo $! >"${PID_FILE}"
-mkdir -p "$(dirname "${MODE_FILE}")"
-printf '%s\n' "${DESIRED_MODE}" >"${MODE_FILE}"
 '''

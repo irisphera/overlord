@@ -27,7 +27,6 @@ from overlord_py.packages import (  # noqa: E402
     CODEGRAPH_BIN,
     CODEGRAPH_PACKAGE,
     CODEGRAPH_REQUIRED_VERSION,
-    HEADROOM_REQUIRED_VERSION,
     OH_MY_OPENAGENT_BIN,
     OH_MY_OPENAGENT_CACHE_DIR,
     OH_MY_OPENAGENT_PACKAGE,
@@ -36,7 +35,6 @@ from overlord_py.packages import (  # noqa: E402
     PackageRepairError,
     ensure_codegraph_runtime_package,
     ensure_default_opencode_skills,
-    ensure_headroom_runtime_available,
     ensure_oh_my_openagent_runtime_package,
     ensure_opencode_runtime_version,
 )
@@ -89,7 +87,7 @@ class RuntimeConfigTests(unittest.TestCase):
 
             self.assertTrue(restart.required)
             self.assertIn(
-                f"Ensuring OpenCode runtime config includes {OH_MY_OPENAGENT_PACKAGE} and the selected Headroom overlay state in {fixture.paths.identity.container_name}...",
+                f"Ensuring OpenCode runtime config includes {OH_MY_OPENAGENT_PACKAGE} in {fixture.paths.identity.container_name}...",
                 messages,
             )
             self.assertIn(RUNTIME_OPENCODE_CONFIG_FILE, cat_targets(fixture.engine))
@@ -120,7 +118,7 @@ class RuntimeConfigTests(unittest.TestCase):
             self.assertIn(RUNTIME_OH_MY_OPENCODE_CONFIG_FILE, targets)
             self.assertNotIn(RUNTIME_OH_MY_OPENAGENT_CONFIG_FILE, targets)
 
-    def test_headroom_disabled_repair_removes_stale_overlay_in_generated_opencode_config(self) -> None:
+    def test_generated_opencode_config_contains_pinned_plugin(self) -> None:
         with runtime_workspace() as fixture:
             inject_initial_runtime_config(fixture.engine, fixture.paths, fixture.context, env=fixture.runner_env)
 
@@ -128,7 +126,6 @@ class RuntimeConfigTests(unittest.TestCase):
 
             self.assertIn('"plugin": [', opencode_text)
             self.assertIn(f'"{OH_MY_OPENAGENT_PACKAGE}"', opencode_text)
-            self.assertNotIn('"headroom"', opencode_text)
 
 
 class PackageRepairTests(unittest.TestCase):
@@ -239,16 +236,6 @@ class PackageRepairTests(unittest.TestCase):
 
             self.assertIn("install exploded", caught.exception.message)
             self.assertFalse(restart.required)
-
-    def test_headroom_disabled_skips_runtime_check_while_enabled_checks_pinned_version(self) -> None:
-        with runtime_workspace() as fixture:
-            disabled = ensure_headroom_runtime_available(fixture.engine, fixture.paths, fixture.package_env, headroom_enabled=False, env=fixture.runner_env)
-            enabled = ensure_headroom_runtime_available(fixture.engine, fixture.paths, fixture.package_env, headroom_enabled=True, env=fixture.runner_env)
-
-            self.assertEqual(disabled, ())
-            self.assertEqual(enabled, (f"Headroom CLI runtime verified: {HEADROOM_REQUIRED_VERSION} with proxy telemetry controls.",))
-            self.assertTrue(any(HEADROOM_REQUIRED_VERSION in run.args for run in fixture.engine.runs))
-            self.assertTrue(any("headroom proxy --help" in (run.input_text or "") for run in fixture.engine.runs))
 
     def test_default_skills_install_uses_pinned_source_and_npx_package(self) -> None:
         engine = RecordingEngine(responses=[('for marker in "$@"', FakeResponse(returncode=1))])

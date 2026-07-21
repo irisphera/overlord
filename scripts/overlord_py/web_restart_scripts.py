@@ -9,64 +9,6 @@ from .web_restart_action_script import RESTART_OPENCODE_WEB_SCRIPT as _RESTART_O
 RESTART_OPENCODE_WEB_SCRIPT: Final = _RESTART_OPENCODE_WEB_SCRIPT
 
 
-REQUEST_RESTART_IF_MODE_CHANGED_SCRIPT: Final = OPENCODE_CMDLINE_MATCHER_SCRIPT + r'''pid_file="$1"
-mode_file="$2"
-desired_mode="$3"
-host="$4"
-port="$5"
-
-is_valid_mode() {
-    case "$1" in
-    plain | headroom) return 0 ;;
-    *) return 1 ;;
-    esac
-}
-
-if ! is_valid_mode "${desired_mode}"; then
-    exit 1
-fi
-
-if [ ! -s "${pid_file}" ]; then
-    rm -f "${mode_file}"
-    exit 0
-fi
-
-pid="$(cat "${pid_file}" 2>/dev/null || true)"
-if [ -z "${pid}" ] || ! kill -0 "${pid}" 2>/dev/null; then
-    rm -f "${pid_file}" "${mode_file}"
-    exit 0
-fi
-if [ ! -r "/proc/${pid}/cmdline" ]; then
-    exit 1
-fi
-
-if classify_opencode_cmdline "/proc/${pid}/cmdline" "${host}" "${port}"; then
-    classifier_status=0
-else
-    classifier_status=$?
-fi
-case "${classifier_status}" in
-0) ;;
-1)
-    rm -f "${mode_file}"
-    exit 1
-    ;;
-2 | 3) exit 1 ;;
-*) exit 1 ;;
-esac
-
-if [ ! -s "${mode_file}" ]; then
-    exit 1
-fi
-
-current_mode="$(cat "${mode_file}" 2>/dev/null || true)"
-if ! is_valid_mode "${current_mode}"; then
-    exit 1
-fi
-
-test "${current_mode}" = "${desired_mode}"
-'''
-
 REQUEST_RESTART_IF_PLUGIN_ENV_MISSING_SCRIPT: Final = OPENCODE_CMDLINE_MATCHER_SCRIPT + r'''pid_file="$1"
 host="$2"
 port="$3"

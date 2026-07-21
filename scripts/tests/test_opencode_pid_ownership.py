@@ -8,7 +8,6 @@ from tempfile import TemporaryDirectory
 
 from scripts.overlord_py.opencode_cmdline_matcher import OPENCODE_CMDLINE_MATCHER_SCRIPT
 from scripts.overlord_py.web_restart_scripts import (
-    REQUEST_RESTART_IF_MODE_CHANGED_SCRIPT,
     REQUEST_RESTART_IF_WORKSPACE_PROJECT_STALE_SCRIPT,
 )
 from scripts.overlord_py.web_types import OPENCODE_WEB_WAIT_SECONDS
@@ -117,60 +116,6 @@ class OpenCodeCmdlineMatcherTests(unittest.TestCase):
 
 
 class OpenCodePidOwnershipConsumerTests(unittest.TestCase):
-    def test_mode_probe_forces_restart_for_legacy_without_deleting_mode_marker(self) -> None:
-        with TemporaryDirectory() as temporary_directory:
-            state_dir = Path(temporary_directory)
-            pid_file = state_dir / "opencode-web.pid"
-            mode_file = state_dir / "headroom.mode"
-            process = start_opencode_process(
-                state_dir,
-                canonical_process_environment(),
-                ("web", "--pure", "--hostname", "0.0.0.0", "--port", "4090"),
-            )
-            try:
-                _ = pid_file.write_text(f"{process.pid}\n", encoding="utf-8")
-                _ = mode_file.write_text("plain\n", encoding="utf-8")
-                result = subprocess.run(
-                    ("sh", "-s", "--", str(pid_file), str(mode_file), "plain", "0.0.0.0", "4090"),
-                    input=REQUEST_RESTART_IF_MODE_CHANGED_SCRIPT,
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )
-                marker_exists = mode_file.exists()
-            finally:
-                stop_process(process)
-
-        self.assertEqual(result.returncode, 1, result.stderr)
-        self.assertTrue(marker_exists)
-
-    def test_mode_probe_treats_valid_looking_later_argv_as_unrelated(self) -> None:
-        with TemporaryDirectory() as temporary_directory:
-            state_dir = Path(temporary_directory)
-            pid_file = state_dir / "opencode-web.pid"
-            mode_file = state_dir / "headroom.mode"
-            process = start_opencode_process(
-                state_dir,
-                canonical_process_environment(),
-                ("doctor", "opencode", "serve", "--hostname", "0.0.0.0", "--port", "4090"),
-            )
-            try:
-                _ = pid_file.write_text(f"{process.pid}\n", encoding="utf-8")
-                _ = mode_file.write_text("plain\n", encoding="utf-8")
-                result = subprocess.run(
-                    ("sh", "-s", "--", str(pid_file), str(mode_file), "plain", "0.0.0.0", "4090"),
-                    input=REQUEST_RESTART_IF_MODE_CHANGED_SCRIPT,
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )
-            finally:
-                stop_process(process)
-            mode_marker_exists = mode_file.exists()
-
-        self.assertEqual(result.returncode, 1, result.stderr)
-        self.assertFalse(mode_marker_exists)
-
     def test_plugin_probe_ignores_valid_looking_later_argv(self) -> None:
         with TemporaryDirectory() as temporary_directory:
             state_dir = Path(temporary_directory)

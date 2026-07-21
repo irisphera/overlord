@@ -22,7 +22,6 @@ REQUIRED_MODULES: Final = (
     "container_lifecycle",
     "runtime_config",
     "packages",
-    "headroom",
     "web_server",
     "terminal",
     "errors",

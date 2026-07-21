@@ -142,8 +142,6 @@ def options(command: Command) -> CliOptions:
         config_explicit=False,
         lms_model="",
         model_override="",
-        headroom_enabled=False,
-        desired_headroom_mode="off",
     )
 
 

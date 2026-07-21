@@ -26,6 +26,9 @@ LOADER_DRIVER = "\n".join(
         "    versions.opencode_version,",
         "    versions.oh_my_openagent_version,",
         "    versions.codegraph_version,",
+        "    versions.rtk_version,",
+        "    versions.rtk_amd64_sha256,",
+        "    versions.rtk_arm64_sha256,",
         "    versions.opencode_package,",
         "    versions.oh_my_openagent_package,",
         "    versions.codegraph_package,",
@@ -44,31 +47,53 @@ class ToolVersionManifestTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         output_lines = result.stdout.splitlines()
-        self.assertEqual(len(output_lines), 7)
+        self.assertEqual(len(output_lines), 10)
         (
             manifest_path,
             opencode_version,
             oh_my_openagent_version,
             codegraph_version,
+            rtk_version,
+            rtk_amd64_sha256,
+            rtk_arm64_sha256,
             opencode_package,
             oh_my_openagent_package,
             codegraph_package,
         ) = output_lines
 
         self.assertEqual(manifest_path, str(TOOL_VERSIONS_PATH))
-        self.assertEqual(set(manifest_values), {"OPENCODE_VERSION", "OH_MY_OPENAGENT_VERSION", "CODEGRAPH_VERSION"})
+        self.assertEqual(
+            set(manifest_values),
+            {
+                "OPENCODE_VERSION",
+                "OH_MY_OPENAGENT_VERSION",
+                "CODEGRAPH_VERSION",
+                "RTK_VERSION",
+                "RTK_AMD64_SHA256",
+                "RTK_ARM64_SHA256",
+            },
+        )
         self.assertEqual(opencode_version, manifest_values["OPENCODE_VERSION"])
         self.assertEqual(oh_my_openagent_version, manifest_values["OH_MY_OPENAGENT_VERSION"])
         self.assertEqual(codegraph_version, manifest_values["CODEGRAPH_VERSION"])
+        self.assertEqual(rtk_version, manifest_values["RTK_VERSION"])
+        self.assertEqual(rtk_amd64_sha256, manifest_values["RTK_AMD64_SHA256"])
+        self.assertEqual(rtk_arm64_sha256, manifest_values["RTK_ARM64_SHA256"])
+        self.assertRegex(rtk_amd64_sha256, r"[0-9a-f]{64}")
+        self.assertRegex(rtk_arm64_sha256, r"[0-9a-f]{64}")
         self.assertEqual(opencode_package, f"opencode-ai@{opencode_version}")
         self.assertEqual(oh_my_openagent_package, f"oh-my-openagent@{oh_my_openagent_version}")
         self.assertEqual(codegraph_package, f"@colbymchenry/codegraph@{codegraph_version}")
 
     def test_manifest_is_the_only_authored_source_of_target_versions(self) -> None:
-        target_patterns = tuple(
-            re.compile(rf"(?<![0-9]){re.escape(line.split('=', maxsplit=1)[1])}(?![0-9])")
-            for line in TOOL_VERSIONS_PATH.read_text(encoding="utf-8").splitlines()
+        manifest_values = dict(
+            line.split("=", maxsplit=1) for line in TOOL_VERSIONS_PATH.read_text(encoding="utf-8").splitlines()
         )
+        target_patterns = tuple(
+            re.compile(rf"(?<![0-9]){re.escape(value)}(?![0-9])")
+            for value in manifest_values.values()
+        )
+        unrelated_same_version = f"ARG AST_GREP_VERSION={manifest_values['RTK_VERSION']}"
         git_files = subprocess.run(
             ("git", "ls-files", "-co", "--exclude-standard"),
             capture_output=True,
@@ -91,13 +116,20 @@ class ToolVersionManifestTests(unittest.TestCase):
             except UnicodeDecodeError:
                 continue
             for line_number, line in enumerate(text.splitlines(), start=1):
-                if any(target_pattern.search(line) for target_pattern in target_patterns):
+                if line != unrelated_same_version and any(target_pattern.search(line) for target_pattern in target_patterns):
                     matches.append(f"{relative_path}:{line_number}")
 
         self.assertEqual(matches, [], "\n".join(matches))
 
     def test_invalid_manifests_are_rejected(self) -> None:
-        valid = "OPENCODE_VERSION=2.3.4\nOH_MY_OPENAGENT_VERSION=5.6.7\nCODEGRAPH_VERSION=8.9.10\n"
+        valid = (
+            "OPENCODE_VERSION=2.3.4\n"
+            "OH_MY_OPENAGENT_VERSION=5.6.7\n"
+            "CODEGRAPH_VERSION=8.9.10\n"
+            "RTK_VERSION=11.12.13\n"
+            f"RTK_AMD64_SHA256={'a' * 64}\n"
+            f"RTK_ARM64_SHA256={'b' * 64}\n"
+        )
         cases = (
             ("missing file", None, "cannot read manifest"),
             ("missing key", valid.replace("CODEGRAPH_VERSION=8.9.10\n", ""), "missing required variable: CODEGRAPH_VERSION"),
@@ -107,6 +139,8 @@ class ToolVersionManifestTests(unittest.TestCase):
             ("quoted assignment", valid.replace("OPENCODE_VERSION=2.3.4", 'OPENCODE_VERSION="2.3.4"'), "invalid assignment"),
             ("whitespace assignment", valid.replace("OPENCODE_VERSION=2.3.4", "OPENCODE_VERSION =2.3.4"), "invalid assignment"),
             ("non-exact semver", valid.replace("CODEGRAPH_VERSION=8.9.10", "CODEGRAPH_VERSION=8.9"), "invalid assignment"),
+            ("short checksum", valid.replace("a" * 64, "a" * 63), "invalid assignment"),
+            ("uppercase checksum", valid.replace("b" * 64, "B" * 64), "invalid assignment"),
         )
 
         with tempfile.TemporaryDirectory() as temporary_directory:

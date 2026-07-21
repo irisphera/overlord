@@ -8,7 +8,7 @@
 
 Overlord has one documented launcher path for running OpenCode containers: the bind-mounted local `overlord` workflow. It also has a native host installer for users who do not want OpenCode containerized. The repo has four authored control surfaces: root image/docs, runtime-injected config under `config/`, default skills under `skills/`, and launcher/lifecycle logic under `scripts/`.
 
-Headroom is image-provided cloud/devcontainer tooling. It is strict opt-in through `scripts/overlord` and currently fail-fast for all checked-in providers until real traversal proof exists.
+RTK is pinned in `config/tool-versions.env`, checksum-verified in both full-install workflows, and initialized for OpenCode as the runtime user.
 
 ## STRUCTURE
 
@@ -31,8 +31,8 @@ overlord/
 | Change local launcher command surface | `scripts/overlord` | Minimal shim that resolves host `python3` and execs the Python launcher |
 | Change local launcher behavior or lifecycle | `scripts/overlord_py/` | Authoritative Python implementation for the bind-mounted workflow; Podman preferred if present |
 | Change native host install behavior | `scripts/install` | Installs checked-in OpenCode/oh-my-openagent/zellij config and Bun-managed packages directly on the host |
-| Change Headroom image install | `Dockerfile` | Owns pinned binary availability only; no runtime proxy process starts at build time |
-| Change Headroom launcher behavior | `scripts/overlord` | Owns `--headroom`, `OVERLORD_HEADROOM`, proxy lifecycle, fail-fast checks, and runtime overlay |
+| Change RTK image install | `Dockerfile` | Selects the pinned Linux asset by `TARGETARCH`, verifies its checksum/version, and initializes the plugin as `overlord` |
+| Change RTK native install | `scripts/install` | Full install selects by host architecture and initializes the plugin; skip mode installs neither |
 | Change OpenCode provider/model catalog | `config/opencode.json` | Single checked-in provider catalog copied into runtime config path |
 | Change agent/category routing | `config/oh-my-openagent*.jsonc` | Source-controlled routing presets copied into runtime config path |
 | Change repository-owned default skills | `skills/` | Wire authored skill changes into both `Dockerfile` and `scripts/install` |
@@ -49,7 +49,7 @@ overlord/
 - `Dockerfile` and root docs own image/toolchain guidance; child AGENTS files should not repeat that material.
 - `skills/setup-devcontainer/SKILL.md` is authoritative; container and native copies are generated distribution outputs and remain separate from pinned third-party skills.
 - Project-specific tooling belongs in workspace `setup-devcontainer.sh`, which runs as root from `/workspace` only on container create or restart.
-- Headroom provider support requires real traversal evidence before docs or launcher guards may claim support for a preset.
+- RTK version and checksum changes belong in `config/tool-versions.env`; Docker and native installs must consume that shared manifest.
 
 ## ANTI-PATTERNS (THIS PROJECT)
 
@@ -57,16 +57,14 @@ overlord/
 - **NEVER** bake credentials into image layers or script defaults; credentials are runtime env vars.
 - **DO NOT** add GUI/VNC stack; this workspace is terminal-only by design.
 - **When adding providers/models, also update launcher env forwarding** in `scripts/overlord`.
-- **DO NOT** route native `scripts/install` through Headroom or mutate host Headroom config.
-- **DO NOT** publish Headroom port 8787 to the host or LAN; the intended proxy is container-local loopback only.
+- **DO NOT** install RTK from an unpinned installer, Cargo, or an unchecked archive.
+- **DO NOT** patch `config/opencode.json` for RTK; its integration is the generated OpenCode plugin.
 ## COMMANDS
 
 ```bash
 overlord                # Start/reuse OpenCode web mode and print local/network URLs
 overlord web            # Explicit web-mode alias
 overlord opencode       # Alias for the web-mode launcher
-overlord --headroom     # Request opt-in Headroom mode; currently fails fast until provider proof exists
-OVERLORD_HEADROOM=1 overlord
 overlord zellij         # Open zellij explicitly in the persistent container
 overlord shell          # Open an interactive zsh shell in the container
 overlord --list-configs # List checked-in oh-my-openagent routing presets
@@ -80,6 +78,6 @@ overlord purge          # Remove container + image; .overlord state remains
 
 - Launcher regression tests use `python3 -m unittest discover -s scripts/tests`.
 - Canonical manual checks are `overlord`, `overlord web`, `overlord opencode`, `overlord zellij`, `overlord shell`, `overlord --list-configs`, `scripts/install --list-configs`, isolated `scripts/install --skip-package-install`, `overlord fresh && overlord`, and `overlord purge && overlord` after image/runtime wiring changes.
-- Headroom doc and launcher checks must cover `--headroom`, strict `OVERLORD_HEADROOM`, telemetry-off process env, no host-published 8787, plain rerun disable behavior, and current provider fail-fast.
+- RTK checks must cover amd64/arm64 asset selection, authored SHA-256 verification, exact version output, runtime-user plugin initialization, and skip-mode absence.
 - The launcher supports Podman if available and falls back to Docker; README Docker wording is not the full runtime story.
 - `config/zellij-opencode.kdl` is checked in but is not part of the currently wired runtime config injection path.

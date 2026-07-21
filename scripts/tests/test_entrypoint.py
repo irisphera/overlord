@@ -25,7 +25,7 @@ class EntrypointTests(unittest.TestCase):
 
         self.assertIn(manifest_copy, dockerfile)
         sourced_runs = tuple(run for run in dockerfile.split("\nRUN ") if run.startswith(". /tmp/tool-versions.env"))
-        self.assertEqual(len(sourced_runs), 3)
+        self.assertEqual(len(sourced_runs), 4)
         self.assertLess(dockerfile.index(default_skills_install), dockerfile.index(manifest_copy))
         self.assertLess(dockerfile.index(setup_devcontainer_verification), dockerfile.index(manifest_copy))
         manifest_instructions = tuple(
@@ -34,10 +34,11 @@ class EntrypointTests(unittest.TestCase):
             if line.startswith(("COPY ", "RUN "))
         )
         self.assertEqual(manifest_instructions[0], manifest_copy)
-        self.assertEqual(len(manifest_instructions[:4]), 4)
-        self.assertTrue(all(line.startswith("RUN . /tmp/tool-versions.env") for line in manifest_instructions[1:4]))
+        self.assertEqual(len(manifest_instructions[:5]), 5)
+        self.assertTrue(all(line.startswith("RUN . /tmp/tool-versions.env") for line in manifest_instructions[1:5]))
+        version_source = dockerfile.replace(f"ARG AST_GREP_VERSION={versions['RTK_VERSION']}", "")
         for version in versions.values():
-            self.assertNotIn(version, dockerfile)
+            self.assertNotIn(version, version_source)
         for variable_name in versions:
             self.assertNotIn(f"ARG {variable_name}", dockerfile)
             self.assertNotIn(f"ENV {variable_name}", dockerfile)
@@ -45,8 +46,25 @@ class EntrypointTests(unittest.TestCase):
             'bun add -g "opencode-ai@${OPENCODE_VERSION}"',
             'helper_package="oh-my-openagent@${OH_MY_OPENAGENT_VERSION}"',
             'bun add -g "@colbymchenry/codegraph@${CODEGRAPH_VERSION}"',
+            'rtk init --global --opencode',
         ):
             self.assertTrue(any(package_install in sourced_run for sourced_run in sourced_runs))
+
+    def test_dockerfile_installs_verified_rtk_assets_and_activates_opencode_plugin_as_overlord(self) -> None:
+        dockerfile = DOCKERFILE.read_text(encoding="utf-8")
+        sourced_runs = tuple(run for run in dockerfile.split("\nRUN ") if run.startswith(". /tmp/tool-versions.env"))
+        rtk_runs = tuple(run for run in sourced_runs if "rtk init --global --opencode" in run)
+
+        self.assertEqual(len(rtk_runs), 1)
+        rtk_run = rtk_runs[0]
+        self.assertIn('amd64) rtk_asset="rtk-x86_64-unknown-linux-musl.tar.gz"; rtk_sha256="${RTK_AMD64_SHA256}"', rtk_run)
+        self.assertIn('arm64) rtk_asset="rtk-aarch64-unknown-linux-gnu.tar.gz"; rtk_sha256="${RTK_ARM64_SHA256}"', rtk_run)
+        self.assertIn('https://github.com/rtk-ai/rtk/releases/download/v${RTK_VERSION}/${rtk_asset}', rtk_run)
+        self.assertIn("sha256sum -c -", rtk_run)
+        self.assertIn('test "$(rtk --version)" = "rtk ${RTK_VERSION}"', rtk_run)
+        self.assertIn('test -s "${XDG_CONFIG_HOME}/opencode/plugins/rtk.ts"', rtk_run)
+        self.assertLess(dockerfile.index("USER overlord"), dockerfile.index("rtk init --global --opencode"))
+        self.assertNotIn("cargo install", rtk_run)
 
     def test_dockerfile_configures_manifest_package_installs_for_safe_chain(self) -> None:
         dockerfile = DOCKERFILE.read_text(encoding="utf-8")
@@ -202,9 +220,9 @@ def write_fake_command(path: Path, command_log: Path, body: str) -> None:
         {body}
         '''
     )
-    path.write_text(script, encoding="utf-8")
-    path.chmod(0o755)
+    _ = path.write_text(script, encoding="utf-8")
+    _ = path.chmod(0o755)
 
 
 if __name__ == "__main__":
-    unittest.main()
+    _ = unittest.main()

@@ -41,7 +41,6 @@ class OrchestratorEntrypointTests(unittest.TestCase):
                     "==> Checking oh-my-openagent runtime config...",
                     f"==> Checking OpenCode plugin package oh-my-openagent@{TOOL_VERSIONS['OH_MY_OPENAGENT_VERSION']} in overlord-",
                     f"==> Checking CodeGraph CLI package @colbymchenry/codegraph@{TOOL_VERSIONS['CODEGRAPH_VERSION']} in overlord-",
-                    "==> Stopping Headroom proxy for plain OpenCode mode in overlord-",
                     "==> Checking default OpenCode skills from mattpocock/skills#v1.0.1 in overlord-",
                     f"==> Checking OpenCode CLI package opencode-ai@{TOOL_VERSIONS['OPENCODE_VERSION']} in overlord-",
                     "==> Restarting OpenCode web server in overlord-",
@@ -83,7 +82,6 @@ class OrchestratorEntrypointTests(unittest.TestCase):
                 self,
                 result.stdout.splitlines(),
                 [
-                    "==> Checking OpenCode web restart need for Headroom mode in overlord-",
                     "==> Checking default OpenCode skills from mattpocock/skills#v1.0.1 in overlord-",
                     "==> Checking OpenCode web restart need for plugin environment in overlord-",
                     "==> Checking OpenCode workspace project cache in overlord-",
@@ -158,7 +156,6 @@ class OrchestratorEntrypointTests(unittest.TestCase):
                 self.assertEqual(final_exec[0:2], ["docker", "exec"])
                 assert_contains_ordered(self, final_exec, expected_tail)
                 self.assertIn("OVERLORD_WORKSPACE=My Project!", final_exec)
-                self.assertIn("HEADROOM_TELEMETRY=off", final_exec)
                 self.assertIn("==> Opening", result.stdout)
                 self.assertIn("in overlord-my-project-", result.stdout)
 
@@ -174,17 +171,6 @@ class OrchestratorEntrypointTests(unittest.TestCase):
             docker = engine_records(workspace, "docker")
             self.assertNotIn("exec", subcommands(docker))
             self.assertNotIn("run", subcommands(docker))
-
-    def test_headroom_fail_fast_does_not_start_engine_or_proxy(self) -> None:
-        with python_workspace(state="missing", image_exists=False) as workspace:
-            workspace.install_fake_engine("docker", state="missing", image_exists=False)
-
-            result = run_python(workspace, args=("--headroom",), env=host_env(workspace))
-
-            self.assertEqual(result.returncode, 1)
-            self.assertIn("Headroom mode is currently unsupported", result.stderr)
-            self.assertEqual(engine_records(workspace, "docker"), [])
-
 
 class HttpFixture:
     def __init__(self, server: ThreadingHTTPServer, thread: threading.Thread) -> None:

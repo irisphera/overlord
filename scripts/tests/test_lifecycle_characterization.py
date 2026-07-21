@@ -91,7 +91,6 @@ class LifecycleCharacterizationTests(unittest.TestCase):
                 self.assertEqual(final_exec[0:2], ["docker", "exec"])
                 self.assert_contains_ordered(final_exec, expected_tail)
                 self.assertIn("OVERLORD_WORKSPACE=My Project!", final_exec)
-                self.assertIn("HEADROOM_TELEMETRY=off", final_exec)
 
     def test_fresh_and_purge_preserve_overlord_state_and_issue_removal_commands(self) -> None:
         for command in ("fresh", "purge"):
@@ -206,7 +205,6 @@ class LifecycleCharacterizationTests(unittest.TestCase):
         self.assertIn(f"{shape.workspace_path}/.overlord/zsh-data:/home/overlord/.zsh_data", argv)
         self.assertIn("0.0.0.0::4090", argv)
         self.assertIn(f"OVERLORD_WORKSPACE={shape.workspace_name}", argv)
-        self.assertIn("HEADROOM_TELEMETRY=off", argv)
         self.assertEqual(argv[-3:], [shape.image, "sleep", "infinity"])
 
     def assert_contains_ordered(self, values: list[str], expected: list[str]) -> None:

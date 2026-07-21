@@ -136,17 +136,6 @@ ENV PATH="/usr/local/.safe-chain/shims:/usr/local/.safe-chain/bin:/home/overlord
 ENV UV_LINK_MODE=copy
 ENV UV_CACHE_DIR=/home/overlord/.cache/uv
 ENV LANG=en_US.UTF-8
-ENV HEADROOM_TELEMETRY=off
-
-ARG HEADROOM_VERSION=0.27.0
-RUN install_log="$(mktemp)" \
-  && echo "Installing Headroom CLI package (headroom-ai[proxy]==${HEADROOM_VERSION})..." \
-  && if ! uv tool install "headroom-ai[proxy]==${HEADROOM_VERSION}" >"${install_log}" 2>&1; then cat "${install_log}"; rm -f "${install_log}"; exit 1; fi \
-  && rm -f "${install_log}" \
-  && headroom_version="$(HEADROOM_TELEMETRY=off headroom --version 2>&1)" \
-  && printf 'Headroom CLI version: %s\n' "${headroom_version}" \
-  && printf '%s\n' "${headroom_version}" | grep -F "${HEADROOM_VERSION}" \
-  && HEADROOM_TELEMETRY=off headroom proxy --help | grep -F -- "--no-telemetry"
 
 RUN install_log="$(mktemp)" \
   && skills_source="$(printf '%s\043%s' mattpocock/skills v1.0.1)" \
@@ -191,6 +180,22 @@ RUN . /tmp/tool-versions.env \
   && ln -sf /home/overlord/.bun/bin/codegraph /home/overlord/.local/bin/codegraph \
   && codegraph_version="$(node -p "require('/home/overlord/.bun/install/global/node_modules/@colbymchenry/codegraph/package.json').version" 2>/dev/null || true)" \
   && printf 'CodeGraph CLI version: %s\n' "${codegraph_version:-unknown}"
+
+RUN . /tmp/tool-versions.env \
+  && case "${TARGETARCH}" in \
+    amd64) rtk_asset="rtk-x86_64-unknown-linux-musl.tar.gz"; rtk_sha256="${RTK_AMD64_SHA256}" ;; \
+    arm64) rtk_asset="rtk-aarch64-unknown-linux-gnu.tar.gz"; rtk_sha256="${RTK_ARM64_SHA256}" ;; \
+    *) echo "Unsupported RTK architecture: ${TARGETARCH}" >&2; exit 1 ;; \
+  esac \
+  && rtk_dir="$(mktemp -d)" \
+  && curl -fsSL "https://github.com/rtk-ai/rtk/releases/download/v${RTK_VERSION}/${rtk_asset}" -o "${rtk_dir}/${rtk_asset}" \
+  && printf '%s  %s\n' "${rtk_sha256}" "${rtk_dir}/${rtk_asset}" | sha256sum -c - \
+  && tar -xzf "${rtk_dir}/${rtk_asset}" -C "${rtk_dir}" \
+  && install -m 0755 "${rtk_dir}/rtk" /home/overlord/.local/bin/rtk \
+  && rm -rf "${rtk_dir}" \
+  && test "$(rtk --version)" = "rtk ${RTK_VERSION}" \
+  && rtk init --global --opencode \
+  && test -s "${XDG_CONFIG_HOME}/opencode/plugins/rtk.ts"
 
 # Git safe directory
 RUN git config --global --add safe.directory /workspace

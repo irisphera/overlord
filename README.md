@@ -8,7 +8,7 @@ Choose **container** when you want the image-provided toolchain, workspace isola
 
 Container isolation separates the workspace filesystem and toolchain; it is not a security boundary. The container receives writable `/var/run/docker.sock` access and can control the host container daemon.
 
-Choose **native** when OpenCode must run directly on the host. `scripts/install` configures and optionally installs host packages; it does not launch web mode, create containers or `.overlord`, install zellij, or handle Headroom.
+Choose **native** when OpenCode must run directly on the host. `scripts/install` configures and optionally installs host packages; it does not launch web mode, create containers or `.overlord`, or install zellij.
 
 ## Container quick start
 
@@ -67,17 +67,17 @@ scripts/install --config default
 scripts/install --lms-model qwen3-8b
 ```
 
-A full install requires Bun in `PATH`. It installs OpenCode, oh-my-openagent, and CodeGraph with Bun, then creates command shims in `~/.local/bin` when their installed targets are available.
+A full install requires Bun in `PATH`. It installs OpenCode, oh-my-openagent, and CodeGraph with Bun, installs the pinned RTK Linux release for amd64 or arm64, then creates command shims in `~/.local/bin` when their installed targets are available.
 
-Pinned versions for those three tools are maintained in `config/tool-versions.env`; changing that one file updates both the container image and native installation paths.
+Pinned versions and RTK release checksums are maintained in `config/tool-versions.env`; changing that one file updates both the container image and native installation paths. RTK is checksum-verified, must report the exact pinned version, and is initialized with `rtk init --global --opencode` as the runtime user.
 
-Use `--skip-package-install` to write static configuration, environment, and skill files only. This mode does not require Bun and does not install OpenCode, oh-my-openagent, or CodeGraph.
+Use `--skip-package-install` to write static configuration, environment, and skill files only. This mode does not require Bun and does not install OpenCode, oh-my-openagent, CodeGraph, RTK, or the RTK OpenCode plugin.
 
 ```bash
 scripts/install --skip-package-install
 ```
 
-The installer writes `opencode.json`, `oh-my-openagent.jsonc`, `oh-my-opencode.jsonc`, and `overlord-env` to `${XDG_CONFIG_HOME:-$HOME/.config}/opencode/`.
+The installer writes `opencode.json`, `oh-my-openagent.jsonc`, `oh-my-opencode.jsonc`, and `overlord-env` to `${XDG_CONFIG_HOME:-$HOME/.config}/opencode/`. A full install also requires RTK initialization to create a non-empty `plugins/rtk.ts` in that directory.
 
 It writes zellij configuration to `${XDG_CONFIG_HOME:-$HOME/.config}/zellij/config.kdl`.
 
@@ -201,7 +201,7 @@ Review setup scripts before launching untrusted workspaces. Reattaching to an al
 
 ## Included tooling and zellij
 
-The container image includes OpenCode, oh-my-openagent, CodeGraph, Node.js 22, Bun, Python 3, uv, Docker CLI with Compose, and Google Cloud CLI.
+The container image includes OpenCode, oh-my-openagent, CodeGraph, RTK, Node.js 22, Bun, Python 3, uv, Docker CLI with Compose, and Google Cloud CLI.
 
 It also includes git, zsh, zellij, neovim, ripgrep, jq, ast-grep, ShellCheck, and shfmt.
 
@@ -217,22 +217,11 @@ Open zellij with `overlord zellij`. Its checked-in configuration uses zsh, maps 
 
 `config/zellij-config.kdl` is the active zellij configuration source. `config/zellij-opencode.kdl` is checked in but is not currently injected by the launcher.
 
-## Headroom status
+## RTK integration
 
-Headroom is image-provided tooling, but it is not usable for current routes.
+Both full-install workflows pin RTK through `config/tool-versions.env`. The Docker image selects the matching Linux release asset from `TARGETARCH`; the native installer selects it from `uname -m`. Both verify the authored SHA-256 checksum, require the exact `rtk VERSION` output, and initialize the OpenCode plugin as the user who runs OpenCode.
 
-Every checked-in provider, routing preset, and dynamic `--lms-model` override fails before container, proxy, or OpenCode startup because traversal proof is absent.
-
-```bash
-overlord --headroom
-OVERLORD_HEADROOM=1 overlord
-```
-
-These commands intentionally return a nonzero status today. Do not use Headroom as an operational path, and do not expect the native installer to configure or run it.
-
-**Future safety invariant, not a current workflow:** if a route gains support, its proxy remains on container loopback `127.0.0.1:8787`. Port 8787 is never host-published and telemetry remains forced off.
-
-Plain `overlord` disables a future supported mode without `fresh` or `purge`.
+RTK integration is provided by `${XDG_CONFIG_HOME:-$HOME/.config}/opencode/plugins/rtk.ts`; it does not add a provider or modify `config/opencode.json`.
 
 ## Troubleshooting
 
@@ -259,8 +248,6 @@ overlord purge && overlord
 
 For LM Studio in a container, confirm the host service is reachable at `host.docker.internal` or set `LMSTUDIO_BASE_URL` explicitly.
 
-**Headroom stops before startup:** this is expected for all current routes; use plain `overlord` instead.
-
 ## Verification
 
 Run these checks after changing launcher, configuration, image, or documentation behavior. Use a disposable home for the native configuration-only check.
@@ -279,19 +266,14 @@ HOME="$tmp_home" XDG_CONFIG_HOME="$tmp_home/.config" XDG_CACHE_HOME="$tmp_home/.
   scripts/install --skip-package-install
 cmp skills/setup-devcontainer/SKILL.md \
   "$tmp_home/.agents/skills/setup-devcontainer/SKILL.md"
+test ! -e "$tmp_home/.local/bin/rtk"
+test ! -e "$tmp_home/.config/opencode/plugins/rtk.ts"
 
 # Confirm the following launch reports "Creating container...".
 overlord fresh
 overlord
 overlord purge && overlord
 python3 -m unittest discover -s scripts/tests
-```
-
-Verify the current Headroom guard independently; both commands should fail before startup.
-
-```bash
-overlord --headroom
-OVERLORD_HEADROOM=1 overlord
 ```
 
 ## License

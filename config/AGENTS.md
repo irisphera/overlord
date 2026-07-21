@@ -7,14 +7,14 @@
 
 `config/` is the host-authored source of truth for runtime-injected config, container bootstrap, and terminal/editor wrapper scripts used by `scripts/overlord`.
 
-Headroom mode must not make checked-in config a second Headroom authority. Any Headroom provider overlay is generated at runtime inside the container.
+RTK integration is a generated OpenCode plugin created by the full-install workflows; it is not part of the checked-in provider catalog.
 
 ## SOURCE OF TRUTH
 
 - Edit files here.
 - The runtime files actually consumed by OpenCode and zellij live under `/home/overlord/.config/*` inside the container and are overwritten by `scripts/overlord` during lifecycle actions.
 - `entrypoint.sh` is copied into the image by the Dockerfile. `jdtls.sh` is retained only as a reference wrapper for repo-local Java setup scripts; the shared image no longer installs JDTLS.
-- Headroom runtime overlays, mode markers, proxy logs, and PID files are launcher-owned runtime state, not config source files.
+- `tool-versions.env` pins semantic versions plus architecture-specific RTK SHA-256 checksums for both full-install workflows.
 
 ## FILE MAP
 
@@ -26,18 +26,19 @@ Headroom mode must not make checked-in config a second Headroom authority. Any H
 | `jdtls.sh` | Java LSP wrapper reference | Not installed by the shared image; Java repos own JDTLS setup |
 | `zellij-config.kdl` | Active zellij config source | Copied to `/home/overlord/.config/zellij/config.kdl` |
 | `zellij-opencode.kdl` | Checked-in layout file | Present in repo, not currently injected by launcher |
+| `tool-versions.env` | Shared package pins and RTK checksums | Sourced by Docker and native install; parsed by launcher package checks |
 
 ## LOCAL INVARIANTS
 
 - `opencode.json` is the only selectable OpenCode provider catalog; routing choices live in checked-in `oh-my-openagent*.jsonc` presets.
-- Headroom support for a provider or preset requires traversal proof before checked-in routing docs or launcher guards can claim it.
+- RTK must integrate through `${XDG_CONFIG_HOME}/opencode/plugins/rtk.ts`, not a provider entry in `opencode.json`.
 - `entrypoint.sh` must preserve root bootstrap -> UID/GID remap -> ownership repair -> `exec gosu overlord "$@"` handoff.
 - `zellij-config.kdl` intentionally maps tab mode to `Ctrl+b` and leaves `Ctrl+t` available for app passthrough.
 
 ## MANUAL VERIFICATION
 
 - Config catalog/routing edits: run `overlord --list-configs`, then use `overlord fresh && overlord --config <preset>` to verify the selected routing preset is re-injected.
-- Headroom-related docs or launcher edits: run protected diffs for `config/opencode.json` and `config/oh-my-openagent*.jsonc`; they should stay unchanged unless the task explicitly edits config.
+- RTK installer edits: run protected diffs for `config/opencode.json` and `config/oh-my-openagent*.jsonc`; they should stay unchanged.
 - `entrypoint.sh` edits: use `overlord purge && overlord` because the entrypoint is copied into the image; `fresh` alone reuses a stale image.
 - Dockerfile image edits: use `overlord purge && overlord` so the image is rebuilt.
 
@@ -45,6 +46,6 @@ Headroom mode must not make checked-in config a second Headroom authority. Any H
 
 - Do not edit `/home/overlord/.config/*` in the container and expect changes to persist.
 - Do not remove schema markers or reintroduce selectable `opencode*.json` variants; keep provider catalog in `opencode.json` and routing presets in `oh-my-openagent*.jsonc`.
-- Do not add checked-in Headroom provider entries, route rewrites, or generated overlay artifacts without a plan that moves the source-of-truth boundary.
+- Do not add RTK provider entries or generated plugin artifacts to checked-in runtime config.
 - Do not remove UID/GID remap, ownership repair, or final privilege drop from `entrypoint.sh`.
 - Do not assume `zellij-opencode.kdl` is active runtime config unless launcher wiring is added.

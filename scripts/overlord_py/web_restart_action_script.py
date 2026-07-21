@@ -8,23 +8,22 @@ from .opencode_cmdline_matcher import OPENCODE_CMDLINE_MATCHER_SCRIPT
 RESTART_OPENCODE_WEB_SCRIPT: Final = OPENCODE_CMDLINE_MATCHER_SCRIPT + r'''set -e
 
 pid_file="$1"
-mode_file="$2"
-host="$3"
-port="$4"
+host="$2"
+port="$3"
 
-clear_restart_markers() {
-    rm -f "${pid_file}" "${mode_file}"
+clear_pid_file() {
+    rm -f "${pid_file}"
 }
 
 if [ ! -s "${pid_file}" ]; then
-    clear_restart_markers
+    clear_pid_file
     exit 0
 fi
 
 pid="$(cat "${pid_file}" 2>/dev/null || true)"
 case "${pid}" in
 '' | *[!0-9]*)
-    clear_restart_markers
+    clear_pid_file
     exit 0
     ;;
 esac
@@ -36,7 +35,7 @@ else
 fi
 case "${activity_status}" in
 0) ;;
-1) clear_restart_markers; exit 0 ;;
+1) clear_pid_file; exit 0 ;;
 *) exit 1 ;;
 esac
 if [ ! -r "/proc/${pid}/cmdline" ]; then
@@ -50,7 +49,7 @@ else
 fi
 case "${classifier_status}" in
 0 | 3) ;;
-1) clear_restart_markers; exit 0 ;;
+1) clear_pid_file; exit 0 ;;
 *) exit 1 ;;
 esac
 
@@ -63,7 +62,7 @@ for attempt in 1 2 3 4 5 6; do
     fi
     case "${activity_status}" in
     0) [ "${attempt}" -eq 6 ] && exit 1 ;;
-    1) clear_restart_markers; exit 0 ;;
+    1) clear_pid_file; exit 0 ;;
     *) exit 1 ;;
     esac
     sleep 1

@@ -156,7 +156,7 @@ class ContainerLifecycleTests(unittest.TestCase):
             self.assertIn("0.0.0.0::4090", args)
             self.assertIn("HOME=/home/overlord", args)
             self.assertIn("AZURE_API_KEY=sentinel-azure-secret", args)
-            self.assertFalse(any(forbidden in arg for arg in args for forbidden in ("8787", "sentinel-opencode-password")))
+            self.assertFalse(any("sentinel-opencode-password" in arg for arg in args))
 
     def test_fresh_verifies_mounts_before_clearing_markers_and_removing_container(self) -> None:
         with lifecycle_workspace(state="running", image_exists=True) as fixture:

@@ -16,7 +16,6 @@ from scripts.overlord_py.web_serve_script import ENSURE_OPENCODE_WEB_SERVER_SCRI
 @dataclass(frozen=True, slots=True)
 class ServeState:
     pid_file: Path
-    mode_file: Path
     log_file: Path
 
 
@@ -30,11 +29,9 @@ class ReplacementProbe:
 def write_state(state_dir: Path, pid: int) -> ServeState:
     state = ServeState(
         pid_file=state_dir / "opencode.pid",
-        mode_file=state_dir / "headroom.mode",
         log_file=state_dir / "opencode.log",
     )
     _ = state.pid_file.write_text(f"{pid}\n", encoding="utf-8")
-    _ = state.mode_file.write_text("plain\n", encoding="utf-8")
     _ = state.log_file.write_text("legacy-log\n", encoding="utf-8")
     return state
 
@@ -73,7 +70,7 @@ def install_replacement(state_dir: Path, observed_pid: int) -> ReplacementProbe:
 
 def run_restart(state: ServeState) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        ("sh", "-s", "--", str(state.pid_file), str(state.mode_file), "0.0.0.0", "4090"),
+        ("sh", "-s", "--", str(state.pid_file), "0.0.0.0", "4090"),
         input=RESTART_OPENCODE_WEB_SCRIPT,
         capture_output=True,
         text=True,
@@ -85,7 +82,6 @@ def run_restart(state: ServeState) -> subprocess.CompletedProcess[str]:
 def run_ensure(
     state: ServeState,
     replacement: ReplacementProbe,
-    desired_mode: str = "plain",
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         (
@@ -96,8 +92,6 @@ def run_ensure(
             str(state.log_file),
             "0.0.0.0",
             "4090",
-            str(state.mode_file),
-            desired_mode,
         ),
         env=replacement.env,
         input=ENSURE_OPENCODE_WEB_SERVER_SCRIPT,

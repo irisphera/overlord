@@ -181,8 +181,6 @@ def orchestration_fixture(
             config_explicit=False,
             lms_model="",
             model_override="",
-            headroom_enabled=False,
-            desired_headroom_mode="plain",
         )
         readiness_scripts: list[tuple[str, ...]] = []
 

@@ -242,8 +242,6 @@ def terminal_lifecycle_fixture(
             config_explicit=False,
             lms_model="",
             model_override="",
-            headroom_enabled=False,
-            desired_headroom_mode="plain",
         )
         stack.enter_context(patch("overlord_py.main.ensure_image", return_value=()))
         stack.enter_context(patch("overlord_py.main.build_environment_plan", return_value=environment))
@@ -260,8 +258,6 @@ def terminal_lifecycle_fixture(
         stack.enter_context(patch("overlord_py.main.ensure_codegraph_runtime_package", return_value=()))
         stack.enter_context(patch("overlord_py.main.ensure_default_opencode_skills", return_value=()))
         stack.enter_context(patch("overlord_py.main.request_opencode_web_restart_if_plugin_env_missing", return_value=()))
-        stack.enter_context(patch("overlord_py.main.ensure_headroom_runtime_available", return_value=()))
-        stack.enter_context(patch("overlord_py.main.run_headroom_mode"))
         stack.enter_context(patch("overlord_py.main.terminal_title", return_value=""))
         stack.enter_context(patch("overlord_py.main.stdout_stage"))
         project_check = stack.enter_context(patch("overlord_py.main.workspace_project_is_stale", return_value=False))

@@ -9,11 +9,7 @@ from pathlib import Path
 from typing import Final, Iterator
 
 from harness import HarnessRun, TempLauncherWorkspace
-from test_cli_characterization import (
-    EXPECTED_CONFIG_LIST,
-    HEADROOM_SCOPE_ERROR_PREFIX,
-    headroom_unsupported_stderr,
-)
+from test_cli_characterization import EXPECTED_CONFIG_LIST
 
 
 SCRIPTS_DIR: Final = Path(__file__).resolve().parents[1]
@@ -40,9 +36,9 @@ CLI_ONLY_CASES: Final = (
     CliCase("long_help", ("--help",), {}),
     CliCase("list_configs", ("--list-configs",), {}),
     CliCase("config_missing_value", ("--config",), {}),
-    CliCase("config_dash_value", ("--config", "--headroom"), {}),
+    CliCase("config_dash_value", ("--config", "--bogus"), {}),
     CliCase("lms_missing_value", ("--lms-model",), {}),
-    CliCase("lms_dash_value", ("--lms-model", "--headroom"), {}),
+    CliCase("lms_dash_value", ("--lms-model", "--bogus"), {}),
     CliCase("config_path", ("--config", "../config/oh-my-openagent.jsonc"), {}),
     CliCase("opencode_catalog_config", ("--config", "opencode.json"), {}),
     CliCase("unknown_config", ("--config", "missing"), {}),
@@ -50,16 +46,6 @@ CLI_ONLY_CASES: Final = (
     CliCase("removed_provider_override", ("web", "gemini"), {}),
     CliCase("extra_arg", ("web", "extra"), {}),
     CliCase("unknown_command", ("status",), {}),
-    CliCase("headroom_list_configs", ("--headroom", "--list-configs"), {}),
-    CliCase("headroom_shell", ("--headroom", "shell"), {}),
-    CliCase("headroom_zellij", ("--headroom", "zellij"), {}),
-    CliCase("headroom_fresh", ("--headroom", "fresh"), {}),
-    CliCase("headroom_purge", ("--headroom", "purge"), {}),
-    CliCase("headroom_default", ("--headroom",), {}),
-    CliCase("headroom_env_default", (), {"OVERLORD_HEADROOM": "1"}),
-    CliCase("headroom_lms_model", ("--headroom", "--lms-model", "qwen", "web"), {}),
-    CliCase("strict_headroom_false", ("--list-configs",), {"OVERLORD_HEADROOM": "off"}),
-    CliCase("strict_headroom_invalid", ("--list-configs",), {"OVERLORD_HEADROOM": "maybe"}),
 )
 
 
@@ -84,30 +70,6 @@ class CliParserUnitTests(unittest.TestCase):
         self.assertEqual(result.stderr, "")
         self.assertIsNone(result.options)
 
-    def test_invalid_strict_headroom_boolean_returns_bash_error(self) -> None:
-        result = parse_cli(("--list-configs",), env={"OVERLORD_HEADROOM": "maybe"}, repo_root=SCRIPTS_DIR.parent)
-
-        self.assertEqual(result.status, 1)
-        self.assertEqual(result.stdout, "")
-        self.assertEqual(
-            result.stderr,
-            "Error: OVERLORD_HEADROOM must be a strict boolean: true, false, 1, 0, yes, no, on, or off.\n"
-            "Got: 'maybe'\n",
-        )
-        self.assertIsNone(result.options)
-
-    def test_headroom_lms_model_keeps_stdout_before_unsupported_error(self) -> None:
-        result = parse_cli(("--headroom", "--lms-model", "qwen", "web"), env={}, repo_root=SCRIPTS_DIR.parent)
-
-        self.assertEqual(result.status, 1)
-        self.assertEqual(result.stdout, "LM Studio override: all oh-my-openagent agents → lmstudio/qwen\n")
-        self.assertEqual(
-            result.stderr,
-            headroom_unsupported_stderr(
-                "--lms-model qwen: dynamic lmstudio/qwen runtime override is unsupported/unverified for Headroom mode."
-            ),
-        )
-
     def test_lms_model_rejects_characters_outside_native_installer_whitelist(self) -> None:
         result = parse_cli(("--lms-model", 'bad"model', "web"), env={}, repo_root=SCRIPTS_DIR.parent)
 
@@ -128,16 +90,6 @@ class CliParserUnitTests(unittest.TestCase):
             self.fail("expected parsed options")
         self.assertEqual(result.options.lms_model, "org/model:v1+test@local")
         self.assertEqual(result.options.model_override, "lmstudio/org/model:v1+test@local")
-
-    def test_headroom_non_web_commands_return_scope_error(self) -> None:
-        for command in ("shell", "zellij", "fresh", "purge"):
-            with self.subTest(command=command):
-                result = parse_cli(("--headroom", command), env={}, repo_root=SCRIPTS_DIR.parent)
-
-                self.assertEqual(result.status, 1)
-                self.assertEqual(result.stdout, "")
-                self.assertEqual(result.stderr, HEADROOM_SCOPE_ERROR_PREFIX + f"Headroom cannot be combined with '{command}'.\n")
-
 
 class CliPythonEntrypointGoldenTests(unittest.TestCase):
     def test_python_entrypoint_matches_bash_for_cli_only_cases(self) -> None:

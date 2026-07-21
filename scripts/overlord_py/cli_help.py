@@ -4,13 +4,12 @@ from typing import Final
 
 HELP_TEXT: Final = """overlord - Launch isolated OpenCode workspace container
 
-USAGE: overlord [--headroom] [--list-configs | --config PRESET | --lms-model MODEL] [command]
+USAGE: overlord [--list-configs | --config PRESET | --lms-model MODEL] [command]
 
 OPTIONS:
 \t--list-configs     List available oh-my-openagent routing presets
 \t--config PRESET    Use an oh-my-openagent routing preset with config/opencode.json
 \t--lms-model MODEL  Rewrite all oh-my-openagent routes to lmstudio/MODEL
-\t--headroom         Opt into Headroom mode for web/opencode launches only
 
 COMMANDS:
     web            Start/reuse OpenCode web mode and print local/network URLs (default)
@@ -24,7 +23,6 @@ COMMANDS:
 EXAMPLES:
 \t    overlord --list-configs          # List available agent routing presets
 \t    overlord                         # Start/reuse the OpenCode web UI (default config)
-\t    overlord --headroom              # Start web UI with Headroom mode enabled
 \t    overlord --config default        # Use config/oh-my-openagent.jsonc
 \tAZURE_API_KEY=... AZURE_RESOURCE_NAME=... overlord  # Start web UI with the default Azure routing
     overlord web                     # Start/reuse the OpenCode web UI explicitly

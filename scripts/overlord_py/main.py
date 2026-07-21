@@ -11,12 +11,10 @@ from overlord_py.config_catalog import OPENCODE_CONFIG_NAME, OpencodeRenderOptio
 from overlord_py.container_lifecycle import LifecycleError, ensure_image, ensure_running, fresh, purge
 from overlord_py.engine import ContainerEngine, EngineDetectionError, detect_engine
 from overlord_py.env_builder import EnvironmentPlan, build_environment_plan, normalized_host_env
-from overlord_py.headroom import HEADROOM_INTERNAL_HOST, HEADROOM_INTERNAL_PORT, HeadroomScriptPlan, plan_ensure_headroom_proxy, plan_stop_headroom_proxy, plan_wait_for_headroom_proxy
 from overlord_py.package_runner import PackageRepairError
 from overlord_py.packages import (
     ensure_codegraph_runtime_package,
     ensure_default_opencode_skills,
-    ensure_headroom_runtime_available,
     ensure_oh_my_openagent_runtime_package,
     ensure_opencode_runtime_version,
 )
@@ -29,7 +27,6 @@ from overlord_py.web_server import (
     WebServerError,
     format_access_urls,
     plan_opencode_web_server,
-    request_opencode_web_restart_if_mode_changed,
     request_opencode_web_restart_if_plugin_env_missing,
     resolve_access_port_for_engine,
     resolve_network_host_ip,
@@ -121,9 +118,6 @@ def run_container_command(engine: ContainerEngine, paths: WorkspacePaths, option
     write_messages(ensure_oh_my_openagent_runtime_config(engine, paths, context, restart, env=runner_env, stage=stdout_stage))
     write_messages(ensure_oh_my_openagent_runtime_package(engine, paths, environment.package_env, restart, env=runner_env, stage=stdout_stage))
     write_messages(ensure_codegraph_runtime_package(engine, paths, environment.package_env, restart, env=runner_env, stage=stdout_stage))
-    if options.command in {Command.WEB, Command.OPENCODE}:
-        write_messages(ensure_headroom_runtime_available(engine, paths, environment.package_env, headroom_enabled=options.headroom_enabled, env=runner_env, stage=stdout_stage))
-        run_headroom_mode(engine, paths, environment, options, restart, runner_env)
     write_messages(ensure_default_opencode_skills(engine, paths, environment.package_env, env=runner_env, stage=stdout_stage))
     write_messages(
         request_opencode_web_restart_if_plugin_env_missing(
@@ -155,34 +149,9 @@ def runtime_context(paths: WorkspacePaths, options: CliOptions, environment: Env
         oh_my_config_file=options.config_file,
         zellij_config_file=config_dir(paths.repo_root) / ZELLIJ_CONFIG_NAME,
         environment=environment,
-        opencode_options=OpencodeRenderOptions(headroom_enabled=options.headroom_enabled, lms_model=options.lms_model),
+        opencode_options=OpencodeRenderOptions(lms_model=options.lms_model),
         model_override=options.model_override,
     )
-
-
-def run_headroom_mode(
-    engine: ContainerEngine,
-    paths: WorkspacePaths,
-    environment: EnvironmentPlan,
-    options: CliOptions,
-    restart: RestartState,
-    env: Mapping[str, str],
-) -> None:
-    if options.headroom_enabled:
-        stdout_stage(f"Starting or reusing private Headroom proxy on {HEADROOM_INTERNAL_HOST}:{HEADROOM_INTERNAL_PORT} in {paths.identity.container_name}...")
-        run_headroom_script(engine, paths, plan_ensure_headroom_proxy(engine, paths, environment.package_env), env=env)
-        stdout_stage(f"Waiting for Headroom proxy health in {paths.identity.container_name}...")
-        run_headroom_script(engine, paths, plan_wait_for_headroom_proxy(engine, paths, environment.package_env), env=env)
-    else:
-        stdout_stage(f"Stopping Headroom proxy for plain OpenCode mode in {paths.identity.container_name}...")
-        run_headroom_script(engine, paths, plan_stop_headroom_proxy(engine, paths, environment.package_env), env=env)
-    write_messages(request_opencode_web_restart_if_mode_changed(engine, paths, options.desired_headroom_mode, restart, env=env, stage=stdout_stage))
-
-
-def run_headroom_script(engine: ContainerEngine, paths: WorkspacePaths, plan: HeadroomScriptPlan, *, env: Mapping[str, str]) -> None:
-    result = engine.run(list(plan.argv[1:]), cwd=paths.workspace, env=env, input_text=plan.script)
-    if result.returncode != 0:
-        raise WebServerError(result.stderr or result.stdout or "Headroom proxy command failed")
 
 
 def dispatch_final(engine: ContainerEngine, paths: WorkspacePaths, environment: EnvironmentPlan, options: CliOptions, restart: RestartState, env: Mapping[str, str]) -> int:
@@ -205,7 +174,7 @@ def dispatch_final(engine: ContainerEngine, paths: WorkspacePaths, environment: 
 def ensure_web_server(engine: EngineRunner, paths: WorkspacePaths, environment: EnvironmentPlan, options: CliOptions, restart: RestartState, *, env: Mapping[str, str]) -> None:
     write_messages(ensure_opencode_runtime_version(engine, paths, environment.package_env, restart, env=env, stage=stdout_stage))
     write_messages(restart_opencode_web_if_needed(engine, paths, restart, env=env, stage=stdout_stage))
-    plan = plan_opencode_web_server(paths, environment.exec_env_flags, environment.opencode_web_credential_flags, options.desired_headroom_mode)
+    plan = plan_opencode_web_server(paths, environment.exec_env_flags, environment.opencode_web_credential_flags)
     for attempt in range(2):
         stdout_stage(f"Ensuring OpenCode web server is running in {paths.identity.container_name}...")
         result = engine.run(plan.argv, cwd=paths.workspace, env=env, input_text=plan.script)

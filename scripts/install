@@ -36,6 +36,8 @@ OH_MY_OPENAGENT_BIN="${LOCAL_BIN_DIR}/oh-my-openagent"
 CODEGRAPH_INSTALL_DIR="${HOME}/.omo/codegraph"
 CODEGRAPH_BIN="${LOCAL_BIN_DIR}/codegraph"
 CODEGRAPH_NODE_BIN="$(command -v node 2>/dev/null || true)"
+RTK_BIN="${LOCAL_BIN_DIR}/rtk"
+RTK_OPENCODE_PLUGIN="${RUNTIME_OPENCODE_CONFIG_DIR}/plugins/rtk.ts"
 
 stage() {
 	printf '==> %s\n' "$1"
@@ -65,6 +67,8 @@ WRITES:
 	~/.local/bin/opencode
 	~/.local/bin/oh-my-openagent
 	~/.local/bin/codegraph
+	~/.local/bin/rtk
+	~/.config/opencode/plugins/rtk.ts
 
 Existing files are backed up before they are replaced.
 Bun is required unless --skip-package-install is used.
@@ -405,6 +409,65 @@ ensure_codegraph_package() {
 	printf 'CodeGraph CLI version: %s\n' "${installed_version:-unknown}"
 }
 
+ensure_rtk() {
+	local machine
+	local asset
+	local checksum
+	local install_dir
+	local archive
+	local installed_version
+	local rtk_home
+	local generated_plugin
+
+	stage "Installing RTK ${RTK_VERSION}..."
+	if [[ "$(uname -s)" != "Linux" ]]; then
+		echo "Error: RTK installation supports Linux only." >&2
+		exit 1
+	fi
+
+	machine="$(uname -m)"
+	case "${machine}" in
+	x86_64 | amd64)
+		asset="rtk-x86_64-unknown-linux-musl.tar.gz"
+		checksum="${RTK_AMD64_SHA256}"
+		;;
+	aarch64 | arm64)
+		asset="rtk-aarch64-unknown-linux-gnu.tar.gz"
+		checksum="${RTK_ARM64_SHA256}"
+		;;
+	*)
+		echo "Error: unsupported RTK architecture: ${machine}" >&2
+		exit 1
+		;;
+	esac
+
+	install_dir="$(mktemp -d)"
+	trap 'rm -rf "${install_dir}"' EXIT
+	archive="${install_dir}/${asset}"
+	curl -fsSL "https://github.com/rtk-ai/rtk/releases/download/v${RTK_VERSION}/${asset}" -o "${archive}"
+	printf '%s  %s\n' "${checksum}" "${archive}" | sha256sum -c -
+	tar -xzf "${archive}" -C "${install_dir}"
+	install_file "${install_dir}/rtk" "${RTK_BIN}" 755
+
+	installed_version="$("${RTK_BIN}" --version)"
+	if [[ "${installed_version}" != "rtk ${RTK_VERSION}" ]]; then
+		echo "Error: expected rtk ${RTK_VERSION}, got ${installed_version}" >&2
+		exit 1
+	fi
+	printf 'RTK version: %s\n' "${installed_version}"
+	rtk_home="${install_dir}/home"
+	generated_plugin="${rtk_home}/.config/opencode/plugins/rtk.ts"
+	mkdir -p "${rtk_home}"
+	HOME="${rtk_home}" "${RTK_BIN}" init --global --opencode
+	if [[ ! -s "${generated_plugin}" ]]; then
+		echo "Error: RTK did not create a non-empty OpenCode plugin at ${RTK_OPENCODE_PLUGIN}" >&2
+		exit 1
+	fi
+	install_file "${generated_plugin}" "${RTK_OPENCODE_PLUGIN}" 644
+	rm -rf "${install_dir}"
+	trap - EXIT
+}
+
 warn_path() {
 	stage "Checking PATH for native command shims..."
 	case ":${PATH}:" in
@@ -506,6 +569,7 @@ main() {
 		ensure_opencode_package
 		ensure_oh_my_openagent_package
 		ensure_codegraph_package
+		ensure_rtk
 		stage "Checking zellij availability..."
 		if ! command -v zellij >/dev/null 2>&1 && [[ ! -x "${LOCAL_BIN_DIR}/zellij" ]]; then
 			echo "Warning: zellij is not installed. Install it separately if you want the zellij escape hatch." >&2

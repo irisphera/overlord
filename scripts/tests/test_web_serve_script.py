@@ -22,7 +22,7 @@ from scripts.tests.web_serve_script_support import (
 
 
 class WebServeScriptProcessTests(unittest.TestCase):
-    def test_reuses_exact_current_server_and_updates_mode(self) -> None:
+    def test_reuses_exact_current_server(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             state_dir = Path(temporary_directory)
             current_dir = state_dir / "current"
@@ -36,12 +36,11 @@ class WebServeScriptProcessTests(unittest.TestCase):
                 state = write_state(state_dir, process.pid)
                 replacement = install_replacement(state_dir, process.pid)
 
-                result = run_ensure(state, replacement, "headroom")
+                result = run_ensure(state, replacement)
 
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIsNone(process.poll())
                 self.assertEqual(state.pid_file.read_text(encoding="utf-8"), f"{process.pid}\n")
-                self.assertEqual(state.mode_file.read_text(encoding="utf-8"), "headroom\n")
                 self.assertEqual(state.log_file.read_text(encoding="utf-8"), "legacy-log\n")
                 self.assertFalse(replacement.start_marker.exists())
             finally:
@@ -138,7 +137,6 @@ class WebServeScriptProcessTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIsNone(process.poll())
                 self.assertEqual(state.pid_file.read_text(encoding="utf-8"), f"{process.pid}\n")
-                self.assertEqual(state.mode_file.read_text(encoding="utf-8"), "plain\n")
                 self.assertEqual(state.log_file.read_text(encoding="utf-8"), "legacy-log\n")
                 self.assertFalse(replacement.start_marker.exists())
             finally:
@@ -170,7 +168,6 @@ class WebServeScriptProcessTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIsNone(process.poll())
                 self.assertEqual(state.pid_file.read_text(encoding="utf-8"), f"{process.pid}\n")
-                self.assertEqual(state.mode_file.read_text(encoding="utf-8"), "plain\n")
                 self.assertEqual(state.log_file.read_text(encoding="utf-8"), "legacy-log\n")
                 self.assertFalse(replacement.start_marker.exists())
             finally:

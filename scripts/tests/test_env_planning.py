@@ -246,7 +246,6 @@ class EnvironmentPlanningTests(unittest.TestCase):
         self.assertIn("export CODEGRAPH_INSTALL_DIR=/home/overlord/.omo/codegraph", rendered)
         self.assertIn("export OMO_CODEGRAPH_BIN=/home/overlord/.local/bin/codegraph", rendered)
         self.assertIn("export CODEGRAPH_NODE_BIN=/usr/bin/node", rendered)
-        self.assertIn("export HEADROOM_TELEMETRY=off", rendered)
         self.assertIn("export OVERLORD_WORKSPACE='My Project!'", rendered)
         self.assertIn("_overlord_title()", rendered)
         self.assertNotIn(SENTINEL_OPENCODE_PASSWORD, rendered)

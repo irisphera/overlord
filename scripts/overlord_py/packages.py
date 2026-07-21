@@ -3,9 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Final
 
-from overlord_py.env_builder import CODEGRAPH_BIN, package_environment
-from overlord_py.headroom import HEADROOM_REQUIRED_VERSION, HEADROOM_RUNTIME_ENV
-from overlord_py.headroom_scripts import HEADROOM_RUNTIME_AVAILABLE_SCRIPT
+from overlord_py.env_builder import CODEGRAPH_BIN
 from overlord_py.package_runner import EngineRunner, PackageRepairError, run_package_command, run_package_script, require_success
 from overlord_py.package_scripts import (
     CODEGRAPH_CHECK_SCRIPT,
@@ -127,37 +125,6 @@ def ensure_codegraph_runtime_package(
     restart.request()
     message = f"Ensuring CodeGraph CLI package {CODEGRAPH_PACKAGE} in {paths.identity.container_name}..."
     return (*stage_return_message(stage, message), f"CodeGraph CLI version: {installed_version or 'unknown'}")
-
-
-def ensure_headroom_runtime_available(
-    engine: EngineRunner,
-    paths: WorkspacePaths,
-    package_env: Mapping[str, str] | None = None,
-    *,
-    headroom_enabled: bool,
-    env: Mapping[str, str],
-    stage: StageReporter = noop_stage,
-) -> tuple[str, ...]:
-    if not headroom_enabled:
-        return ()
-    runtime_env = package_environment() if package_env is None else package_env
-    stage(f"Checking Headroom CLI runtime {HEADROOM_REQUIRED_VERSION} in {paths.identity.container_name}...")
-    result = run_package_script(
-        engine,
-        paths,
-        runtime_env,
-        (HEADROOM_REQUIRED_VERSION,),
-        HEADROOM_RUNTIME_AVAILABLE_SCRIPT,
-        env=env,
-        extra_env=HEADROOM_RUNTIME_ENV,
-    )
-    if result.returncode == 0:
-        return (f"Headroom CLI runtime verified: {HEADROOM_REQUIRED_VERSION} with proxy telemetry controls.",)
-    raise PackageRepairError(
-        "Headroom mode cannot start with the current container image.\n"
-        "Rebuild the Overlord image with: overlord purge && overlord\n"
-        f"{result.stderr}"
-    )
 
 
 def ensure_default_opencode_skills(

@@ -27,21 +27,9 @@ RUNTIME_CONFIG_REPAIR_CHECK_SCRIPT: Final = r'''set -e
 
 config_file="$1"
 package_spec="$2"
-headroom_enabled="$3"
-headroom_base_url="$4"
 
 test -f "${config_file}"
 grep -Fq "${package_spec}" "${config_file}"
-
-if [ "${headroom_enabled}" = "1" ]; then
-	jq -e --arg base_url "${headroom_base_url}" '
-	  .provider.headroom.npm == "@ai-sdk/openai-compatible"
-	  and .provider.headroom.options.baseURL == $base_url
-	  and (.provider.headroom.models == {})
-	' "${config_file}" >/dev/null
-else
-	jq -e '(.provider.headroom? | not)' "${config_file}" >/dev/null
-fi
 '''
 PERMISSION_REPAIR_SCRIPT: Final = '''
     chmod 755 /home/overlord
@@ -186,8 +174,6 @@ def ensure_oh_my_openagent_runtime_config(
             "--",
             RUNTIME_OPENCODE_CONFIG_FILE,
             context.opencode_options.plugin_spec,
-            "1" if context.opencode_options.headroom_enabled else "0",
-            context.opencode_options.headroom_base_url,
         ],
         cwd=paths.workspace,
         env=env,
@@ -196,8 +182,7 @@ def ensure_oh_my_openagent_runtime_config(
     if config_check.returncode != 0:
         message = (
             "Ensuring OpenCode runtime config includes "
-            f"{context.opencode_options.plugin_spec} and the selected Headroom overlay state in "
-            f"{paths.identity.container_name}..."
+            f"{context.opencode_options.plugin_spec} in {paths.identity.container_name}..."
         )
         stage(message.replace("Ensuring", "Repairing", 1).replace("includes", "to include", 1))
         messages.extend(stage_return_message(stage, message))

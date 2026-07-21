@@ -40,7 +40,6 @@ from overlord_py.config_catalog import (  # noqa: E402
     resolve_oh_my_config_file,
     validate_opencode_catalog,
 )
-from overlord_py.headroom import selected_headroom_route_status  # noqa: E402
 
 DEFAULT_PLUGIN_SPEC: Final = OpencodeRenderOptions().plugin_spec
 
@@ -151,41 +150,17 @@ class ConfigCatalogTests(unittest.TestCase):
         self.assertNotIn('"model": "azure/gpt-5.5"', rendered)
         self.assertGreaterEqual(rendered.count('"model": "lmstudio/qwen3-8b"'), 10)
 
-    def test_opencode_runtime_config_disabled_repairs_plugin_and_removes_headroom_overlay(self) -> None:
+    def test_opencode_runtime_config_repairs_plugin_entries(self) -> None:
         source = (CONFIG_DIR / OPENCODE_CONFIG_NAME).read_text(encoding="utf-8")
         source_catalog = json.loads(source)
         source_catalog["plugin"] = ["other-plugin", "oh-my-openagent@0.0.1", "oh-my-openagent@4.11.1"]
-        source_catalog["provider"]["headroom"] = {"npm": "old", "models": {"stale": {}}}
-        source_with_overlay = json.dumps(source_catalog)
+        source_with_old_plugins = json.dumps(source_catalog)
 
-        rendered = render_opencode_runtime_config_text(source_with_overlay, OpencodeRenderOptions(headroom_enabled=False))
+        rendered = render_opencode_runtime_config_text(source_with_old_plugins)
         parsed = json.loads(rendered)
 
         self.assertEqual(parsed["plugin"], ["other-plugin", DEFAULT_PLUGIN_SPEC])
-        self.assertNotIn("headroom", parsed["provider"])
         self.assertTrue(rendered.endswith("\n"))
-
-    def test_opencode_runtime_config_headroom_enabled_generates_overlay_only_when_requested(self) -> None:
-        disabled = json.loads(render_opencode_runtime_config(CONFIG_DIR / OPENCODE_CONFIG_NAME, OpencodeRenderOptions(headroom_enabled=False)))
-        enabled = json.loads(
-            render_opencode_runtime_config(
-                CONFIG_DIR / OPENCODE_CONFIG_NAME,
-                OpencodeRenderOptions(headroom_enabled=True, headroom_base_url="http://127.0.0.1:8787/v1"),
-            )
-        )
-
-        self.assertEqual(disabled["plugin"], [DEFAULT_PLUGIN_SPEC])
-        self.assertNotIn("headroom", disabled["provider"])
-        self.assertEqual(enabled["plugin"], [DEFAULT_PLUGIN_SPEC])
-        self.assertEqual(
-            enabled["provider"]["headroom"],
-            {
-                "npm": "@ai-sdk/openai-compatible",
-                "name": "Headroom",
-                "options": {"baseURL": "http://127.0.0.1:8787/v1"},
-                "models": {},
-            },
-        )
 
     def test_opencode_runtime_lms_catalog_rewrite_uses_checked_in_model_entry(self) -> None:
         rendered = render_opencode_runtime_config(
@@ -196,13 +171,6 @@ class ConfigCatalogTests(unittest.TestCase):
 
         self.assertEqual(lmstudio["name"], "LM Studio")
         self.assertEqual(lmstudio["models"], {"qwen3-8b": {"name": "qwen3-8b"}})
-
-    def test_selected_headroom_status_inputs_cover_checked_in_presets_and_lms_override(self) -> None:
-        self.assertEqual(
-            selected_headroom_route_status(DEFAULT_OH_MY_CONFIG_NAME, "oh-my-openagent.jsonc", "qwen3-8b"),
-            "--lms-model qwen3-8b: dynamic lmstudio/qwen3-8b runtime override is unsupported/unverified for Headroom mode.",
-        )
-
 
 class ConfigManualQaTests(unittest.TestCase):
     def test_manual_qa_scenario_renders_dual_oh_my_outputs_without_source_mutation(self) -> None:

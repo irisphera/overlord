@@ -15,14 +15,13 @@ for import_path in (REPO_ROOT, TESTS_DIR, SCRIPTS_DIR):
 
 from scripts.tests.runtime_support import FakeResponse, RecordingEngine, runtime_workspace  # noqa: E402
 from scripts.overlord_py import web_restart  # noqa: E402
-from scripts.overlord_py.headroom import HEADROOM_MODE_FILE  # noqa: E402
 from scripts.overlord_py.runtime_config import RestartState  # noqa: E402
 from scripts.overlord_py.web_restart import workspace_project_stale_check_args  # noqa: E402
 from scripts.overlord_py.web_types import OPENCODE_WEB_HOSTNAME, OPENCODE_WEB_PID_FILE, OPENCODE_WEB_PORT, OPENCODE_WEB_WAIT_SECONDS  # noqa: E402
 
 
 class WebRestartTests(unittest.TestCase):
-    def test_restart_forwards_pid_mode_hostname_and_port_to_script(self) -> None:
+    def test_restart_forwards_pid_hostname_and_port_to_script(self) -> None:
         engine = RecordingEngine()
         with runtime_workspace(engine=engine) as fixture:
             restart = RestartState(required=True)
@@ -37,7 +36,7 @@ class WebRestartTests(unittest.TestCase):
             script_args = engine.runs[0].args
             self.assertEqual(
                 script_args[script_args.index("--") + 1 :],
-                [OPENCODE_WEB_PID_FILE, HEADROOM_MODE_FILE, OPENCODE_WEB_HOSTNAME, OPENCODE_WEB_PORT],
+                [OPENCODE_WEB_PID_FILE, OPENCODE_WEB_HOSTNAME, OPENCODE_WEB_PORT],
             )
 
     def test_plugin_env_mismatch_requests_shared_restart(self) -> None:

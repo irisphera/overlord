@@ -21,7 +21,6 @@ from scripts.overlord_py.web_server import (  # noqa: E402
     ensure_host_web_proxy,
     format_access_urls,
     plan_opencode_web_server,
-    request_opencode_web_restart_if_mode_changed,
     request_opencode_web_restart_if_plugin_env_missing,
     resolve_published_web_port,
     restart_opencode_web_if_needed,
@@ -45,7 +44,6 @@ class WebPlanningTests(unittest.TestCase):
                 fixture.paths,
                 environment.exec_env_flags,
                 environment.opencode_web_credential_flags,
-                "plain",
             )
 
         container_index = plan.argv.index(fixture.paths.identity.container_name)
@@ -95,11 +93,10 @@ class WebPlanningTests(unittest.TestCase):
             "Published port: http://localhost:49152\nLocal access:   http://localhost:40231\nPublished LAN:  http://10.0.0.5:49152\nNetwork access: http://10.0.0.5:40231\n",
         )
 
-    def test_restart_and_server_plans_preserve_bash_commands_and_mode_marker(self) -> None:
-        engine = RecordingEngine(responses=[("classify_opencode_cmdline", FakeResponse(returncode=1))])
+    def test_restart_and_server_plans_preserve_bash_commands(self) -> None:
+        engine = RecordingEngine()
         with runtime_workspace(engine=engine) as fixture:
-            restart = RestartState()
-            messages = request_opencode_web_restart_if_mode_changed(engine, fixture.paths, "plain", restart, env=fixture.runner_env)
+            restart = RestartState(required=True)
             restart_messages = restart_opencode_web_if_needed(engine, fixture.paths, restart, env=fixture.runner_env)
             environment = build_environment_plan(
                 {"HOME": str(fixture.workspace.path / "host-home"), "EXA_API_KEY": "sentinel-exa"},
@@ -113,14 +110,12 @@ class WebPlanningTests(unittest.TestCase):
                 env=fixture.runner_env,
                 credential_flags=environment.opencode_web_credential_flags,
             )
-            plan = plan_opencode_web_server(fixture.paths, environment.exec_env_flags, environment.opencode_web_credential_flags, "plain")
+            plan = plan_opencode_web_server(fixture.paths, environment.exec_env_flags, environment.opencode_web_credential_flags)
 
             self.assertFalse(restart.required)
-            self.assertIn("Headroom mode changed", messages[0])
             self.assertIn("Restarting OpenCode web server so package/config repairs take effect", restart_messages[0])
             self.assertEqual(plugin_messages, ())
             self.assertIn("opencode serve --hostname", plan.script)
-            self.assertIn("printf '%s\\n' \"${DESIRED_MODE}\" >\"${MODE_FILE}\"", plan.script)
             self.assertIn(OPENCODE_WEB_LOG_FILE, plan.argv)
 
     def test_stop_host_web_proxy_removes_cached_files(self) -> None:

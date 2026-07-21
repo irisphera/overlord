@@ -108,7 +108,7 @@ class runtime_workspace:
             oh_my_config_file=CONFIG_DIR / "oh-my-openagent.jsonc",
             zellij_config_file=CONFIG_DIR / "zellij-config.kdl",
             environment=environment,
-            opencode_options=OpencodeRenderOptions(headroom_enabled=False, lms_model=self._lms_model),
+            opencode_options=OpencodeRenderOptions(lms_model=self._lms_model),
             model_override=self._model_override,
         )
         runner_env = {"PATH": f"{workspace.fake_bin}{os.pathsep}{os.environ.get('PATH', '')}", "FAKE_COMMAND_LOG": str(workspace.log_path)}

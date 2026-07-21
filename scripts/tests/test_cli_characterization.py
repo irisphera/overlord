@@ -16,29 +16,6 @@ EXPECTED_CONFIG_LIST: Final = """Available oh-my-openagent routing presets:
   default (oh-my-openagent.jsonc)
 """
 
-HEADROOM_SCOPE_ERROR_PREFIX: Final = (
-    "Error: --headroom and OVERLORD_HEADROOM are only supported for default, web, "
-    "and opencode launches.\n"
-)
-
-HEADROOM_UNSUPPORTED_PREFIX: Final = (
-    "Error: Headroom mode is currently unsupported for the selected routing/provider "
-    "combination.\n"
-)
-
-HEADROOM_UNSUPPORTED_SUFFIX: Final = (
-    "No checked-in Headroom routing preset/provider is currently supported without real "
-    "Headroom traversal proof.\n"
-    "Todo 1 only proved the generic OpenAI-compatible overlay shape with a mock; it did "
-    "not prove real traversal for Azure, Google Vertex, Bedrock, LM Studio, or "
-    "--lms-model overrides.\n"
-    "Future support must include actual Headroom traversal evidence before this launcher "
-    "may start the Headroom proxy or OpenCode in Headroom mode.\n"
-)
-DEFAULT_GPT_56_HEADROOM_STATUS: Final = (
-    "--config default (oh-my-openagent.jsonc): azure/gpt-5.6-sol is unsupported/unverified for Headroom mode."
-)
-
 STARTUP_ENGINE_SUBCOMMANDS: Final = {"build", "run", "exec", "port"}
 
 
@@ -50,10 +27,9 @@ class CliCharacterizationTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0)
             self.assertEqual(result.stderr, "")
             self.assertIn(
-                "USAGE: overlord [--headroom] [--list-configs | --config PRESET | --lms-model MODEL] [command]\n",
+                "USAGE: overlord [--list-configs | --config PRESET | --lms-model MODEL] [command]\n",
                 result.stdout,
             )
-            self.assertIn("\t--headroom         Opt into Headroom mode for web/opencode launches only\n", result.stdout)
             self.assertIn("    web            Start/reuse OpenCode web mode and print local/network URLs (default)\n", result.stdout)
             self.assertIn("    purge          Remove the container and image (next launch rebuilds everything)\n", result.stdout)
             self.assert_no_fake_engine_invocations(workspace)
@@ -136,86 +112,8 @@ class CliCharacterizationTests(unittest.TestCase):
         self.assertEqual(result.stdout, "")
         self.assertEqual(result.stderr, "Error: unknown command 'status'\nRun 'overlord help' for usage.\n")
 
-    def test_strict_overlord_headroom_values_are_enforced(self) -> None:
-        false_result = run_one("--list-configs", env={"OVERLORD_HEADROOM": "off"})
-        invalid_result = run_one("--list-configs", env={"OVERLORD_HEADROOM": "maybe"})
-
-        self.assertEqual(false_result.returncode, 0)
-        self.assertEqual(false_result.stdout, EXPECTED_CONFIG_LIST)
-        self.assertEqual(false_result.stderr, "")
-        self.assertEqual(invalid_result.returncode, 1)
-        self.assertEqual(invalid_result.stdout, "")
-        self.assertEqual(
-            invalid_result.stderr,
-            "Error: OVERLORD_HEADROOM must be a strict boolean: true, false, 1, 0, yes, no, on, or off.\n"
-            "Got: 'maybe'\n",
-        )
-
-    def test_headroom_list_configs_is_rejected_before_engine_startup(self) -> None:
-        with launcher_workspace() as workspace:
-            result = run_launcher(workspace, "--headroom", "--list-configs")
-
-            self.assertEqual(result.returncode, 1)
-            self.assertEqual(result.stdout, "")
-            self.assertEqual(
-                result.stderr,
-                HEADROOM_SCOPE_ERROR_PREFIX + "Headroom cannot be combined with --list-configs.\n",
-            )
-            self.assert_no_fake_engine_invocations(workspace)
-
-    def test_headroom_non_web_commands_are_rejected_before_engine_startup(self) -> None:
-        expected = {
-            "shell": HEADROOM_SCOPE_ERROR_PREFIX + "Headroom cannot be combined with 'shell'.\n",
-            "zellij": HEADROOM_SCOPE_ERROR_PREFIX + "Headroom cannot be combined with 'zellij'.\n",
-            "fresh": HEADROOM_SCOPE_ERROR_PREFIX + "Headroom cannot be combined with 'fresh'.\n",
-            "purge": HEADROOM_SCOPE_ERROR_PREFIX + "Headroom cannot be combined with 'purge'.\n",
-        }
-
-        for command, stderr in expected.items():
-            with self.subTest(command=command), launcher_workspace() as workspace:
-                result = run_launcher(workspace, "--headroom", command)
-
-                self.assertEqual(result.returncode, 1)
-                self.assertEqual(result.stdout, "")
-                self.assertEqual(result.stderr, stderr)
-                self.assert_no_fake_engine_invocations(workspace)
-
-    def test_headroom_default_launch_fails_before_engine_startup(self) -> None:
-        with launcher_workspace() as workspace:
-            result = run_launcher(workspace, "--headroom")
-
-            self.assertEqual(result.returncode, 1)
-            self.assertEqual(result.stdout, "")
-            self.assertEqual(result.stderr, headroom_unsupported_stderr(DEFAULT_GPT_56_HEADROOM_STATUS))
-            self.assert_no_startup_engine_invocations(workspace)
-
-    def test_overlord_headroom_env_default_launch_fails_before_engine_startup(self) -> None:
-        with launcher_workspace() as workspace:
-            result = run_launcher(workspace, env={"OVERLORD_HEADROOM": "1"})
-
-            self.assertEqual(result.returncode, 1)
-            self.assertEqual(result.stdout, "")
-            self.assertEqual(result.stderr, headroom_unsupported_stderr(DEFAULT_GPT_56_HEADROOM_STATUS))
-            self.assert_no_startup_engine_invocations(workspace)
-
-    def test_headroom_lms_model_launch_fails_before_engine_startup(self) -> None:
-        with launcher_workspace() as workspace:
-            result = run_launcher(workspace, "--headroom", "--lms-model", "qwen", "web")
-
-            self.assertEqual(result.returncode, 1)
-            self.assertEqual(result.stdout, "LM Studio override: all oh-my-openagent agents → lmstudio/qwen\n")
-            self.assertEqual(result.stderr, headroom_unsupported_stderr("--lms-model qwen: dynamic lmstudio/qwen runtime override is unsupported/unverified for Headroom mode."))
-            self.assert_no_startup_engine_invocations(workspace)
-
     def assert_no_fake_engine_invocations(self, workspace: TempLauncherWorkspace) -> None:
         self.assertEqual(workspace.read_command_log(), [])
-
-    def assert_no_startup_engine_invocations(self, workspace: TempLauncherWorkspace) -> None:
-        for record in workspace.read_command_log():
-            argv = record["argv"]
-            self.assertNotIn("headroom", argv)
-            if len(argv) > 1:
-                self.assertNotIn(argv[1], STARTUP_ENGINE_SUBCOMMANDS)
 
 
 @contextmanager
@@ -236,11 +134,5 @@ def run_launcher(
 def run_one(*args: str, env: Mapping[str, str] | None = None) -> HarnessRun:
     with launcher_workspace() as workspace:
         return run_launcher(workspace, *args, env=env)
-
-
-def headroom_unsupported_stderr(selected_status: str) -> str:
-    return HEADROOM_UNSUPPORTED_PREFIX + f"Selected status: {selected_status}\n" + HEADROOM_UNSUPPORTED_SUFFIX
-
-
 if __name__ == "__main__":
     unittest.main()

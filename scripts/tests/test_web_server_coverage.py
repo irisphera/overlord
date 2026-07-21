@@ -71,7 +71,7 @@ class WebManagerCoverageTests(unittest.TestCase):
 
     def test_opencode_serve_plan_composes_shared_pid_classifier(self) -> None:
         with runtime_workspace() as fixture:
-            plan = plan_opencode_web_server(fixture.paths, (), (), "plain")
+            plan = plan_opencode_web_server(fixture.paths, (), ())
 
         self.assertEqual(plan.script, ENSURE_OPENCODE_WEB_SERVER_SCRIPT)
         self.assertTrue(plan.script.startswith(OPENCODE_CMDLINE_MATCHER_SCRIPT))

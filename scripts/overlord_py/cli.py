@@ -19,9 +19,8 @@ from overlord_py.config_catalog import (
 )
 from overlord_py.cli_help import HELP_TEXT
 from overlord_py.errors import CliParseResult
-from overlord_py.headroom import desired_headroom_mode, headroom_scope_error, selected_headroom_route_status, unsupported_headroom_stderr
 
-USAGE_LINE: Final = "Usage: overlord [--headroom] [--list-configs | --config PRESET | --lms-model MODEL] [command]"
+USAGE_LINE: Final = "Usage: overlord [--list-configs | --config PRESET | --lms-model MODEL] [command]"
 LMS_MODEL_PATTERN: Final = re.compile(r"[A-Za-z0-9._:@/+-]+")
 LMS_MODEL_ERROR: Final = "Error: --lms-model may only contain letters, numbers, '.', '_', ':', '@', '/', '+', or '-'.\n"
 
@@ -44,8 +43,6 @@ class CliOptions:
     config_explicit: bool
     lms_model: str
     model_override: str
-    headroom_enabled: bool
-    desired_headroom_mode: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,7 +51,6 @@ class RawArgs:
     config_explicit: bool
     list_configs: bool
     lms_model: str
-    headroom_enabled: bool
     positionals: tuple[str, ...]
 
 def parse_cli(
@@ -96,9 +92,6 @@ def parse_cli(
     if command is None:
         return CliParseResult(status=1, stdout=stdout, stderr=f"Error: unknown command '{command_text}'\nRun 'overlord help' for usage.\n")
 
-    if raw.headroom_enabled and command not in {Command.WEB, Command.OPENCODE, Command.HELP}:
-        return failure(headroom_scope_error(command.value))
-
     config_file, config_error = resolve_oh_my_config_file(root, raw.config_name)
     if config_file is None:
         return CliParseResult(status=1, stdout=stdout, stderr=config_error)
@@ -113,23 +106,12 @@ def parse_cli(
         config_explicit=raw.config_explicit,
         lms_model=raw.lms_model,
         model_override=model_override,
-        headroom_enabled=raw.headroom_enabled,
-        desired_headroom_mode=desired_headroom_mode(raw.headroom_enabled),
     )
-
-    headroom_compatibility_decision = enforce_headroom_provider_compatibility(options, stdout)
-    if headroom_compatibility_decision is not None:
-        return headroom_compatibility_decision
     return CliParseResult(status=0, stdout=stdout, options=options)
 
 
 def parse_raw_args(argv: Sequence[str], *, env: Mapping[str, str]) -> RawArgs | CliParseResult:
-    headroom_enabled = False
-    if "OVERLORD_HEADROOM" in env:
-        boolean_result = parse_strict_boolean("OVERLORD_HEADROOM", env["OVERLORD_HEADROOM"])
-        if isinstance(boolean_result, CliParseResult):
-            return boolean_result
-        headroom_enabled = boolean_result
+    del env
 
     config_name = DEFAULT_OH_MY_CONFIG_NAME
     config_explicit = False
@@ -140,9 +122,6 @@ def parse_raw_args(argv: Sequence[str], *, env: Mapping[str, str]) -> RawArgs | 
     while index < len(argv):
         token = argv[index]
         match token:
-            case "--headroom":
-                headroom_enabled = True
-                index += 1
             case "--list-configs":
                 list_configs = True
                 index += 1
@@ -172,22 +151,8 @@ def parse_raw_args(argv: Sequence[str], *, env: Mapping[str, str]) -> RawArgs | 
         config_explicit=config_explicit,
         list_configs=list_configs,
         lms_model=lms_model,
-        headroom_enabled=headroom_enabled,
         positionals=tuple(positionals),
     )
-
-
-def parse_strict_boolean(name: str, value: str) -> bool | CliParseResult:
-    match value:
-        case "true" | "TRUE" | "True" | "1" | "yes" | "YES" | "Yes" | "on" | "ON" | "On":
-            return True
-        case "false" | "FALSE" | "False" | "0" | "no" | "NO" | "No" | "off" | "OFF" | "Off":
-            return False
-        case _:
-            return failure(
-                f"Error: {name} must be a strict boolean: true, false, 1, 0, yes, no, on, or off.\n"
-                f"Got: '{value}'\n"
-            )
 
 
 def option_value(argv: Sequence[str], index: int, option: str) -> str | CliParseResult:
@@ -209,8 +174,6 @@ def option_value(argv: Sequence[str], index: int, option: str) -> str | CliParse
 
 
 def list_configs_decision(raw: RawArgs, repo_root: Path) -> CliParseResult:
-    if raw.headroom_enabled:
-        return failure(headroom_scope_error("--list-configs"))
     if raw.config_explicit or raw.lms_model or raw.positionals:
         return failure("Error: --list-configs cannot be combined with commands or overrides\n")
     return CliParseResult(status=0, stdout=available_configs_text(repo_root))
@@ -249,27 +212,6 @@ def parse_command(command_text: str) -> Command | None:
             return Command.HELP
         case _:
             return None
-
-
-def enforce_headroom_provider_compatibility(options: CliOptions, stdout: str) -> CliParseResult | None:
-    if not options.headroom_enabled:
-        return None
-    match options.command:
-        case Command.WEB | Command.OPENCODE:
-            selected_status = selected_headroom_route_status(
-                options.config_name,
-                options.config_file.name,
-                options.lms_model,
-            )
-            return CliParseResult(
-                status=1,
-                stdout=stdout,
-                stderr=unsupported_headroom_stderr(selected_status),
-            )
-        case Command.SHELL | Command.ZELLIJ | Command.FRESH | Command.PURGE | Command.HELP:
-            return None
-        case unreachable:
-            assert_never(unreachable)
 
 
 def failure(stderr: str) -> CliParseResult:

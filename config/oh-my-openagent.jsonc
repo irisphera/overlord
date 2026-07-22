@@ -16,7 +16,7 @@
     // HIGH reasoning — deep logical work, complex problem-solving
     "ultrabrain": {
       "model": "azure/gpt-5.6-sol",
-      "reasoningEffort": "max"
+      "reasoningEffort": "xhigh"
     },
     "unspecified-high": {
       "model": "azure/gpt-5.6-sol",
@@ -37,11 +37,11 @@
     },
     // LOW reasoning — trivial, fast tasks
     "quick": {
-      "model": "azure/gpt-5.6-terra",
+      "model": "azure/gpt-5.6-luna",
       "reasoningEffort": "high"
     },
     "unspecified-low": {
-      "model": "azure/gpt-5.6-terra",
+      "model": "azure/gpt-5.6-luna",
       "reasoningEffort": "high"
     }
   },
@@ -59,12 +59,12 @@
     },
     "oracle": {
       "model": "azure/gpt-5.6-sol",
-      "reasoningEffort": "max",
+      "reasoningEffort": "xhigh",
       "prompt_append": "TASTE CHECK: Optimize recommendations for the smallest sufficient solution to the user's actual observable outcome. Distinguish demonstrated constraints from hypothetical future concerns. Explicitly flag proxy-objective capture, speculative hardening, architecture-before-evidence, and process artifacts that do not enable or protect a current requirement. Prefer deleting or avoiding machinery over completing it. Recommend added complexity only when you can name the concrete present failure the simpler design cannot handle."
     },
     "prometheus": {
       "model": "azure/gpt-5.6-sol",
-      "reasoningEffort": "max",
+      "reasoningEffort": "medium",
       "prompt_append": "PLANNING DISCIPLINE: Make the first milestone the smallest user-observable end-to-end behavior that proves the request works, including its exact acceptance command or interaction. Plan in vertical slices, not complete internal layers. Keep the plan proportional and decision-complete only for current requirements; do not invent validation, persistence, locking, retries, recovery, compatibility, adapters, abstractions, or broad test matrices without evidence that the requested behavior needs them now. Every later milestone must advance or protect the acceptance behavior. End the plan at the requested outcome and put possible future improvements in a clearly non-executing note."
     },
     "hephaestus": {
@@ -74,7 +74,7 @@
     },
     "plan": {
       "model": "azure/gpt-5.6-sol",
-      "reasoningEffort": "max",
+      "reasoningEffort": "medium",
       "prompt_append": "PLANNING DISCIPLINE: Lead with one observable acceptance criterion and the earliest runnable vertical slice. Prefer a short sequence that delivers user value over exhaustive inventories or complete internal layers. Do not introduce speculative abstractions, persistence, validation, locking, retries, recovery, compatibility, adapters, or broad testing unless an explicit requirement or demonstrated failure makes them necessary. Each step must advance or protect the acceptance behavior. Stop the plan when the requested outcome is achieved; do not turn optional future work into required scope."
     },
     // MEDIUM reasoning — validation, building, general work
@@ -100,7 +100,7 @@
     },
     "momus": {
       "model": "azure/gpt-5.6-sol",
-      "reasoningEffort": "max",
+      "reasoningEffort": "xhigh",
       "prompt_append": "PLAN REVIEW DISCIPLINE: Reject any plan that can produce substantial architecture, infrastructure, tests, or documentation before a runnable user-visible vertical slice. Require an explicit acceptance command or interaction, make the first milestone exercise it end to end, and ensure every later step advances or protects that behavior. Flag speculative hardening, future-proofing, unnecessary abstractions, exhaustive inventories, and artifact-driven progress. A plan is not better because it is longer; prefer the smallest plan that safely delivers the explicit request."
     },
     "multimodal-looker": {
@@ -110,13 +110,13 @@
     },
     // LOW reasoning — search, lookup, exploration (speed over depth)
     "explore": {
-      "model": "azure/gpt-5.6-terra",
+      "model": "azure/gpt-5.6-luna",
       "reasoningEffort": "high",
       "category": "unspecified-low",
       "prompt_append": "SEARCH DISCIPLINE: Search only to resolve the stated downstream decision. Return the minimum evidence needed, distinguish current requirements from hypothetical concerns, and stop when the decision is unblocked or repeated searches stop adding material information. Do not propose architecture or extra scope."
     },
     "librarian": {
-      "model": "azure/gpt-5.6-terra",
+      "model": "azure/gpt-5.6-luna",
       "reasoningEffort": "high",
       "category": "unspecified-low",
       "prompt_append": "RESEARCH DISCIPLINE: Research only to resolve the stated downstream decision. Prefer authoritative evidence, return the minimum findings that change the answer, and stop when the decision is unblocked or sources converge. Do not expand the task into adjacent best practices, architecture, or possible future needs."

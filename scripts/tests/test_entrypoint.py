@@ -111,7 +111,7 @@ class EntrypointTests(unittest.TestCase):
             self.assertNotIn("groupmod -o -g 0", logged_commands)
             self.assertNotIn("remapped overlord to uid=0(root)", result.stdout)
 
-    def test_bootstrap_trusts_only_workspace_once_in_system_git_config(self) -> None:
+    def test_bootstrap_trusts_only_workspace_once_from_neutral_git_cwd(self) -> None:
         with tempfile.TemporaryDirectory(prefix="overlord-entrypoint-") as temp_dir:
             temp = Path(temp_dir)
             fake_bin = temp / "bin"
@@ -128,16 +128,17 @@ class EntrypointTests(unittest.TestCase):
             # Then: only the exact workspace is trusted once, before privilege drop.
             logged_commands = command_log.read_text(encoding="utf-8")
             git_commands = tuple(line for line in logged_commands.splitlines() if line.startswith("git "))
-            add_command = "git config --system --add safe.directory /workspace"
+            get_command = "git -C / config --system --get-all safe.directory"
+            add_command = "git -C / config --system --add safe.directory /workspace"
             handoff_command = "gosu overlord true"
             self.assertEqual(first.returncode, 0, first.stderr)
             self.assertEqual(second.returncode, 0, second.stderr)
             self.assertEqual(
                 git_commands,
                 (
-                    "git config --system --get-all safe.directory",
+                    get_command,
                     add_command,
-                    "git config --system --get-all safe.directory",
+                    get_command,
                 ),
             )
             self.assertLess(logged_commands.index(add_command), logged_commands.index(handoff_command))
@@ -197,12 +198,15 @@ def install_fake_entrypoint_commands(fake_bin: Path, command_log: Path) -> None:
         fake_bin / "git",
         command_log,
         f'''
-        if [ "$*" = "config --system --get-all safe.directory" ]; then
+        if [ "$*" = "config --system --get-all safe.directory" ] || [ "$*" = "config --system --add safe.directory /workspace" ]; then
+            exit 128
+        fi
+        if [ "$*" = "-C / config --system --get-all safe.directory" ]; then
             [ -s "{safe_directory_state}" ] || exit 1
             /usr/bin/cat "{safe_directory_state}"
             exit 0
         fi
-        if [ "$*" = "config --system --add safe.directory /workspace" ]; then
+        if [ "$*" = "-C / config --system --add safe.directory /workspace" ]; then
             printf '/workspace\\n' > "{safe_directory_state}"
             exit 0
         fi

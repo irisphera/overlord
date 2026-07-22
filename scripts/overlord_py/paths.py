@@ -5,10 +5,26 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import re
-from typing import Final
+from typing import Final, override
 
 RESPONSIBILITY: Final = "derive repo roots, workspace identity, and .overlord paths"
 SLUG_INVALID_CHARS: Final = re.compile(r"[^a-z0-9._-]")
+GITDIR_FILE: Final = re.compile(r"\Agitdir: (?P<path>[^\r\n]+)\n?\Z")
+
+
+@dataclass(frozen=True, slots=True)
+class GitdirOutsideWorkspaceError(Exception):
+    workspace: Path
+    gitdir: Path
+
+    @override
+    def __str__(self) -> str:
+        return (
+            "Error: workspace Git metadata resolves outside the workspace bind mount.\n"
+            f"Resolved workspace: {self.workspace}\n"
+            f"Resolved gitdir: {self.gitdir}\n"
+            "Run Overlord from the containing repository or use a standalone clone."
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,6 +92,18 @@ def state_paths(workspace: Path) -> StatePaths:
         host_proxy_port_file=root / "opencode-web-proxy.port",
         host_proxy_log_file=root / "opencode-web-proxy.log",
     )
+
+
+def ensure_gitdir_within_workspace(paths: WorkspacePaths) -> None:
+    git_entry = paths.workspace / ".git"
+    if not git_entry.is_file():
+        return
+    match = GITDIR_FILE.fullmatch(git_entry.read_text(encoding="utf-8"))
+    if match is None:
+        return
+    gitdir = (git_entry.parent / match["path"]).resolve(strict=False)
+    if not gitdir.is_relative_to(paths.workspace):
+        raise GitdirOutsideWorkspaceError(workspace=paths.workspace, gitdir=gitdir)
 
 
 def build_workspace_paths(workspace: Path, *, script_path: Path) -> WorkspacePaths:

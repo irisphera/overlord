@@ -28,6 +28,7 @@ RTK is an install-time tool. The launcher does not orchestrate it or forward RTK
 | Change `--config` selection rules | routing preset validation, arg parsing | Selects checked-in `oh-my-openagent*.jsonc` presets; rejects paths and invalid presets |
 | Change provider catalog or env forwarding | `config/opencode.json`, `PROVIDER_ENV_VARS` in `overlord` | Keep single provider catalog and forwarded env vars in sync |
 | Change local persistence/gitignore behavior | `ensure_state_dir`, `persisted_state_mounts` | `.overlord/` creation, direct-bind verification, and gitignore wiring live here |
+| Change workspace Git topology preflight | `overlord_py/paths.py`, `overlord_py/main.py` | Missing `.git` is allowed; external gitdirs stop launch modes before image/container lifecycle without blocking recovery commands |
 | Change runtime config injection | `ensure_runtime_config_dirs` in `overlord` | Host `config/*` -> in-container `~/.config/*` flow |
 | Change web publishing/startup behavior | `OPENCODE_WEB_*`, `resolve_published_web_port`, `resolve_network_host_ip`, `ensure_opencode_web_server` in `overlord` | Publishes host URLs for the OpenCode web server |
 
@@ -44,6 +45,7 @@ RTK is an install-time tool. The launcher does not orchestrate it or forward RTK
 - OpenCode and zsh state persist through direct writable bind mounts under the workspace `.overlord/` directory; lifecycle commands must never copy live state back onto those bind sources.
 - `fresh`, and `purge` when its target container exists, must verify the exact `/workspace`, OpenCode data, and zsh data bind mappings before any destructive engine command. An already-absent `purge` may continue image cleanup only after the engine proves absence; existence-query errors and invalid mappings fail closed.
 - Legacy-container migration is an explicit manual recovery procedure: quiesce first, copy unmounted state only to a separate staging directory, verify it, then remove the exact incompatible container. Never turn that procedure into an automatic launcher fallback.
+- A submodule or linked-worktree gitfile is launchable only when its resolved Git metadata remains inside the workspace bind mount. Otherwise launch modes fail before lifecycle work and direct the user to the containing repository or a standalone clone.
 - Adding or removing providers is incomplete unless `config/opencode.json`, `PROVIDER_ENV_VARS`, and routing presets are updated together.
 
 ## MANUAL VERIFICATION

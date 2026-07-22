@@ -18,7 +18,12 @@ from overlord_py.packages import (
     ensure_oh_my_openagent_runtime_package,
     ensure_opencode_runtime_version,
 )
-from overlord_py.paths import WorkspacePaths, build_workspace_paths
+from overlord_py.paths import (
+    GitdirOutsideWorkspaceError,
+    WorkspacePaths,
+    build_workspace_paths,
+    ensure_gitdir_within_workspace,
+)
 from overlord_py.persisted_state_mounts import MountSafetyFailure
 from overlord_py.progress import stdout_stage
 from overlord_py.runtime_config import RestartState, RuntimeConfigContext, ensure_oh_my_openagent_runtime_config, inject_initial_runtime_config
@@ -60,6 +65,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         if result.status != 0 or result.options is None:
             return result.status
         return run_launcher(engine, paths, result.options, host_env)
+    except GitdirOutsideWorkspaceError as error:
+        _ = sys.stderr.write(f"{error}\n")
+        return 1
     except MountSafetyFailure as error:
         sys.stderr.write(f"{MOUNT_SAFETY_FAILURE_MESSAGE}Details: {error}\n")
         return 1
@@ -103,6 +111,7 @@ def run_launcher(engine: ContainerEngine, paths: WorkspacePaths, options: CliOpt
 
 
 def run_container_command(engine: ContainerEngine, paths: WorkspacePaths, options: CliOptions, host_env: Mapping[str, str]) -> int:
+    ensure_gitdir_within_workspace(paths)
     write_messages(ensure_image(engine, paths, env=host_env, stage=stdout_stage))
     home = Path(host_env.get("HOME", str(Path.home())))
     environment = build_environment_plan(host_env, home=home, workspace_name=paths.identity.workspace_name)

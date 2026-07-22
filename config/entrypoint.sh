@@ -86,8 +86,8 @@ fi
 chown -R "$(id -u overlord):$(id -g overlord)" /home/overlord 2>/dev/null || true
 
 # Trust only the fixed workspace bind mount when its mountpoint ownership differs.
-if ! git config --system --get-all safe.directory | grep -Fqx -- "/workspace"; then
-	git config --system --add safe.directory /workspace
+if ! git -C / config --system --get-all safe.directory | grep -Fqx -- "/workspace"; then
+	git -C / config --system --add safe.directory /workspace
 fi
 
 # Drop privileges to overlord — ensures the process runs with the

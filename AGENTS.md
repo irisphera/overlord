@@ -30,6 +30,7 @@ overlord/
 | Change local image/toolchain contents | `Dockerfile` | Rebuild with `overlord purge && overlord` after image-level edits |
 | Change local launcher command surface | `scripts/overlord` | Minimal shim that resolves host `python3` and execs the Python launcher |
 | Change local launcher behavior or lifecycle | `scripts/overlord_py/` | Authoritative Python implementation for the bind-mounted workflow; Podman preferred if present |
+| Change workspace Git topology checks | `scripts/overlord_py/paths.py`, `scripts/overlord_py/main.py` | Non-Git workspaces are valid; launch modes reject only gitfiles whose resolved metadata lies outside the workspace bind mount |
 | Change native host install behavior | `scripts/install` | Installs checked-in OpenCode/oh-my-openagent/zellij config and Bun-managed packages directly on the host |
 | Change RTK image install | `Dockerfile` | Selects the pinned Linux asset by `TARGETARCH`, verifies its checksum/version, and initializes the plugin as `overlord` |
 | Change RTK native install | `scripts/install` | Full install selects by host architecture and initializes the plugin; skip mode installs neither |
@@ -49,6 +50,7 @@ overlord/
 - `Dockerfile` and root docs own image/toolchain guidance; child AGENTS files should not repeat that material.
 - `skills/setup-devcontainer/SKILL.md` is authoritative; container and native copies are generated distribution outputs and remain separate from pinned third-party skills.
 - Project-specific tooling belongs in workspace `setup-devcontainer.sh`, which runs as root from `/workspace` only on container create or restart.
+- Launch modes preflight `.git` gitfiles before image/container lifecycle. External gitdirs produce an actionable error rather than an incomplete isolated mount; recovery and inspection commands remain available.
 - RTK version and checksum changes belong in `config/tool-versions.env`; Docker and native installs must consume that shared manifest.
 
 ## ANTI-PATTERNS (THIS PROJECT)

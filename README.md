@@ -187,6 +187,8 @@ The current directory is mounted read-write at `/workspace`. When present, `~/.g
 | `.overlord/opencode-data` | `/home/overlord/.local/share/opencode` | read-write |
 | `.overlord/zsh-data` | `/home/overlord/.zsh_data` | read-write |
 
+Non-Git directories are valid workspaces. For launch commands, Overlord also checks a `.git` file before starting image or container lifecycle. If its `gitdir` resolves outside the selected workspace, the isolated bind mount cannot preserve that submodule or linked-worktree topology, so Overlord reports the resolved workspace and Git metadata paths instead of starting a container that cannot use the repository. Run Overlord from the containing repository or use a standalone clone. Overlord does not silently mount the parent directory; `fresh`, `purge`, `help`, and config listing remain available for recovery and inspection.
+
 The Docker socket mount lets container processes control the host container daemon. Treat any code run in the container as having that capability.
 
 Testcontainers defaults are `DOCKER_HOST=unix:///var/run/docker.sock`, `TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock`, and `TESTCONTAINERS_HOST_OVERRIDE=host.docker.internal`.

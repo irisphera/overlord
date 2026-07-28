@@ -156,6 +156,7 @@ class ContainerLifecycleTests(unittest.TestCase):
             self.assertIn("0.0.0.0::4090", args)
             self.assertIn("HOME=/home/overlord", args)
             self.assertIn("AZURE_API_KEY=sentinel-azure-secret", args)
+            self.assertIn("OPENROUTER_API_KEY=sentinel-openrouter-secret", args)
             self.assertFalse(any("sentinel-opencode-password" in arg for arg in args))
 
     def test_fresh_verifies_mounts_before_clearing_markers_and_removing_container(self) -> None:
@@ -287,7 +288,13 @@ class LifecycleFixture:
         self.runner_env = runner_env
         self.engine = ContainerEngine("docker")
         self.environment = build_environment_plan(
-            {"HOME": str(home), "TERM": "xterm-256color", "AZURE_API_KEY": "sentinel-azure-secret", "OPENCODE_SERVER_PASSWORD": "sentinel-opencode-password"},
+            {
+                "HOME": str(home),
+                "TERM": "xterm-256color",
+                "AZURE_API_KEY": "sentinel-azure-secret",
+                "OPENROUTER_API_KEY": "sentinel-openrouter-secret",
+                "OPENCODE_SERVER_PASSWORD": "sentinel-opencode-password",
+            },
             home=home,
             workspace_name=paths.identity.workspace_name,
         )

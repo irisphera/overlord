@@ -32,6 +32,7 @@ from overlord_py.state import (  # noqa: E402
 
 SENTINEL_AZURE: Final = "sentinel-azure-secret"
 SENTINEL_EXA: Final = "sentinel-exa-secret"
+SENTINEL_OPENROUTER: Final = "sentinel-openrouter-secret"
 SENTINEL_OPENCODE_PASSWORD: Final = "sentinel-opencode-password"
 EXPECTED_PROVIDER_ENV_VARS: Final = (
     "AWS_REGION",
@@ -40,6 +41,7 @@ EXPECTED_PROVIDER_ENV_VARS: Final = (
     "GOOGLE_CLOUD_LOCATION",
     "AZURE_RESOURCE_NAME",
     "AZURE_API_KEY",
+    "OPENROUTER_API_KEY",
     "EXA_API_KEY",
     "TAVILY_API_KEY",
     "LMSTUDIO_BASE_URL",
@@ -172,6 +174,7 @@ class EnvironmentPlanningTests(unittest.TestCase):
                 "TERM": "screen-256color",
                 "AZURE_API_KEY": SENTINEL_AZURE,
                 "AZURE_RESOURCE_NAME": "azure-resource",
+                "OPENROUTER_API_KEY": SENTINEL_OPENROUTER,
                 "CONTEXT7_API_KEY": "context7-secret",
                 "EXA_API_KEY": SENTINEL_EXA,
                 "OPENCODE_SERVER_PASSWORD": SENTINEL_OPENCODE_PASSWORD,
@@ -183,6 +186,7 @@ class EnvironmentPlanningTests(unittest.TestCase):
             plan = build_environment_plan(host_env, home=home, workspace_name="My Project!")
 
         self.assertIn(f"AZURE_API_KEY={SENTINEL_AZURE}", plan.exec_env_values)
+        self.assertIn(f"OPENROUTER_API_KEY={SENTINEL_OPENROUTER}", plan.exec_env_values)
         self.assertIn(f"EXA_API_KEY={SENTINEL_EXA}", plan.exec_env_values)
         self.assertIn("OVERLORD_HOST_EXA_API_KEY_PRESENT=1", plan.opencode_web_credential_values)
         self.assertIn(f"EXA_API_KEY={SENTINEL_EXA}", plan.opencode_web_credential_values)
@@ -199,6 +203,7 @@ class EnvironmentPlanningTests(unittest.TestCase):
         self.assertIn("LMSTUDIO_API_KEY=lm-studio", plan.exec_env_values)
         self.assertNotIn(SENTINEL_AZURE, plan.redacted_summary())
         self.assertNotIn(SENTINEL_EXA, plan.redacted_summary())
+        self.assertNotIn(SENTINEL_OPENROUTER, plan.redacted_summary())
         self.assertNotIn(SENTINEL_OPENCODE_PASSWORD, plan.redacted_summary())
 
     def test_google_adc_discovery_prefers_explicit_path_then_home_default(self) -> None:
@@ -231,6 +236,7 @@ class EnvironmentPlanningTests(unittest.TestCase):
                 {
                     "HOME": str(home),
                     "AZURE_API_KEY": SENTINEL_AZURE,
+                    "OPENROUTER_API_KEY": SENTINEL_OPENROUTER,
                     "EXA_API_KEY": SENTINEL_EXA,
                     "OPENCODE_SERVER_PASSWORD": SENTINEL_OPENCODE_PASSWORD,
                 },
@@ -241,6 +247,7 @@ class EnvironmentPlanningTests(unittest.TestCase):
             rendered = render_overlord_env(plan)
 
         self.assertIn(f"export AZURE_API_KEY={SENTINEL_AZURE}", rendered)
+        self.assertIn(f"export OPENROUTER_API_KEY={SENTINEL_OPENROUTER}", rendered)
         self.assertIn(f"export EXA_API_KEY={SENTINEL_EXA}", rendered)
         self.assertIn("export GOOGLE_APPLICATION_CREDENTIALS=/home/overlord/.config/gcloud/application_default_credentials.json", rendered)
         self.assertIn("export CODEGRAPH_INSTALL_DIR=/home/overlord/.omo/codegraph", rendered)

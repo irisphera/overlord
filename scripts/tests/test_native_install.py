@@ -196,7 +196,17 @@ class NativeInstallStageTests(unittest.TestCase):
             result = run_install(workspace, "--list-configs")
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(result.stdout, "Available oh-my-openagent routing presets:\n  default (oh-my-openagent.jsonc)\n")
+            self.assertEqual(
+                result.stdout,
+                "\n".join(
+                    (
+                        "Available oh-my-openagent routing presets:",
+                        "  default (oh-my-openagent.jsonc)",
+                        "  openrouter (oh-my-openagent.openrouter.jsonc)",
+                        "",
+                    )
+                ),
+            )
             self.assertNotIn("==>", result.stdout)
             self.assertFalse((workspace.path / "home" / ".config").exists())
             self.assertFalse((workspace.path / "home" / ".cache").exists())

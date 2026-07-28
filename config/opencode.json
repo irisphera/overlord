@@ -6,34 +6,6 @@
     "lsp": "allow"
   },
   "provider": {
-    "amazon-bedrock": {
-      "npm": "@ai-sdk/amazon-bedrock",
-      "name": "AWS Bedrock",
-      "models": {
-        "global.anthropic.claude-opus-4-8-v1": {
-          "name": "Claude Opus 4.8",
-          "reasoning": true,
-          "tool_call": true,
-          "attachment": true,
-          "modalities": {
-            "input": [
-              "text",
-              "image"
-            ],
-            "output": [
-              "text"
-            ]
-          },
-          "limit": {
-            "context": 200000,
-            "output": 32000
-          }
-        },
-        "global.anthropic.claude-haiku-4-5-20251001-v1:0": {
-          "name": "Claude Haiku 4.5"
-        }
-      }
-    },
     "google-vertex": {
       "npm": "@ai-sdk/google-vertex",
       "name": "Google Vertex AI",
@@ -42,15 +14,9 @@
         "location": "global"
       },
       "models": {
-        "gemini-3.1-pro-preview-customtools": {
-          "name": "Gemini 3.1 Pro Preview Custom Tools"
-        },
         "gemini-3.5-flash": {
           "name": "Gemini 3.5 Flash",
           "tool_call": true
-        },
-        "gemini-3-flash-preview": {
-          "name": "Gemini 3 Flash"
         }
       }
     },
@@ -85,12 +51,9 @@
             "output": 128000
           }
         },
-        "gpt-5.6-terra": {
-          "name": "GPT-5.6 Terra",
-          "id": "gpt-5.6-terra",
-          "options": {
-            "serviceTier": "priority"
-          },
+        "gpt-5.6-luna": {
+          "name": "GPT-5.6 Luna",
+          "id": "gpt-5.6-luna",
           "reasoning": true,
           "tool_call": true,
           "attachment": true,
@@ -107,6 +70,27 @@
             "context": 272000,
             "input": 272000,
             "output": 128000
+          }
+        }
+      }
+    },
+    "openrouter": {
+      "models": {
+        "poolside/laguna-s-2.1:free": {
+          "name": "poolside/laguna-s-2.1:free",
+          "reasoning": true,
+          "tool_call": true,
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 262144,
+            "output": 32768
           }
         }
       }

@@ -44,6 +44,7 @@ overlord shell                   # open zsh in the workspace container
 overlord zellij                  # open the configured zellij session
 overlord --list-configs          # list checked-in routing presets
 overlord --config default        # select the default routing preset
+overlord --config openrouter     # route every agent/category through OpenRouter
 overlord --lms-model qwen3-8b    # route all agents to this LM Studio model
 overlord fresh                   # request container removal; retain image and .overlord state
 overlord purge                   # remove the container and image; retain .overlord state
@@ -64,6 +65,7 @@ Run the installer from this repository. It installs the checked-in provider cata
 scripts/install
 scripts/install --list-configs
 scripts/install --config default
+scripts/install --config openrouter
 scripts/install --lms-model qwen3-8b
 ```
 
@@ -94,15 +96,15 @@ The installer configures zellij but does not install it. Install zellij separate
 
 Checked-in `config/` is authoritative for both workflows. The native installer replaces managed copies on rerun and backs them up first. The launcher replaces container copies during create or restart injection; normal reuse only repairs missing or invalid runtime config.
 
-## Routing and LM Studio
+## Routing, OpenRouter, and LM Studio
 
 `config/opencode.json` is the sole checked-in OpenCode provider and model catalog. Checked-in `config/oh-my-openagent*.jsonc` files are routing presets.
 
-The current and only preset is `default` (`oh-my-openagent.jsonc`).
+The checked-in presets are `default` (`oh-my-openagent.jsonc`) and `openrouter` (`oh-my-openagent.openrouter.jsonc`).
 
 The default routes agents and categories to Azure `gpt-5.6-sol` with role-specific reasoning effort. The Azure deployment ID must be `gpt-5.6-sol`, or you must change its `id` in `config/opencode.json`.
 
-The catalog includes Azure GPT-5.6 Sol and Terra; Bedrock Claude Opus 4.8 and Haiku 4.5; Vertex Gemini 3.1 Pro, 3.5 Flash, and 3 Flash; and LM Studio `qwopus3.5-9b-coder-mtp`.
+The catalog includes Azure GPT-5.6 Sol and Terra; OpenRouter Ling-3.0-flash (free); Bedrock Claude Opus 4.8 and Haiku 4.5; Vertex Gemini 3.1 Pro, 3.5 Flash, and 3 Flash; and LM Studio `qwopus3.5-9b-coder-mtp`.
 
 Managed container files are `/home/overlord/.config/opencode/opencode.json`, `oh-my-openagent.jsonc`, and `oh-my-opencode.jsonc`, plus `/home/overlord/.config/zellij/config.kdl`.
 
@@ -111,8 +113,10 @@ They are generated copies of checked-in `config/` and are replaced when the laun
 ```bash
 overlord --list-configs
 overlord --config default
+overlord --config openrouter
 scripts/install --list-configs
 scripts/install --config default
+scripts/install --config openrouter
 ```
 
 `--config` selects a checked-in routing preset and cannot be combined with `--lms-model`.
@@ -135,13 +139,16 @@ Supply credentials through the launching shell; do not put real credentials in c
 ```bash
 export AZURE_API_KEY="replace-with-your-key"
 export AZURE_RESOURCE_NAME="replace-with-your-resource"
+export OPENROUTER_API_KEY="replace-with-your-key"
 export OPENCODE_SERVER_PASSWORD="replace-with-a-password"
 overlord
 ```
 
 Relevant provider settings include `AWS_REGION`, `AWS_BEARER_TOKEN_BEDROCK`, `GOOGLE_CLOUD_PROJECT`, and `GOOGLE_CLOUD_LOCATION`.
 
-They also include `AZURE_API_KEY`, `AZURE_RESOURCE_NAME`, `LMSTUDIO_BASE_URL`, and `LMSTUDIO_API_KEY`.
+They also include `AZURE_API_KEY`, `AZURE_RESOURCE_NAME`, `OPENROUTER_API_KEY`, `LMSTUDIO_BASE_URL`, and `LMSTUDIO_API_KEY`.
+
+For containers, `OPENROUTER_API_KEY` is forwarded from the host when a new container is created and included in its rendered runtime environment. Recreate the container after changing the key. The native installer can select the `openrouter` preset but does not persist this credential; export it in the shell that launches native OpenCode.
 
 `EXA_API_KEY`, `TAVILY_API_KEY`, and `CONTEXT7_API_KEY` are forwarded for configured MCP use. `OPENCODE_SERVER_PASSWORD` protects the web server and is also used for launcher health checks.
 

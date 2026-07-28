@@ -14,6 +14,7 @@ CONFIG_DIR: Final = Path(__file__).resolve().parents[2] / "config"
 
 EXPECTED_CONFIG_LIST: Final = """Available oh-my-openagent routing presets:
   default (oh-my-openagent.jsonc)
+  openrouter (oh-my-openagent.openrouter.jsonc)
 """
 
 STARTUP_ENGINE_SUBCOMMANDS: Final = {"build", "run", "exec", "port"}

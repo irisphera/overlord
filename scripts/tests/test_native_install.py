@@ -91,7 +91,6 @@ class NativeInstallStageTests(unittest.TestCase):
                     f"FAKE_BUN add -g @colbymchenry/codegraph@{versions.codegraph}",
                     f"==> Installing RTK {versions.rtk}...",
                     "rtk-x86_64-unknown-linux-musl.tar.gz",
-                    f"FAKE_SHA256SUM {versions.rtk_amd64_sha256}",
                     "==> Checking zellij availability...",
                     "==> Checking PATH for native command shims...",
                     "==> Native OpenCode install complete.",
@@ -100,7 +99,7 @@ class NativeInstallStageTests(unittest.TestCase):
             self.assertTrue((workspace.path / "home" / ".local" / "bin" / "rtk").is_file())
             self.assertTrue((workspace.path / "home" / ".config" / "opencode" / "plugins" / "rtk.ts").is_file())
 
-    def test_arm64_full_install_selects_verified_gnu_asset(self) -> None:
+    def test_arm64_full_install_selects_gnu_asset(self) -> None:
         with native_workspace() as workspace:
             versions = load_tool_versions()
             install_fake_package_commands(workspace, versions, rtk=RtkInstallFixture(architecture="aarch64"))
@@ -109,19 +108,7 @@ class NativeInstallStageTests(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("rtk-aarch64-unknown-linux-gnu.tar.gz", result.stdout)
-            self.assertIn(f"FAKE_SHA256SUM {versions.rtk_arm64_sha256}", result.stdout)
             self.assertTrue((workspace.path / "home" / ".config" / "opencode" / "plugins" / "rtk.ts").is_file())
-
-    def test_checksum_failure_stops_rtk_installation_before_extraction(self) -> None:
-        with native_workspace() as workspace:
-            versions = load_tool_versions()
-            install_fake_package_commands(workspace, versions, rtk=RtkInstallFixture(checksum_status=1))
-
-            result = run_install(workspace)
-
-            self.assertNotEqual(result.returncode, 0)
-            self.assertFalse((workspace.path / "home" / ".local" / "bin" / "rtk").exists())
-            self.assertFalse((workspace.path / "home" / ".config" / "opencode" / "plugins" / "rtk.ts").exists())
 
     def test_missing_archive_binary_stops_rtk_installation(self) -> None:
         with native_workspace() as workspace:

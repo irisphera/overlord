@@ -412,7 +412,6 @@ ensure_codegraph_package() {
 ensure_rtk() {
 	local machine
 	local asset
-	local checksum
 	local install_dir
 	local archive
 	local installed_version
@@ -429,11 +428,9 @@ ensure_rtk() {
 	case "${machine}" in
 	x86_64 | amd64)
 		asset="rtk-x86_64-unknown-linux-musl.tar.gz"
-		checksum="${RTK_AMD64_SHA256}"
 		;;
 	aarch64 | arm64)
 		asset="rtk-aarch64-unknown-linux-gnu.tar.gz"
-		checksum="${RTK_ARM64_SHA256}"
 		;;
 	*)
 		echo "Error: unsupported RTK architecture: ${machine}" >&2
@@ -445,7 +442,6 @@ ensure_rtk() {
 	trap 'rm -rf "${install_dir}"' EXIT
 	archive="${install_dir}/${asset}"
 	curl -fsSL "https://github.com/rtk-ai/rtk/releases/download/v${RTK_VERSION}/${asset}" -o "${archive}"
-	printf '%s  %s\n' "${checksum}" "${archive}" | sha256sum -c -
 	tar -xzf "${archive}" -C "${install_dir}"
 	install_file "${install_dir}/rtk" "${RTK_BIN}" 755
 

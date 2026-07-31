@@ -25,7 +25,7 @@ class EntrypointTests(unittest.TestCase):
 
         self.assertIn(manifest_copy, dockerfile)
         sourced_runs = tuple(run for run in dockerfile.split("\nRUN ") if run.startswith(". /tmp/tool-versions.env"))
-        self.assertEqual(len(sourced_runs), 4)
+        self.assertEqual(len(sourced_runs), 5)
         self.assertLess(dockerfile.index(default_skills_install), dockerfile.index(manifest_copy))
         self.assertLess(dockerfile.index(setup_devcontainer_verification), dockerfile.index(manifest_copy))
         manifest_instructions = tuple(
@@ -34,8 +34,8 @@ class EntrypointTests(unittest.TestCase):
             if line.startswith(("COPY ", "RUN "))
         )
         self.assertEqual(manifest_instructions[0], manifest_copy)
-        self.assertEqual(len(manifest_instructions[:5]), 5)
-        self.assertTrue(all(line.startswith("RUN . /tmp/tool-versions.env") for line in manifest_instructions[1:5]))
+        self.assertEqual(len(manifest_instructions[:6]), 6)
+        self.assertTrue(all(line.startswith("RUN . /tmp/tool-versions.env") for line in manifest_instructions[1:6]))
         version_source = dockerfile.replace(f"ARG AST_GREP_VERSION={versions['RTK_VERSION']}", "")
         for version in versions.values():
             self.assertNotIn(version, version_source)
@@ -47,24 +47,54 @@ class EntrypointTests(unittest.TestCase):
             'helper_package="oh-my-openagent@${OH_MY_OPENAGENT_VERSION}"',
             'bun add -g "@colbymchenry/codegraph@${CODEGRAPH_VERSION}"',
             'rtk init --global --opencode',
+            'bun add -g "playwright@${PLAYWRIGHT_VERSION}"',
         ):
             self.assertTrue(any(package_install in sourced_run for sourced_run in sourced_runs))
 
-    def test_dockerfile_installs_verified_rtk_assets_and_activates_opencode_plugin_as_overlord(self) -> None:
+    def test_dockerfile_installs_version_checked_rtk_assets_and_activates_opencode_plugin_as_overlord(self) -> None:
         dockerfile = DOCKERFILE.read_text(encoding="utf-8")
         sourced_runs = tuple(run for run in dockerfile.split("\nRUN ") if run.startswith(". /tmp/tool-versions.env"))
         rtk_runs = tuple(run for run in sourced_runs if "rtk init --global --opencode" in run)
 
         self.assertEqual(len(rtk_runs), 1)
         rtk_run = rtk_runs[0]
-        self.assertIn('amd64) rtk_asset="rtk-x86_64-unknown-linux-musl.tar.gz"; rtk_sha256="${RTK_AMD64_SHA256}"', rtk_run)
-        self.assertIn('arm64) rtk_asset="rtk-aarch64-unknown-linux-gnu.tar.gz"; rtk_sha256="${RTK_ARM64_SHA256}"', rtk_run)
+        self.assertIn('amd64) rtk_asset="rtk-x86_64-unknown-linux-musl.tar.gz"', rtk_run)
+        self.assertIn('arm64) rtk_asset="rtk-aarch64-unknown-linux-gnu.tar.gz"', rtk_run)
         self.assertIn('https://github.com/rtk-ai/rtk/releases/download/v${RTK_VERSION}/${rtk_asset}', rtk_run)
-        self.assertIn("sha256sum -c -", rtk_run)
+        self.assertNotIn("sha256sum", rtk_run)
+        self.assertNotIn("RTK_AMD64_SHA256", rtk_run)
+        self.assertNotIn("RTK_ARM64_SHA256", rtk_run)
         self.assertIn('test "$(rtk --version)" = "rtk ${RTK_VERSION}"', rtk_run)
         self.assertIn('test -s "${XDG_CONFIG_HOME}/opencode/plugins/rtk.ts"', rtk_run)
         self.assertLess(dockerfile.index("USER overlord"), dockerfile.index("rtk init --global --opencode"))
         self.assertNotIn("cargo install", rtk_run)
+
+    def test_dockerfile_installs_playwright_chromium_for_the_runtime_user(self) -> None:
+        dockerfile = DOCKERFILE.read_text(encoding="utf-8")
+        package_install = 'bun add -g "playwright@${PLAYWRIGHT_VERSION}"'
+        version_check = 'test "$(playwright --version)" = "Version ${PLAYWRIGHT_VERSION}"'
+        dependency_install = "RUN playwright install-deps chromium"
+        browser_install = "RUN playwright install chromium"
+
+        package_index = dockerfile.index(package_install)
+        version_index = dockerfile.index(version_check)
+        dependency_index = dockerfile.index(dependency_install)
+        browser_index = dockerfile.index(browser_install)
+        root_index = dockerfile.rindex("USER root", 0, dependency_index)
+        runtime_user_index = dockerfile.rindex("USER overlord", 0, browser_index)
+        final_root_index = dockerfile.index("USER root", browser_index)
+
+        self.assertLess(dockerfile.index("USER overlord"), package_index)
+        self.assertLess(package_index, version_index)
+        self.assertLess(version_index, root_index)
+        self.assertLess(root_index, dependency_index)
+        self.assertLess(dependency_index, runtime_user_index)
+        self.assertLess(runtime_user_index, browser_index)
+        self.assertLess(browser_index, final_root_index)
+        self.assertNotIn("PLAYWRIGHT_BROWSERS_PATH", dockerfile)
+        self.assertNotIn("playwright install --with-deps", dockerfile)
+        self.assertNotIn("playwright install firefox", dockerfile)
+        self.assertNotIn("playwright install webkit", dockerfile)
 
     def test_dockerfile_configures_manifest_package_installs_for_safe_chain(self) -> None:
         dockerfile = DOCKERFILE.read_text(encoding="utf-8")
@@ -82,6 +112,7 @@ class EntrypointTests(unittest.TestCase):
             'bun add -g "opencode-ai@${OPENCODE_VERSION}"',
             'bun add "${helper_package}"',
             'bun add -g "@colbymchenry/codegraph@${CODEGRAPH_VERSION}"',
+            'bun add -g "playwright@${PLAYWRIGHT_VERSION}"',
         )
         for package_install in package_installs:
             matching_runs = tuple(run for run in sourced_runs if package_install in run)

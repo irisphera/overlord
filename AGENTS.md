@@ -8,7 +8,7 @@
 
 Overlord has one documented launcher path for running OpenCode containers: the bind-mounted local `overlord` workflow. It also has a native host installer for users who do not want OpenCode containerized. The repo has four authored control surfaces: root image/docs, runtime-injected config under `config/`, default skills under `skills/`, and launcher/lifecycle logic under `scripts/`.
 
-RTK is pinned in `config/tool-versions.env`, checksum-verified in both full-install workflows, and initialized for OpenCode as the runtime user.
+RTK is pinned in `config/tool-versions.env`, version-checked in both full-install workflows, and initialized for OpenCode as the runtime user. The container also installs pinned Playwright with bundled Chromium for its target architecture.
 
 ## STRUCTURE
 
@@ -32,7 +32,8 @@ overlord/
 | Change local launcher behavior or lifecycle | `scripts/overlord_py/` | Authoritative Python implementation for the bind-mounted workflow; Podman preferred if present |
 | Change workspace Git topology checks | `scripts/overlord_py/paths.py`, `scripts/overlord_py/main.py` | Non-Git workspaces are valid; launch modes reject only gitfiles whose resolved metadata lies outside the workspace bind mount |
 | Change native host install behavior | `scripts/install` | Installs checked-in OpenCode/oh-my-openagent/zellij config and Bun-managed packages directly on the host |
-| Change RTK image install | `Dockerfile` | Selects the pinned Linux asset by `TARGETARCH`, verifies its checksum/version, and initializes the plugin as `overlord` |
+| Change RTK image install | `Dockerfile` | Selects the pinned Linux asset by `TARGETARCH`, verifies its version, and initializes the plugin as `overlord` |
+| Change Playwright image install | `Dockerfile` | Install browser dependencies as root and bundled Chromium as `overlord` |
 | Change RTK native install | `scripts/install` | Full install selects by host architecture and initializes the plugin; skip mode installs neither |
 | Change OpenCode provider/model catalog | `config/opencode.json` | Single checked-in provider catalog copied into runtime config path |
 | Change agent/category routing | `config/oh-my-openagent*.jsonc` | Source-controlled routing presets copied into runtime config path |
@@ -51,7 +52,7 @@ overlord/
 - `skills/setup-devcontainer/SKILL.md` is authoritative; container and native copies are generated distribution outputs and remain separate from pinned third-party skills.
 - Project-specific tooling belongs in workspace `setup-devcontainer.sh`, which runs as root from `/workspace` only on container create or restart.
 - Launch modes preflight `.git` gitfiles before image/container lifecycle. External gitdirs produce an actionable error rather than an incomplete isolated mount; recovery and inspection commands remain available.
-- RTK version and checksum changes belong in `config/tool-versions.env`; Docker and native installs must consume that shared manifest.
+- Shared tool version changes belong in `config/tool-versions.env`; Docker and native installs must consume the relevant pins from that manifest.
 
 ## ANTI-PATTERNS (THIS PROJECT)
 
@@ -59,7 +60,7 @@ overlord/
 - **NEVER** bake credentials into image layers or script defaults; credentials are runtime env vars.
 - **DO NOT** add GUI/VNC stack; this workspace is terminal-only by design.
 - **When adding providers/models, also update launcher env forwarding** in `scripts/overlord`.
-- **DO NOT** install RTK from an unpinned installer, Cargo, or an unchecked archive.
+- **DO NOT** install RTK from an unpinned installer, Cargo, or a non-versioned release URL.
 - **DO NOT** patch `config/opencode.json` for RTK; its integration is the generated OpenCode plugin.
 ## COMMANDS
 
@@ -80,6 +81,7 @@ overlord purge          # Remove container + image; .overlord state remains
 
 - Launcher regression tests use `python3 -m unittest discover -s scripts/tests`.
 - Canonical manual checks are `overlord`, `overlord web`, `overlord opencode`, `overlord zellij`, `overlord shell`, `overlord --list-configs`, `scripts/install --list-configs`, isolated `scripts/install --skip-package-install`, `overlord fresh && overlord`, and `overlord purge && overlord` after image/runtime wiring changes.
-- RTK checks must cover amd64/arm64 asset selection, authored SHA-256 verification, exact version output, runtime-user plugin initialization, and skip-mode absence.
+- RTK checks must cover amd64/arm64 asset selection, exact version output, runtime-user plugin initialization, and skip-mode absence.
+- Playwright checks must cover pinned package installation, root-owned dependency setup, runtime-user Chromium installation, and a browser launch smoke test after rebuilding the image.
 - The launcher supports Podman if available and falls back to Docker; README Docker wording is not the full runtime story.
 - `config/zellij-opencode.kdl` is checked in but is not part of the currently wired runtime config injection path.

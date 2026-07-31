@@ -18,14 +18,12 @@ class ToolVersions(NamedTuple):
     oh_my_openagent: str
     codegraph: str
     rtk: str
-    rtk_amd64_sha256: str
-    rtk_arm64_sha256: str
+    playwright: str
 
 
 @dataclass(frozen=True, slots=True)
 class RtkInstallFixture:
     architecture: str = "x86_64"
-    checksum_status: int = 0
     extracts_binary: bool = True
     reported_version: str | None = None
     creates_plugin: bool = True
@@ -68,7 +66,6 @@ def install_fake_package_commands(
         f'#!/usr/bin/env bash\ncase "$1" in -s) printf "Linux\\n" ;; -m) printf "{rtk.architecture}\\n" ;; *) exit 1 ;; esac\n',
     )
     _ = workspace.write_executable_in_fake_bin("curl", fake_curl_script())
-    _ = workspace.write_executable_in_fake_bin("sha256sum", fake_sha256sum_script(rtk.checksum_status))
     _ = workspace.write_executable_in_fake_bin("tar", fake_tar_script(versions, rtk))
 
 
@@ -143,15 +140,6 @@ done
 """
 
 
-def fake_sha256sum_script(status: int) -> str:
-    return f"""#!/usr/bin/env bash
-set -euo pipefail
-read -r checksum archive
-printf 'FAKE_SHA256SUM %s %s\n' "${{checksum}}" "${{archive}}"
-exit {status}
-"""
-
-
 def fake_tar_script(versions: ToolVersions, rtk: RtkInstallFixture) -> str:
     if not rtk.extracts_binary:
         return "#!/usr/bin/env bash\nset -euo pipefail\n"
@@ -189,7 +177,7 @@ def load_tool_versions() -> ToolVersions:
         (
             "bash",
             "-c",
-            'set -euo pipefail; . "$1"; printf "%s\\n%s\\n%s\\n%s\\n%s\\n%s\\n" "$OPENCODE_VERSION" "$OH_MY_OPENAGENT_VERSION" "$CODEGRAPH_VERSION" "$RTK_VERSION" "$RTK_AMD64_SHA256" "$RTK_ARM64_SHA256"',
+            'set -euo pipefail; . "$1"; printf "%s\\n%s\\n%s\\n%s\\n%s\\n" "$OPENCODE_VERSION" "$OH_MY_OPENAGENT_VERSION" "$CODEGRAPH_VERSION" "$RTK_VERSION" "$PLAYWRIGHT_VERSION"',
             "bash",
             str(TOOL_VERSIONS_MANIFEST),
         ),
@@ -197,5 +185,5 @@ def load_tool_versions() -> ToolVersions:
         capture_output=True,
         text=True,
     )
-    opencode, oh_my_openagent, codegraph, rtk, rtk_amd64_sha256, rtk_arm64_sha256 = result.stdout.splitlines()
-    return ToolVersions(opencode, oh_my_openagent, codegraph, rtk, rtk_amd64_sha256, rtk_arm64_sha256)
+    opencode, oh_my_openagent, codegraph, rtk, playwright = result.stdout.splitlines()
+    return ToolVersions(opencode, oh_my_openagent, codegraph, rtk, playwright)

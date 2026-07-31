@@ -27,8 +27,7 @@ LOADER_DRIVER = "\n".join(
         "    versions.oh_my_openagent_version,",
         "    versions.codegraph_version,",
         "    versions.rtk_version,",
-        "    versions.rtk_amd64_sha256,",
-        "    versions.rtk_arm64_sha256,",
+        "    versions.playwright_version,",
         "    versions.opencode_package,",
         "    versions.oh_my_openagent_package,",
         "    versions.codegraph_package,",
@@ -47,15 +46,14 @@ class ToolVersionManifestTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         output_lines = result.stdout.splitlines()
-        self.assertEqual(len(output_lines), 10)
+        self.assertEqual(len(output_lines), 9)
         (
             manifest_path,
             opencode_version,
             oh_my_openagent_version,
             codegraph_version,
             rtk_version,
-            rtk_amd64_sha256,
-            rtk_arm64_sha256,
+            playwright_version,
             opencode_package,
             oh_my_openagent_package,
             codegraph_package,
@@ -69,18 +67,14 @@ class ToolVersionManifestTests(unittest.TestCase):
                 "OH_MY_OPENAGENT_VERSION",
                 "CODEGRAPH_VERSION",
                 "RTK_VERSION",
-                "RTK_AMD64_SHA256",
-                "RTK_ARM64_SHA256",
+                "PLAYWRIGHT_VERSION",
             },
         )
         self.assertEqual(opencode_version, manifest_values["OPENCODE_VERSION"])
         self.assertEqual(oh_my_openagent_version, manifest_values["OH_MY_OPENAGENT_VERSION"])
         self.assertEqual(codegraph_version, manifest_values["CODEGRAPH_VERSION"])
         self.assertEqual(rtk_version, manifest_values["RTK_VERSION"])
-        self.assertEqual(rtk_amd64_sha256, manifest_values["RTK_AMD64_SHA256"])
-        self.assertEqual(rtk_arm64_sha256, manifest_values["RTK_ARM64_SHA256"])
-        self.assertRegex(rtk_amd64_sha256, r"[0-9a-f]{64}")
-        self.assertRegex(rtk_arm64_sha256, r"[0-9a-f]{64}")
+        self.assertEqual(playwright_version, manifest_values["PLAYWRIGHT_VERSION"])
         self.assertEqual(opencode_package, f"opencode-ai@{opencode_version}")
         self.assertEqual(oh_my_openagent_package, f"oh-my-openagent@{oh_my_openagent_version}")
         self.assertEqual(codegraph_package, f"@colbymchenry/codegraph@{codegraph_version}")
@@ -127,8 +121,7 @@ class ToolVersionManifestTests(unittest.TestCase):
             "OH_MY_OPENAGENT_VERSION=5.6.7\n"
             "CODEGRAPH_VERSION=8.9.10\n"
             "RTK_VERSION=11.12.13\n"
-            f"RTK_AMD64_SHA256={'a' * 64}\n"
-            f"RTK_ARM64_SHA256={'b' * 64}\n"
+            "PLAYWRIGHT_VERSION=14.15.16\n"
         )
         cases = (
             ("missing file", None, "cannot read manifest"),
@@ -139,8 +132,8 @@ class ToolVersionManifestTests(unittest.TestCase):
             ("quoted assignment", valid.replace("OPENCODE_VERSION=2.3.4", 'OPENCODE_VERSION="2.3.4"'), "invalid assignment"),
             ("whitespace assignment", valid.replace("OPENCODE_VERSION=2.3.4", "OPENCODE_VERSION =2.3.4"), "invalid assignment"),
             ("non-exact semver", valid.replace("CODEGRAPH_VERSION=8.9.10", "CODEGRAPH_VERSION=8.9"), "invalid assignment"),
-            ("short checksum", valid.replace("a" * 64, "a" * 63), "invalid assignment"),
-            ("uppercase checksum", valid.replace("b" * 64, "B" * 64), "invalid assignment"),
+            ("former amd64 checksum key", valid + "RTK_AMD64_SHA256=unused\n", "unknown variable: RTK_AMD64_SHA256"),
+            ("former arm64 checksum key", valid + "RTK_ARM64_SHA256=unused\n", "unknown variable: RTK_ARM64_SHA256"),
         )
 
         with tempfile.TemporaryDirectory() as temporary_directory:

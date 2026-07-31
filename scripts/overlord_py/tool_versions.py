@@ -13,12 +13,11 @@ VERSION_VARIABLES: Final = (
     "OH_MY_OPENAGENT_VERSION",
     "CODEGRAPH_VERSION",
     "RTK_VERSION",
+    "PLAYWRIGHT_VERSION",
 )
-CHECKSUM_VARIABLES: Final = ("RTK_AMD64_SHA256", "RTK_ARM64_SHA256")
-REQUIRED_VARIABLES: Final = (*VERSION_VARIABLES, *CHECKSUM_VARIABLES)
+REQUIRED_VARIABLES: Final = VERSION_VARIABLES
 ASSIGNMENT: Final = re.compile(r"(?P<name>[A-Z][A-Z0-9_]*)=(?P<value>[A-Za-z0-9.]+)")
 SEMVER: Final = re.compile(r"(?:0|[1-9][0-9]*)(?:\.(?:0|[1-9][0-9]*)){2}")
-SHA256: Final = re.compile(r"[0-9a-f]{64}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,8 +35,7 @@ class ToolVersions:
     oh_my_openagent_version: str
     codegraph_version: str
     rtk_version: str
-    rtk_amd64_sha256: str
-    rtk_arm64_sha256: str
+    playwright_version: str
 
     @property
     def opencode_package(self) -> str:
@@ -69,8 +67,7 @@ def load_tool_versions(manifest_path: Path = DEFAULT_TOOL_VERSIONS_PATH) -> Tool
         if name in values:
             raise ToolVersionsError(f"{manifest_path}:{line_number}: duplicate variable: {name}")
         value = match["value"]
-        expected_format = SEMVER if name in VERSION_VARIABLES else SHA256
-        if expected_format.fullmatch(value) is None:
+        if SEMVER.fullmatch(value) is None:
             raise ToolVersionsError(f"{manifest_path}:{line_number}: invalid assignment")
         values[name] = value
 
@@ -83,6 +80,5 @@ def load_tool_versions(manifest_path: Path = DEFAULT_TOOL_VERSIONS_PATH) -> Tool
         oh_my_openagent_version=values["OH_MY_OPENAGENT_VERSION"],
         codegraph_version=values["CODEGRAPH_VERSION"],
         rtk_version=values["RTK_VERSION"],
-        rtk_amd64_sha256=values["RTK_AMD64_SHA256"],
-        rtk_arm64_sha256=values["RTK_ARM64_SHA256"],
+        playwright_version=values["PLAYWRIGHT_VERSION"],
     )

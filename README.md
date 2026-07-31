@@ -71,7 +71,7 @@ scripts/install --lms-model qwen3-8b
 
 A full install requires Bun in `PATH`. It installs OpenCode, oh-my-openagent, and CodeGraph with Bun, installs the pinned RTK Linux release for amd64 or arm64, then creates command shims in `~/.local/bin` when their installed targets are available.
 
-Pinned versions and RTK release checksums are maintained in `config/tool-versions.env`; changing that one file updates both the container image and native installation paths. RTK is checksum-verified, must report the exact pinned version, and is initialized with `rtk init --global --opencode` as the runtime user.
+Pinned tool versions are maintained in `config/tool-versions.env`; changing that one file updates the relevant container image and native installation paths. RTK must report the exact pinned version and is initialized with `rtk init --global --opencode` as the runtime user.
 
 Use `--skip-package-install` to write static configuration, environment, and skill files only. This mode does not require Bun and does not install OpenCode, oh-my-openagent, CodeGraph, RTK, or the RTK OpenCode plugin.
 
@@ -210,7 +210,7 @@ Review setup scripts before launching untrusted workspaces. Reattaching to an al
 
 ## Included tooling and zellij
 
-The container image includes OpenCode, oh-my-openagent, CodeGraph, RTK, Node.js 22, Bun, Python 3, uv, Docker CLI with Compose, and Google Cloud CLI.
+The container image includes OpenCode, oh-my-openagent, CodeGraph, RTK, Playwright with bundled Chromium, Node.js 22, Bun, Python 3, uv, Docker CLI with Compose, and Google Cloud CLI. Chromium's Linux dependencies are installed in the image, and Playwright selects the browser binary for the image architecture. Playwright and Chromium are container-only and are not installed by `scripts/install`.
 
 It also includes git, zsh, zellij, neovim, ripgrep, jq, ast-grep, ShellCheck, and shfmt.
 
@@ -228,7 +228,7 @@ Open zellij with `overlord zellij`. Its checked-in configuration uses zsh, maps 
 
 ## RTK integration
 
-Both full-install workflows pin RTK through `config/tool-versions.env`. The Docker image selects the matching Linux release asset from `TARGETARCH`; the native installer selects it from `uname -m`. Both verify the authored SHA-256 checksum, require the exact `rtk VERSION` output, and initialize the OpenCode plugin as the user who runs OpenCode.
+Both full-install workflows pin RTK through `config/tool-versions.env`. The Docker image selects the matching Linux release asset from `TARGETARCH`; the native installer selects it from `uname -m`. Both require the exact `rtk VERSION` output and initialize the OpenCode plugin as the user who runs OpenCode.
 
 RTK integration is provided by `${XDG_CONFIG_HOME:-$HOME/.config}/opencode/plugins/rtk.ts`; it does not add a provider or modify `config/opencode.json`.
 
@@ -283,6 +283,15 @@ overlord fresh
 overlord
 overlord purge && overlord
 python3 -m unittest discover -s scripts/tests
+```
+
+Inside a rebuilt container, verify the bundled browser through the runtime user's normal shell:
+
+```bash
+playwright --version
+playwright install --list
+playwright screenshot --browser chromium about:blank /tmp/overlord-chromium.png
+test -s /tmp/overlord-chromium.png
 ```
 
 ## License

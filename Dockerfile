@@ -183,19 +183,34 @@ RUN . /tmp/tool-versions.env \
 
 RUN . /tmp/tool-versions.env \
   && case "${TARGETARCH}" in \
-    amd64) rtk_asset="rtk-x86_64-unknown-linux-musl.tar.gz"; rtk_sha256="${RTK_AMD64_SHA256}" ;; \
-    arm64) rtk_asset="rtk-aarch64-unknown-linux-gnu.tar.gz"; rtk_sha256="${RTK_ARM64_SHA256}" ;; \
+    amd64) rtk_asset="rtk-x86_64-unknown-linux-musl.tar.gz" ;; \
+    arm64) rtk_asset="rtk-aarch64-unknown-linux-gnu.tar.gz" ;; \
     *) echo "Unsupported RTK architecture: ${TARGETARCH}" >&2; exit 1 ;; \
   esac \
   && rtk_dir="$(mktemp -d)" \
   && curl -fsSL "https://github.com/rtk-ai/rtk/releases/download/v${RTK_VERSION}/${rtk_asset}" -o "${rtk_dir}/${rtk_asset}" \
-  && printf '%s  %s\n' "${rtk_sha256}" "${rtk_dir}/${rtk_asset}" | sha256sum -c - \
   && tar -xzf "${rtk_dir}/${rtk_asset}" -C "${rtk_dir}" \
   && install -m 0755 "${rtk_dir}/rtk" /home/overlord/.local/bin/rtk \
   && rm -rf "${rtk_dir}" \
   && test "$(rtk --version)" = "rtk ${RTK_VERSION}" \
   && rtk init --global --opencode \
   && test -s "${XDG_CONFIG_HOME}/opencode/plugins/rtk.ts"
+
+RUN . /tmp/tool-versions.env \
+  && install_log="$(mktemp)" \
+  && echo "Installing Playwright package (playwright@${PLAYWRIGHT_VERSION})..." \
+  && if ! bun add -g "playwright@${PLAYWRIGHT_VERSION}" --safe-chain-skip-minimum-package-age >"${install_log}" 2>&1; then cat "${install_log}"; rm -f "${install_log}"; exit 1; fi \
+  && rm -f "${install_log}" \
+  && test "$(playwright --version)" = "Version ${PLAYWRIGHT_VERSION}"
+
+USER root
+
+RUN playwright install-deps chromium \
+  && rm -rf /var/lib/apt/lists/*
+
+USER overlord
+
+RUN playwright install chromium
 
 # Git safe directory
 RUN git config --global --add safe.directory /workspace

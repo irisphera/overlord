@@ -14,7 +14,7 @@ RTK integration is a generated OpenCode plugin created by the full-install workf
 - Edit files here.
 - The runtime files actually consumed by OpenCode and zellij live under `/home/overlord/.config/*` inside the container and are overwritten by `scripts/overlord` during lifecycle actions.
 - `entrypoint.sh` is copied into the image by the Dockerfile. `jdtls.sh` is retained only as a reference wrapper for repo-local Java setup scripts; the shared image no longer installs JDTLS.
-- `tool-versions.env` pins semantic versions plus architecture-specific RTK SHA-256 checksums for both full-install workflows.
+- `tool-versions.env` pins semantic versions used by the container and native full-install workflows.
 
 ## FILE MAP
 
@@ -26,7 +26,7 @@ RTK integration is a generated OpenCode plugin created by the full-install workf
 | `jdtls.sh` | Java LSP wrapper reference | Not installed by the shared image; Java repos own JDTLS setup |
 | `zellij-config.kdl` | Active zellij config source | Copied to `/home/overlord/.config/zellij/config.kdl` |
 | `zellij-opencode.kdl` | Checked-in layout file | Present in repo, not currently injected by launcher |
-| `tool-versions.env` | Shared package pins and RTK checksums | Sourced by Docker and native install; parsed by launcher package checks |
+| `tool-versions.env` | Shared semantic-version pins | Sourced by Docker and native install; parsed by launcher package checks. Playwright remains container-only. |
 
 ## LOCAL INVARIANTS
 

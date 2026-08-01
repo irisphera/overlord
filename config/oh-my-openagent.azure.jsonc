@@ -38,11 +38,11 @@
     // LOW reasoning — trivial, fast tasks
     "quick": {
       "model": "azure/gpt-5.6-luna",
-      "reasoningEffort": "high"
+      "reasoningEffort": "max"
     },
     "unspecified-low": {
       "model": "azure/gpt-5.6-luna",
-      "reasoningEffort": "high"
+      "reasoningEffort": "max"
     }
   },
   "agents": {
@@ -111,15 +111,13 @@
     // LOW reasoning — search, lookup, exploration (speed over depth)
     "explore": {
       "model": "azure/gpt-5.6-luna",
-      "reasoningEffort": "high",
-      "category": "unspecified-low",
-      "prompt_append": "SEARCH DISCIPLINE: Search only to resolve the stated downstream decision. Return the minimum evidence needed, distinguish current requirements from hypothetical concerns, and stop when the decision is unblocked or repeated searches stop adding material information. Do not propose architecture or extra scope."
+      "reasoningEffort": "max",
+      "category": "unspecified-low"
     },
     "librarian": {
       "model": "azure/gpt-5.6-luna",
-      "reasoningEffort": "high",
-      "category": "unspecified-low",
-      "prompt_append": "RESEARCH DISCIPLINE: Research only to resolve the stated downstream decision. Prefer authoritative evidence, return the minimum findings that change the answer, and stop when the decision is unblocked or sources converge. Do not expand the task into adjacent best practices, architecture, or possible future needs."
+      "reasoningEffort": "max",
+      "category": "unspecified-low"
     }
   }
 }

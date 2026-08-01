@@ -15,108 +15,108 @@
   "categories": {
     // HIGH reasoning — all categories use high effort
     "ultrabrain": {
-      "model": "amazon-bedrock/anthropic.claude-opus-4-5-20251101-v1:0",
+      "model": "amazon-bedrock/anthropic.claude-opus-4-6-v1",
       "reasoningEffort": "high"
     },
     "unspecified-high": {
-      "model": "amazon-bedrock/anthropic.claude-opus-4-5-20251101-v1:0",
+      "model": "amazon-bedrock/anthropic.claude-opus-4-6-v1",
       "reasoningEffort": "high"
     },
     // HIGH reasoning — creative, visual, and writing tasks
     "visual-engineering": {
-      "model": "amazon-bedrock/anthropic.claude-opus-4-5-20251101-v1:0",
+      "model": "amazon-bedrock/anthropic.claude-opus-4-6-v1",
       "reasoningEffort": "high"
     },
     "artistry": {
-      "model": "amazon-bedrock/anthropic.claude-opus-4-5-20251101-v1:0",
+      "model": "amazon-bedrock/anthropic.claude-opus-4-6-v1",
       "reasoningEffort": "high"
     },
     "writing": {
-      "model": "amazon-bedrock/anthropic.claude-opus-4-5-20251101-v1:0",
+      "model": "amazon-bedrock/anthropic.claude-opus-4-6-v1",
       "reasoningEffort": "high"
     },
     // HIGH reasoning — quick and unspecified-low tasks
     "quick": {
-      "model": "amazon-bedrock/anthropic.claude-opus-4-5-20251101-v1:0",
+      "model": "amazon-bedrock/anthropic.claude-opus-4-6-v1",
       "reasoningEffort": "high"
     },
     "unspecified-low": {
-      "model": "amazon-bedrock/anthropic.claude-opus-4-5-20251101-v1:0",
+      "model": "amazon-bedrock/anthropic.claude-opus-4-6-v1",
       "reasoningEffort": "high"
     }
   },
   "agents": {
     // HIGH reasoning — all agents except explore
     "sisyphus": {
-      "model": "amazon-bedrock/anthropic.claude-opus-4-5-20251101-v1:0",
+      "model": "amazon-bedrock/anthropic.claude-opus-4-6-v1",
       "reasoningEffort": "high",
       
     },
     "atlas": {
-      "model": "amazon-bedrock/anthropic.claude-opus-4-5-20251101-v1:0",
+      "model": "amazon-bedrock/anthropic.claude-opus-4-6-v1",
       "reasoningEffort": "high",
       
     },
     "oracle": {
-      "model": "amazon-bedrock/anthropic.claude-opus-4-5-20251101-v1:0",
+      "model": "amazon-bedrock/anthropic.claude-opus-4-6-v1",
       "reasoningEffort": "high",
       
     },
     "prometheus": {
-      "model": "amazon-bedrock/anthropic.claude-opus-4-5-20251101-v1:0",
+      "model": "amazon-bedrock/anthropic.claude-opus-4-6-v1",
       "reasoningEffort": "high",
       
     },
     "hephaestus": {
-      "model": "amazon-bedrock/anthropic.claude-opus-4-5-20251101-v1:0",
+      "model": "amazon-bedrock/anthropic.claude-opus-4-6-v1",
       "reasoningEffort": "high",
       
     },
     "plan": {
-      "model": "amazon-bedrock/anthropic.claude-opus-4-5-20251101-v1:0",
+      "model": "amazon-bedrock/anthropic.claude-opus-4-6-v1",
       "reasoningEffort": "high",
       
     },
     // HIGH reasoning — validation, building, and general work
     "sisyphus-junior": {
-      "model": "amazon-bedrock/anthropic.claude-opus-4-5-20251101-v1:0",
+      "model": "amazon-bedrock/anthropic.claude-opus-4-6-v1",
       "reasoningEffort": "high",
       
     },
     "OpenCode-Builder": {
-      "model": "amazon-bedrock/anthropic.claude-opus-4-5-20251101-v1:0",
+      "model": "amazon-bedrock/anthropic.claude-opus-4-6-v1",
       "reasoningEffort": "high",
       
     },
     "build": {
-      "model": "amazon-bedrock/anthropic.claude-opus-4-5-20251101-v1:0",
+      "model": "amazon-bedrock/anthropic.claude-opus-4-6-v1",
       "reasoningEffort": "high",
       
     },
     "metis": {
-      "model": "amazon-bedrock/anthropic.claude-opus-4-5-20251101-v1:0",
+      "model": "amazon-bedrock/anthropic.claude-opus-4-6-v1",
       "reasoningEffort": "high",
       
     },
     "momus": {
-      "model": "amazon-bedrock/anthropic.claude-opus-4-5-20251101-v1:0",
+      "model": "amazon-bedrock/anthropic.claude-opus-4-6-v1",
       "reasoningEffort": "high",
       
     },
     "multimodal-looker": {
-      "model": "amazon-bedrock/anthropic.claude-opus-4-5-20251101-v1:0",
+      "model": "amazon-bedrock/anthropic.claude-opus-4-6-v1",
       "reasoningEffort": "high",
       
     },
     // LOW reasoning — exploration only
     "explore": {
-      "model": "amazon-bedrock/anthropic.claude-opus-4-5-20251101-v1:0",
+      "model": "amazon-bedrock/anthropic.claude-opus-4-6-v1",
       "reasoningEffort": "low",
       "category": "unspecified-low",
       
     },
     "librarian": {
-      "model": "amazon-bedrock/anthropic.claude-opus-4-5-20251101-v1:0",
+      "model": "amazon-bedrock/anthropic.claude-opus-4-6-v1",
       "reasoningEffort": "high",
       "category": "unspecified-low",
       

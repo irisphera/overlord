@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Final, assert_never
+from typing import Final
 
+from overlord_py.cli_help import HELP_TEXT
 from overlord_py.config_catalog import (
     DEFAULT_OH_MY_CONFIG_NAME,
     OPENCODE_CONFIG_NAME,
@@ -17,12 +17,9 @@ from overlord_py.config_catalog import (
     is_opencode_config_file,
     resolve_oh_my_config_file,
 )
-from overlord_py.cli_help import HELP_TEXT
 from overlord_py.errors import CliParseResult
 
-USAGE_LINE: Final = "Usage: overlord [--list-configs | --config PRESET | --lms-model MODEL] [command]"
-LMS_MODEL_PATTERN: Final = re.compile(r"[A-Za-z0-9._:@/+-]+")
-LMS_MODEL_ERROR: Final = "Error: --lms-model may only contain letters, numbers, '.', '_', ':', '@', '/', '+', or '-'.\n"
+USAGE_LINE: Final = "Usage: overlord [--list-configs | --config PRESET] [command]"
 
 
 class Command(StrEnum):
@@ -40,9 +37,6 @@ class CliOptions:
     command: Command
     config_name: str
     config_file: Path
-    config_explicit: bool
-    lms_model: str
-    model_override: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,7 +44,6 @@ class RawArgs:
     config_name: str
     config_explicit: bool
     list_configs: bool
-    lms_model: str
     positionals: tuple[str, ...]
 
 def parse_cli(
@@ -79,22 +72,13 @@ def parse_cli(
         if extra_decision is not None:
             return extra_decision
 
-    if raw.config_explicit and raw.lms_model:
-        return failure(
-            "Error: --config cannot be combined with --lms-model\n"
-            "Choose either a checked-in routing preset or an explicit LM Studio model.\n"
-        )
-
-    model_override = f"lmstudio/{raw.lms_model}" if raw.lms_model else ""
-    stdout = f"LM Studio override: all oh-my-openagent agents → {model_override}\n" if model_override else ""
-
     command = parse_command(command_text)
     if command is None:
-        return CliParseResult(status=1, stdout=stdout, stderr=f"Error: unknown command '{command_text}'\nRun 'overlord help' for usage.\n")
+        return CliParseResult(status=1, stderr=f"Error: unknown command '{command_text}'\nRun 'overlord help' for usage.\n")
 
     config_file, config_error = resolve_oh_my_config_file(root, raw.config_name)
     if config_file is None:
-        return CliParseResult(status=1, stdout=stdout, stderr=config_error)
+        return CliParseResult(status=1, stderr=config_error)
 
     if command is Command.HELP:
         return CliParseResult(status=0, stdout=HELP_TEXT)
@@ -103,11 +87,8 @@ def parse_cli(
         command=command,
         config_name=raw.config_name,
         config_file=config_file,
-        config_explicit=raw.config_explicit,
-        lms_model=raw.lms_model,
-        model_override=model_override,
     )
-    return CliParseResult(status=0, stdout=stdout, options=options)
+    return CliParseResult(status=0, options=options)
 
 
 def parse_raw_args(argv: Sequence[str], *, env: Mapping[str, str]) -> RawArgs | CliParseResult:
@@ -116,7 +97,6 @@ def parse_raw_args(argv: Sequence[str], *, env: Mapping[str, str]) -> RawArgs | 
     config_name = DEFAULT_OH_MY_CONFIG_NAME
     config_explicit = False
     list_configs = False
-    lms_model = ""
     positionals: list[str] = []
     index = 0
     while index < len(argv):
@@ -126,23 +106,19 @@ def parse_raw_args(argv: Sequence[str], *, env: Mapping[str, str]) -> RawArgs | 
                 list_configs = True
                 index += 1
             case "--config":
-                value_result = option_value(argv, index, "--config")
-                if isinstance(value_result, CliParseResult):
-                    return value_result
-                config_name = value_result
+                if index + 1 >= len(argv) or argv[index + 1].startswith("-"):
+                    return failure(
+                        "Error: --config requires a routing preset\n"
+                        "Run 'overlord --list-configs' to list available routing presets.\n"
+                    )
+                config_name = argv[index + 1]
                 config_explicit = True
-                index += 2
-            case "--lms-model":
-                value_result = option_value(argv, index, "--lms-model")
-                if isinstance(value_result, CliParseResult):
-                    return value_result
-                if LMS_MODEL_PATTERN.fullmatch(value_result) is None:
-                    return failure(LMS_MODEL_ERROR)
-                lms_model = value_result
                 index += 2
             case "-h" | "--help":
                 positionals.append(Command.HELP.value)
                 index += 1
+            case option if option.startswith("-"):
+                return failure(f"Error: unknown option '{option}'\nRun 'overlord help' for usage.\n")
             case _:
                 positionals.append(token)
                 index += 1
@@ -150,31 +126,12 @@ def parse_raw_args(argv: Sequence[str], *, env: Mapping[str, str]) -> RawArgs | 
         config_name=config_name,
         config_explicit=config_explicit,
         list_configs=list_configs,
-        lms_model=lms_model,
         positionals=tuple(positionals),
     )
 
 
-def option_value(argv: Sequence[str], index: int, option: str) -> str | CliParseResult:
-    if index + 1 >= len(argv) or argv[index + 1].startswith("-"):
-        match option:
-            case "--config":
-                return failure(
-                    "Error: --config requires a routing preset\n"
-                    "Run 'overlord --list-configs' to list available routing presets.\n"
-                )
-            case "--lms-model":
-                return failure(
-                    "Error: --lms-model requires a model name\n"
-                    "Example: overlord --lms-model nanbeige4.1-3b-mlx web\n"
-                )
-            case _:
-                return failure(f"Error: {option} requires a value\n")
-    return argv[index + 1]
-
-
 def list_configs_decision(raw: RawArgs, repo_root: Path) -> CliParseResult:
-    if raw.config_explicit or raw.lms_model or raw.positionals:
+    if raw.config_explicit or raw.positionals:
         return failure("Error: --list-configs cannot be combined with commands or overrides\n")
     return CliParseResult(status=0, stdout=available_configs_text(repo_root))
 
@@ -182,10 +139,10 @@ def list_configs_decision(raw: RawArgs, repo_root: Path) -> CliParseResult:
 def extra_args_decision(extra_args: tuple[str, ...]) -> CliParseResult | None:
     provider = extra_args[0]
     match provider:
-        case "bedrock" | "gemini" | "lms":
+        case "bedrock" | "gemini":
             return failure(
                 "Error: positional provider overrides were removed\n"
-                "Use '--config <routing-preset>' for reviewed agent routing, or '--lms-model <model>' for ad hoc LM Studio models.\n"
+                "Use '--config <routing-preset>' for reviewed agent routing.\n"
             )
         case _:
             return failure(

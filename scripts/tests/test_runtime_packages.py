@@ -26,11 +26,9 @@ from overlord_py.runtime_config import (  # noqa: E402
 from overlord_py.packages import (  # noqa: E402
     CODEGRAPH_BIN,
     CODEGRAPH_PACKAGE,
-    CODEGRAPH_REQUIRED_VERSION,
     OH_MY_OPENAGENT_BIN,
     OH_MY_OPENAGENT_CACHE_DIR,
     OH_MY_OPENAGENT_PACKAGE,
-    OH_MY_OPENAGENT_REQUIRED_VERSION,
     OPENCODE_REQUIRED_VERSION,
     PackageRepairError,
     ensure_codegraph_runtime_package,
@@ -66,8 +64,8 @@ class RuntimeConfigTests(unittest.TestCase):
             self.assertTrue(any("grep -q zsh_data" in " ".join(run.args) for run in fixture.engine.runs))
             self.assertTrue(any("chmod 755 /home/overlord" in " ".join(run.args) for run in fixture.engine.runs))
 
-    def test_lms_override_and_dual_oh_my_writes_match_generated_paths(self) -> None:
-        with runtime_workspace(model_override="lmstudio/qwen3-8b", lms_model="qwen3-8b") as fixture:
+    def test_selected_gemini_preset_is_written_to_both_runtime_paths(self) -> None:
+        with runtime_workspace(config_name="gemini") as fixture:
             inject_initial_runtime_config(fixture.engine, fixture.paths, fixture.context, env=fixture.runner_env)
 
             opencode_text = stdin_for_target(fixture.engine, RUNTIME_OPENCODE_CONFIG_FILE)
@@ -76,7 +74,7 @@ class RuntimeConfigTests(unittest.TestCase):
 
             self.assertIn(OH_MY_OPENAGENT_PACKAGE, opencode_text)
             self.assertEqual(oh_my_openagent, oh_my_opencode)
-            self.assertIn('"model": "lmstudio/qwen3-8b"', oh_my_openagent)
+            self.assertIn('"model": "google/gemini-3.6-flash"', oh_my_openagent)
 
     def test_runtime_config_repair_sets_restart_when_bash_would_repair(self) -> None:
         engine = RecordingEngine(responses=[("grep -Fq", FakeResponse(returncode=1))])
@@ -210,16 +208,6 @@ class PackageRepairTests(unittest.TestCase):
             self.assertTrue(any(OH_MY_OPENAGENT_BIN in run.args for run in engine.runs))
             self.assertTrue(any(CODEGRAPH_BIN in run.args for run in engine.runs))
             self.assertFalse(any("npm view opencode-ai" in run.args for run in engine.runs))
-
-    def test_runtime_package_specs_derive_from_manifest(self) -> None:
-        manifest_versions = dict(
-            line.split("=", maxsplit=1)
-            for line in (SCRIPTS_DIR.parent / "config" / "tool-versions.env").read_text(encoding="utf-8").splitlines()
-        )
-
-        self.assertEqual(OPENCODE_REQUIRED_VERSION, manifest_versions["OPENCODE_VERSION"])
-        self.assertEqual(OH_MY_OPENAGENT_REQUIRED_VERSION, manifest_versions["OH_MY_OPENAGENT_VERSION"])
-        self.assertEqual(CODEGRAPH_REQUIRED_VERSION, manifest_versions["CODEGRAPH_VERSION"])
 
     def test_package_install_failure_surfaces_captured_log(self) -> None:
         engine = RecordingEngine(

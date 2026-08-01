@@ -1,17 +1,15 @@
 from __future__ import annotations
 
-import json
 import unittest
-from collections.abc import Iterable, Iterator, Mapping
+import threading
+from collections.abc import Generator, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Final
+from typing import Final, override
 
-from harness import CommandRecord, HarnessRun, TempLauncherWorkspace
-from test_orchestrator import http_fixture
-
-
+from scripts.tests.harness import CommandRecord, HarnessRun, TempLauncherWorkspace, valid_persisted_state_inspect
 LAUNCHER: Final = Path(__file__).resolve().parents[1] / "overlord"
 UTILITY_COMMANDS: Final = ("bash", "python3", "readlink", "dirname", "basename", "tr", "sed", "grep", "mkdir", "chmod", "rm", "cat")
 
@@ -99,7 +97,7 @@ class LifecycleCharacterizationTests(unittest.TestCase):
                     "docker",
                     state="running",
                     image_exists=True,
-                    raw_inspect_output=valid_mount_inspect(workspace.path),
+                    raw_inspect_output=valid_persisted_state_inspect(workspace.path),
                 )
                 sentinel = workspace.path / ".overlord" / "sentinel.txt"
                 sentinel.parent.mkdir()
@@ -213,6 +211,48 @@ class LifecycleCharacterizationTests(unittest.TestCase):
             cursor = values.index(item, cursor) + 1
 
 
+class HttpFixture:
+    def __init__(self, server: ThreadingHTTPServer, thread: threading.Thread) -> None:
+        self._server: ThreadingHTTPServer = server
+        self._thread: threading.Thread = thread
+        self.port: str = str(server.server_port)
+        self.port_output: str = f"0.0.0.0:{self.port}\n"
+
+    def close(self) -> None:
+        self._server.shutdown()
+        self._server.server_close()
+        self._thread.join(timeout=5)
+
+
+class ReadyHandler(BaseHTTPRequestHandler):
+    def do_GET(self) -> None:
+        if self.path == "/global/health":
+            body = b"ok\n"
+        else:
+            body = b"<!doctype html><html><body>ok</body></html>"
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        _ = self.wfile.write(body)
+
+    @override
+    def log_message(self, format: str, *args: object) -> None:
+        del format, args
+
+
+@contextmanager
+def http_fixture() -> Generator[HttpFixture, None, None]:
+    server = ThreadingHTTPServer(("127.0.0.1", 0), ReadyHandler)
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    fixture = HttpFixture(server, thread)
+    try:
+        yield fixture
+    finally:
+        fixture.close()
+
+
 @contextmanager
 def launcher_workspace(workspace_name: str | None = None) -> Iterator[TempLauncherWorkspace]:
     with TempLauncherWorkspace(workspace_name=workspace_name) as workspace:
@@ -259,30 +299,6 @@ def index_of(records: list[CommandRecord], subcommand: str) -> int:
         if len(record["argv"]) > 1 and record["argv"][1] == subcommand:
             return index
     raise AssertionError(f"Missing engine subcommand: {subcommand}")
-
-
-def valid_mount_inspect(workspace: Path) -> str:
-    return json.dumps(
-        [
-            {
-                "Mounts": [
-                    {"Type": "bind", "Source": str(workspace), "Destination": "/workspace", "RW": True},
-                    {
-                        "Type": "bind",
-                        "Source": str(workspace / ".overlord" / "opencode-data"),
-                        "Destination": "/home/overlord/.local/share/opencode",
-                        "RW": True,
-                    },
-                    {
-                        "Type": "bind",
-                        "Source": str(workspace / ".overlord" / "zsh-data"),
-                        "Destination": "/home/overlord/.zsh_data",
-                        "RW": True,
-                    },
-                ]
-            }
-        ]
-    )
 
 
 if __name__ == "__main__":

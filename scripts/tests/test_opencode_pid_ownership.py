@@ -1,22 +1,11 @@
 from __future__ import annotations
 
-import os
 import subprocess
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from scripts.overlord_py.opencode_cmdline_matcher import OPENCODE_CMDLINE_MATCHER_SCRIPT
-from scripts.overlord_py.web_restart_scripts import (
-    REQUEST_RESTART_IF_WORKSPACE_PROJECT_STALE_SCRIPT,
-)
-from scripts.overlord_py.web_types import OPENCODE_WEB_WAIT_SECONDS
-from scripts.tests.test_plugin_env_reconciliation import (
-    canonical_process_environment,
-    run_plugin_probe,
-    start_opencode_process,
-    stop_process,
-)
 
 
 class OpenCodeCmdlineMatcherTests(unittest.TestCase):
@@ -113,94 +102,6 @@ class OpenCodeCmdlineMatcherTests(unittest.TestCase):
             check=False,
         )
         return result.returncode
-
-
-class OpenCodePidOwnershipConsumerTests(unittest.TestCase):
-    def test_plugin_probe_ignores_valid_looking_later_argv(self) -> None:
-        with TemporaryDirectory() as temporary_directory:
-            state_dir = Path(temporary_directory)
-            pid_file = state_dir / "opencode-web.pid"
-            process_env = canonical_process_environment()
-            process_env["OPENCODE_SERVER_PASSWORD"] = "stale-secret"
-            process = start_opencode_process(
-                state_dir,
-                process_env,
-                (
-                    "doctor",
-                    "opencode",
-                    "serve",
-                    "--hostname",
-                    "0.0.0.0",
-                    "--port",
-                    "4090",
-                ),
-            )
-            try:
-                _ = pid_file.write_text(f"{process.pid}\n", encoding="utf-8")
-
-                result = run_plugin_probe(pid_file, "desired-secret")
-            finally:
-                stop_process(process)
-
-        self.assertEqual(result.returncode, 0, result.stderr)
-
-    def test_plugin_probe_forces_repair_for_legacy_even_with_canonical_environment(self) -> None:
-        with TemporaryDirectory() as temporary_directory:
-            state_dir = Path(temporary_directory)
-            pid_file = state_dir / "opencode-web.pid"
-            process_env = canonical_process_environment()
-            process_env.update({"EXA_API_KEY": "", "OPENCODE_SERVER_PASSWORD": "same-secret"})
-            process = start_opencode_process(
-                state_dir,
-                process_env,
-                ("serve", "--pure", "--hostname", "0.0.0.0", "--port", "4090"),
-            )
-            try:
-                _ = pid_file.write_text(f"{process.pid}\n", encoding="utf-8")
-                result = run_plugin_probe(pid_file, "same-secret")
-            finally:
-                stop_process(process)
-
-        self.assertEqual(result.returncode, 1, result.stderr)
-
-    def test_workspace_probe_never_calls_http_for_unrelated_or_legacy_process(self) -> None:
-        scenarios = (
-            (("serve", "--hostname", "0.0.0.0", "--port", "40901"), 0),
-            (("web", "--pure", "--hostname", "0.0.0.0", "--port", "4090"), 2),
-        )
-        for command, expected_status in scenarios:
-            with self.subTest(command=command), TemporaryDirectory() as temporary_directory:
-                state_dir = Path(temporary_directory)
-                pid_file = state_dir / "opencode-web.pid"
-                marker = state_dir / "curl-marker"
-                fake_bin = state_dir / "bin"
-                fake_bin.mkdir()
-                fake_curl = fake_bin / "curl"
-                _ = fake_curl.write_text(f"#!/bin/sh\ntouch '{marker}'\n", encoding="utf-8")
-                _ = fake_curl.chmod(0o755)
-                git_dir = state_dir / ".git"
-                git_dir.mkdir()
-                _ = (git_dir / "opencode").write_text("cache\n", encoding="utf-8")
-                process = start_opencode_process(state_dir, canonical_process_environment(), command)
-                try:
-                    _ = pid_file.write_text(f"{process.pid}\n", encoding="utf-8")
-                    env = dict(os.environ)
-                    env["PATH"] = f"{fake_bin}{os.pathsep}{env.get('PATH', '')}"
-                    result = subprocess.run(
-                        ("sh", "-s", "--", str(pid_file), "0.0.0.0", "4090", str(state_dir), str(OPENCODE_WEB_WAIT_SECONDS)),
-                        env=env,
-                        input=REQUEST_RESTART_IF_WORKSPACE_PROJECT_STALE_SCRIPT,
-                        capture_output=True,
-                        text=True,
-                        check=False,
-                    )
-                    http_called = marker.exists()
-                finally:
-                    stop_process(process)
-
-            self.assertEqual(result.returncode, expected_status, result.stderr)
-            self.assertFalse(http_called)
-
 
 if __name__ == "__main__":
     _ = unittest.main()

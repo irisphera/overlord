@@ -7,7 +7,7 @@ import sys
 from typing import Final, assert_never
 
 from overlord_py.cli import Command, CliOptions, parse_cli
-from overlord_py.config_catalog import OPENCODE_CONFIG_NAME, OpencodeRenderOptions, config_dir
+from overlord_py.config_catalog import OPENCODE_CONFIG_NAME, config_dir
 from overlord_py.container_lifecycle import LifecycleError, ensure_image, ensure_running, fresh, purge
 from overlord_py.engine import ContainerEngine, EngineDetectionError, detect_engine
 from overlord_py.env_builder import EnvironmentPlan, build_environment_plan, normalized_host_env
@@ -158,8 +158,6 @@ def runtime_context(paths: WorkspacePaths, options: CliOptions, environment: Env
         oh_my_config_file=options.config_file,
         zellij_config_file=config_dir(paths.repo_root) / ZELLIJ_CONFIG_NAME,
         environment=environment,
-        opencode_options=OpencodeRenderOptions(lms_model=options.lms_model),
-        model_override=options.model_override,
     )
 
 

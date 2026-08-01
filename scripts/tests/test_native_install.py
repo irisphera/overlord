@@ -33,30 +33,40 @@ class NativeInstallStageTests(unittest.TestCase):
             self.assertIn("Bun is required unless --skip-package-install is used.", result.stdout)
             self.assertIn("~/.local/bin/rtk", result.stdout)
             self.assertNotIn("Bun must already be installed", result.stdout)
+            self.assertNotIn("--lms-model", result.stdout)
 
-    def test_skip_package_install_prints_config_env_and_skip_stages(self) -> None:
+    def test_removed_lms_model_option_is_rejected_as_unknown(self) -> None:
+        with native_workspace() as workspace:
+            result = run_install(workspace, "--lms-model", "sentinel-model")
+
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(result.stdout, "")
+            self.assertEqual(
+                result.stderr,
+                "Error: unknown argument '--lms-model'\nRun 'scripts/install --help' for usage.\n",
+            )
+
+    def test_skip_package_install_covers_config_env_and_stages(self) -> None:
         with native_workspace() as workspace:
             result = run_install(workspace, "--skip-package-install")
             installed_config = workspace.path / "home" / ".config" / "opencode" / "opencode.json"
             versions = load_tool_versions()
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            assert_contains_ordered(
-                self,
-                result.stdout.splitlines(),
-                [
-                    "==> Resolving native installer configuration...",
-                    "==> Installing OpenCode provider catalog...",
-                    "==> Installing oh-my-openagent routing configs...",
-                    "==> Installing zellij config...",
-                    "==> Writing OpenCode environment file...",
-                    "==> Installing setup-devcontainer skill...",
-                    "==> Skipping native package installation...",
-                    "Skipped package installation.",
-                    "==> Checking PATH for native command shims...",
-                    "==> Native OpenCode install complete.",
-                ],
-            )
+            for expected in (
+                "==> Resolving native installer configuration...",
+                "==> Installing OpenCode provider catalog...",
+                "==> Installing oh-my-openagent routing configs...",
+                "==> Installing zellij config...",
+                "==> Writing OpenCode environment file...",
+                "==> Installing setup-devcontainer skill...",
+                "==> Skipping native package installation...",
+                "Skipped package installation.",
+                "==> Checking PATH for native command shims...",
+                "==> Native OpenCode install complete.",
+            ):
+                with self.subTest(expected=expected):
+                    self.assertIn(expected, result.stdout)
             self.assertTrue(installed_config.is_file())
             self.assertEqual(
                 json.loads(installed_config.read_text(encoding="utf-8"))["plugin"],
@@ -70,7 +80,7 @@ class NativeInstallStageTests(unittest.TestCase):
             self.assertFalse((workspace.path / "home" / ".local" / "bin" / "rtk").exists())
             self.assertFalse((workspace.path / "home" / ".config" / "opencode" / "plugins" / "rtk.ts").exists())
 
-    def test_package_install_prints_stage_before_each_fake_package_command(self) -> None:
+    def test_package_install_covers_stages_and_fake_package_commands(self) -> None:
         with native_workspace() as workspace:
             versions = load_tool_versions()
             install_fake_package_commands(workspace, versions)
@@ -78,24 +88,22 @@ class NativeInstallStageTests(unittest.TestCase):
             result = run_install(workspace)
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            assert_contains_ordered(
-                self,
-                result.stdout.splitlines(),
-                [
-                    "==> Checking Bun for native package installation...",
-                    f"==> Installing OpenCode CLI package opencode-ai@{versions.opencode}...",
-                    f"FAKE_BUN add -g opencode-ai@{versions.opencode}",
-                    f"==> Installing OpenCode plugin package oh-my-openagent@{versions.oh_my_openagent}...",
-                    f"FAKE_BUN add oh-my-openagent@{versions.oh_my_openagent} --safe-chain-skip-minimum-package-age",
-                    f"==> Installing CodeGraph CLI package @colbymchenry/codegraph@{versions.codegraph}...",
-                    f"FAKE_BUN add -g @colbymchenry/codegraph@{versions.codegraph}",
-                    f"==> Installing RTK {versions.rtk}...",
-                    "rtk-x86_64-unknown-linux-musl.tar.gz",
-                    "==> Checking zellij availability...",
-                    "==> Checking PATH for native command shims...",
-                    "==> Native OpenCode install complete.",
-                ],
-            )
+            for expected in (
+                "==> Checking Bun for native package installation...",
+                f"==> Installing OpenCode CLI package opencode-ai@{versions.opencode}...",
+                f"FAKE_BUN add -g opencode-ai@{versions.opencode}",
+                f"==> Installing OpenCode plugin package oh-my-openagent@{versions.oh_my_openagent}...",
+                f"FAKE_BUN add oh-my-openagent@{versions.oh_my_openagent} --safe-chain-skip-minimum-package-age",
+                f"==> Installing CodeGraph CLI package @colbymchenry/codegraph@{versions.codegraph}...",
+                f"FAKE_BUN add -g @colbymchenry/codegraph@{versions.codegraph}",
+                f"==> Installing RTK {versions.rtk}...",
+                "rtk-x86_64-unknown-linux-musl.tar.gz",
+                "==> Checking zellij availability...",
+                "==> Checking PATH for native command shims...",
+                "==> Native OpenCode install complete.",
+            ):
+                with self.subTest(expected=expected):
+                    self.assertIn(expected, result.stdout)
             self.assertTrue((workspace.path / "home" / ".local" / "bin" / "rtk").is_file())
             self.assertTrue((workspace.path / "home" / ".config" / "opencode" / "plugins" / "rtk.ts").is_file())
 
@@ -189,6 +197,8 @@ class NativeInstallStageTests(unittest.TestCase):
                     (
                         "Available oh-my-openagent routing presets:",
                         "  default (oh-my-openagent.jsonc)",
+                        "  azure (oh-my-openagent.azure.jsonc)",
+                        "  gemini (oh-my-openagent.gemini.jsonc)",
                         "  openrouter (oh-my-openagent.openrouter.jsonc)",
                         "",
                     )
@@ -199,21 +209,74 @@ class NativeInstallStageTests(unittest.TestCase):
             self.assertFalse((workspace.path / "home" / ".cache").exists())
             self.assertFalse((workspace.path / "home" / ".local").exists())
 
-    def test_lms_model_rewrites_checked_in_catalog_and_routes(self) -> None:
+    def test_gemini_preset_and_supported_bedrock_environment_are_written(self) -> None:
         with native_workspace() as workspace:
-            result = run_install(workspace, "--lms-model", "qwen3-8b", "--skip-package-install")
+            home = workspace.path / "home"
+            env = isolated_env(home)
+            env.update(
+                {
+                    "AWS_REGION": "us-west-2",
+                    "AWS_BEARER_TOKEN_BEDROCK": "bearer-token",
+                }
+            )
+
+            result = workspace.run_command(
+                (str(INSTALLER), "--config", "gemini", "--skip-package-install"),
+                env=env,
+            )
             opencode_config_dir = workspace.path / "home" / ".config" / "opencode"
-            installed_config = opencode_config_dir / "opencode.json"
+            installed_routing = load_jsonc(opencode_config_dir / "oh-my-openagent.jsonc")
+            installed_env = (opencode_config_dir / "overlord-env").read_text(encoding="utf-8")
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            lmstudio = json.loads(installed_config.read_text(encoding="utf-8"))["provider"]["lmstudio"]
-            self.assertEqual(lmstudio["name"], "LM Studio")
-            self.assertEqual(lmstudio["models"], {"qwen3-8b": {"name": "qwen3-8b"}})
-            for routing_file in ("oh-my-openagent.jsonc", "oh-my-opencode.jsonc"):
-                with self.subTest(routing_file=routing_file):
-                    routes = (opencode_config_dir / routing_file).read_text(encoding="utf-8")
-                    self.assertIn('"model": "lmstudio/qwen3-8b"', routes)
-                    self.assertNotIn('"model": "azure/gpt-5.6-sol"', routes)
+            for section in ("categories", "agents"):
+                with self.subTest(section=section):
+                    self.assertEqual(
+                        {route["model"] for route in installed_routing[section].values()},
+                        {"google/gemini-3.6-flash"},
+                    )
+            self.assertIn("export GOOGLE_CLOUD_LOCATION=global", installed_env)
+            for name, value in (
+                ("AWS_REGION", "us-west-2"),
+                ("AWS_BEARER_TOKEN_BEDROCK", "bearer-token"),
+            ):
+                with self.subTest(name=name):
+                    self.assertIn(f"export {name}={value}", installed_env)
+            self.assertEqual(
+                tuple(
+                    line.split("=", 1)[0].removeprefix("export ")
+                    for line in installed_env.splitlines()
+                    if line.startswith("export AWS_")
+                ),
+                ("AWS_REGION", "AWS_BEARER_TOKEN_BEDROCK"),
+            )
+
+    def test_native_environment_defaults_aws_region_to_eu_central_1(self) -> None:
+        with native_workspace() as workspace:
+            home = workspace.path / "home"
+            env = isolated_env(home)
+            env["AWS_REGION"] = ""
+
+            result = workspace.run_command((str(INSTALLER), "--skip-package-install"), env=env)
+            installed_env = (home / ".config" / "opencode" / "overlord-env").read_text(encoding="utf-8")
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("export AWS_REGION=eu-central-1", installed_env)
+
+    def test_native_environment_keeps_vertex_location_alias(self) -> None:
+        with native_workspace() as workspace:
+            home = workspace.path / "home"
+            env = isolated_env(home)
+            env["VERTEX_LOCATION"] = "us-central1"
+
+            result = workspace.run_command(
+                (str(INSTALLER), "--skip-package-install"),
+                env=env,
+            )
+            installed_env = (home / ".config" / "opencode" / "overlord-env").read_text(encoding="utf-8")
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("export GOOGLE_CLOUD_LOCATION=us-central1", installed_env)
 
 
 class SetupDevcontainerSkillInstallTests(unittest.TestCase):
@@ -249,15 +312,11 @@ class SetupDevcontainerSkillInstallTests(unittest.TestCase):
             self.assertEqual(backups_after_unchanged, backups_after_replacement)
 
 
-def assert_contains_ordered(test_case: unittest.TestCase, values: list[str], expected: list[str]) -> None:
-    cursor = 0
-    for item in expected:
-        for index in range(cursor, len(values)):
-            if item in values[index]:
-                cursor = index + 1
-                break
-        else:
-            test_case.fail(f"Missing ordered item after index {cursor}: {item}")
+def load_jsonc(path: Path) -> dict[str, dict[str, dict[str, str]]]:
+    source = "\n".join(
+        line for line in path.read_text(encoding="utf-8").splitlines() if not line.lstrip().startswith("//")
+    )
+    return json.loads(source)
 
 
 if __name__ == "__main__":

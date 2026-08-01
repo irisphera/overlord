@@ -17,7 +17,6 @@ CONFIG_DIR: Final = REPO_ROOT / "config"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-from overlord_py.config_catalog import OpencodeRenderOptions  # noqa: E402
 from overlord_py.engine import CommandResult  # noqa: E402
 from overlord_py.env_builder import build_environment_plan, package_environment  # noqa: E402
 from overlord_py.paths import WorkspacePaths, build_workspace_paths  # noqa: E402
@@ -83,13 +82,11 @@ class runtime_workspace:
         self,
         *,
         engine: RecordingEngine | None = None,
-        model_override: str = "",
-        lms_model: str = "",
+        config_name: str = "default",
         gcloud_adc: bool = False,
     ) -> None:
         self._engine = RecordingEngine() if engine is None else engine
-        self._model_override = model_override
-        self._lms_model = lms_model
+        self._config_name = config_name
         self._gcloud_adc = gcloud_adc
         self._workspace = TempLauncherWorkspace(workspace_name="Runtime Project")
 
@@ -105,11 +102,10 @@ class runtime_workspace:
         environment = build_environment_plan(host_env, home=home, workspace_name=paths.identity.workspace_name)
         context = RuntimeConfigContext(
             opencode_config_file=CONFIG_DIR / "opencode.json",
-            oh_my_config_file=CONFIG_DIR / "oh-my-openagent.jsonc",
+            oh_my_config_file=CONFIG_DIR
+            / ("oh-my-openagent.jsonc" if self._config_name == "default" else f"oh-my-openagent.{self._config_name}.jsonc"),
             zellij_config_file=CONFIG_DIR / "zellij-config.kdl",
             environment=environment,
-            opencode_options=OpencodeRenderOptions(lms_model=self._lms_model),
-            model_override=self._model_override,
         )
         runner_env = {"PATH": f"{workspace.fake_bin}{os.pathsep}{os.environ.get('PATH', '')}", "FAKE_COMMAND_LOG": str(workspace.log_path)}
         return RuntimeFixture(workspace, paths, context, package_environment(), runner_env, self._engine)

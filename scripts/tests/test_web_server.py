@@ -22,6 +22,7 @@ from scripts.overlord_py.web_server import (  # noqa: E402
     format_access_urls,
     plan_opencode_web_server,
     request_opencode_web_restart_if_plugin_env_missing,
+    resolve_access_port_for_engine,
     resolve_published_web_port,
     restart_opencode_web_if_needed,
     stop_host_web_proxy,
@@ -82,6 +83,26 @@ class WebPlanningTests(unittest.TestCase):
             self.assertIn('const http = require("http")', fixture.paths.state.host_proxy_script.read_text(encoding="utf-8"))
             self.assertTrue(fixture.paths.state.host_proxy_pid_file.exists())
             self.assertFalse(fixture.paths.state.host_proxy_port_file.exists())
+
+    def test_composed_access_port_skips_host_proxy_for_docker_and_starts_it_for_podman(self) -> None:
+        with runtime_workspace() as fixture:
+            docker_port = resolve_access_port_for_engine("docker", fixture.paths, host_port="49152", env=fixture.runner_env, wait_seconds=0)
+
+            self.assertEqual(docker_port, "49152")
+            self.assertFalse(fixture.paths.state.host_proxy_script.exists())
+            self.assertFalse(fixture.paths.state.host_proxy_pid_file.exists())
+
+        with runtime_workspace() as fixture:
+            _ = fixture.workspace.install_fake_command("node")
+            env = {"PATH": f"{fixture.workspace.fake_bin}{os.pathsep}{os.environ.get('PATH', '')}"}
+
+            podman_port = resolve_access_port_for_engine("podman", fixture.paths, host_port="49152", env=env, wait_seconds=0)
+
+            self.assertEqual(podman_port, "49152")
+            self.assertTrue(fixture.paths.state.host_proxy_script.exists())
+            self.assertTrue(fixture.paths.state.host_proxy_pid_file.exists())
+            self.assertIn('server.listen(0, bindHost', fixture.paths.state.host_proxy_script.read_text(encoding="utf-8"))
+            self.assertTrue(fixture.paths.state.host_proxy_pid_file.read_text(encoding="utf-8").strip().isdigit())
 
     def test_docker_url_output_skips_proxy_labels_while_podman_includes_published_labels(self) -> None:
         docker_output = format_access_urls(host_port="49152", access_port="49152", network_ip="10.0.0.5")

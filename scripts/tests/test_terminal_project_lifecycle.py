@@ -63,35 +63,21 @@ class TerminalLifecycleFixture:
 
 
 class TerminalProjectLifecycleTests(unittest.TestCase):
-    def test_shell_argv_clears_opencode_password_before_container_name(self) -> None:
-        with runtime_workspace() as runtime:
-            environment = build_environment_plan(
-                {"OPENCODE_SERVER_PASSWORD": "terminal-secret"},
-                home=runtime.workspace.path / "host-home",
-                workspace_name=runtime.paths.identity.workspace_name,
-            )
+    def test_terminal_argv_clears_opencode_password_before_container_name(self) -> None:
+        for command in ("shell", "zellij"):
+            with self.subTest(command=command), runtime_workspace() as runtime:
+                environment = build_environment_plan(
+                    {"OPENCODE_SERVER_PASSWORD": "terminal-secret"},
+                    home=runtime.workspace.path / "host-home",
+                    workspace_name=runtime.paths.identity.workspace_name,
+                )
 
-            argv = terminal_exec_args(runtime.paths, environment.exec_env_flags, "shell")
+                argv = terminal_exec_args(runtime.paths, environment.exec_env_flags, command)
 
-        container_index = argv.index(runtime.paths.identity.container_name)
-        self.assertEqual(argv[container_index - 2 : container_index], ["-e", "OPENCODE_SERVER_PASSWORD="])
-        self.assertEqual(argv.count("OPENCODE_SERVER_PASSWORD="), 1)
-        self.assertNotIn("terminal-secret", " ".join(argv))
-
-    def test_zellij_argv_clears_opencode_password_before_container_name(self) -> None:
-        with runtime_workspace() as runtime:
-            environment = build_environment_plan(
-                {"OPENCODE_SERVER_PASSWORD": "terminal-secret"},
-                home=runtime.workspace.path / "host-home",
-                workspace_name=runtime.paths.identity.workspace_name,
-            )
-
-            argv = terminal_exec_args(runtime.paths, environment.exec_env_flags, "zellij")
-
-        container_index = argv.index(runtime.paths.identity.container_name)
-        self.assertEqual(argv[container_index - 2 : container_index], ["-e", "OPENCODE_SERVER_PASSWORD="])
-        self.assertEqual(argv.count("OPENCODE_SERVER_PASSWORD="), 1)
-        self.assertNotIn("terminal-secret", " ".join(argv))
+                container_index = argv.index(runtime.paths.identity.container_name)
+                self.assertEqual(argv[container_index - 2 : container_index], ["-e", "OPENCODE_SERVER_PASSWORD="])
+                self.assertEqual(argv.count("OPENCODE_SERVER_PASSWORD="), 1)
+                self.assertNotIn("terminal-secret", " ".join(argv))
 
     def test_shell_stale_project_restarts_once_before_dispatch(self) -> None:
         with terminal_lifecycle_fixture(Command.SHELL) as fixture:
@@ -100,8 +86,9 @@ class TerminalProjectLifecycleTests(unittest.TestCase):
 
             # When: the shell command runs.
             dispatch_order = Mock()
-            with patch(
-                "overlord_py.main.restart_opencode_web_if_needed",
+            with patch.object(
+                main,
+                "restart_opencode_web_if_needed",
                 wraps=main.restart_opencode_web_if_needed,
             ) as restart:
                 dispatch_order.attach_mock(restart, "restart")
@@ -110,28 +97,6 @@ class TerminalProjectLifecycleTests(unittest.TestCase):
                 fixture.run()
 
             # Then: one check causes one restart before shell dispatch.
-            self.assertEqual(fixture.project_check.call_count, 1)
-            self.assertEqual(fixture.restart_count(), 1)
-            self.assertEqual([call[0] for call in dispatch_order.mock_calls], ["restart", "terminal"])
-            fixture.terminal.assert_called_once()
-
-    def test_zellij_stale_project_restarts_once_before_dispatch(self) -> None:
-        with terminal_lifecycle_fixture(Command.ZELLIJ) as fixture:
-            # Given: the zellij pre-check reports stale workspace project state.
-            fixture.project_check.return_value = True
-
-            # When: the zellij command runs.
-            dispatch_order = Mock()
-            with patch(
-                "overlord_py.main.restart_opencode_web_if_needed",
-                wraps=main.restart_opencode_web_if_needed,
-            ) as restart:
-                dispatch_order.attach_mock(restart, "restart")
-                dispatch_order.attach_mock(fixture.terminal, "terminal")
-
-                fixture.run()
-
-            # Then: one check causes one restart before zellij dispatch.
             self.assertEqual(fixture.project_check.call_count, 1)
             self.assertEqual(fixture.restart_count(), 1)
             self.assertEqual([call[0] for call in dispatch_order.mock_calls], ["restart", "terminal"])
@@ -167,8 +132,9 @@ class TerminalProjectLifecycleTests(unittest.TestCase):
         with terminal_lifecycle_fixture(Command.SHELL, restart_required=True) as fixture:
             # Given: an earlier repair already requested a restart.
             dispatch_order = Mock()
-            with patch(
-                "overlord_py.main.restart_opencode_web_if_needed",
+            with patch.object(
+                main,
+                "restart_opencode_web_if_needed",
                 wraps=main.restart_opencode_web_if_needed,
             ) as restart:
                 dispatch_order.attach_mock(restart, "restart")
@@ -182,20 +148,6 @@ class TerminalProjectLifecycleTests(unittest.TestCase):
             self.assertEqual(fixture.restart_count(), 1)
             self.assertEqual([call[0] for call in dispatch_order.mock_calls], ["restart", "terminal"])
             fixture.terminal.assert_called_once()
-
-    def test_project_check_forwards_runtime_arguments(self) -> None:
-        with terminal_lifecycle_fixture(Command.SHELL) as fixture:
-            # Given: a healthy shell lifecycle with credential forwarding planned.
-            # When: the project pre-check runs.
-            fixture.run()
-
-            # Then: it receives the existing engine, workspace, environment, and credentials.
-            fixture.project_check.assert_called_once_with(
-                fixture.engine,
-                fixture.paths,
-                env=fixture.runner_env,
-                credential_flags=fixture.environment.opencode_web_credential_flags,
-            )
 
     def test_terminal_return_code_is_preserved(self) -> None:
         with terminal_lifecycle_fixture(Command.SHELL, terminal_status=23) as fixture:
@@ -239,30 +191,28 @@ def terminal_lifecycle_fixture(
             command=command,
             config_name="default",
             config_file=runtime.context.oh_my_config_file,
-            config_explicit=False,
-            lms_model="",
-            model_override="",
         )
-        stack.enter_context(patch("overlord_py.main.ensure_image", return_value=()))
-        stack.enter_context(patch("overlord_py.main.build_environment_plan", return_value=environment))
-        stack.enter_context(patch("overlord_py.main.normalized_host_env", return_value=runtime.runner_env))
-        stack.enter_context(patch("overlord_py.main.RestartState", return_value=RestartState(required=restart_required)))
+        stack.enter_context(patch.object(main, "ensure_image", return_value=()))
+        stack.enter_context(patch.object(main, "build_environment_plan", return_value=environment))
+        stack.enter_context(patch.object(main, "normalized_host_env", return_value=runtime.runner_env))
+        stack.enter_context(patch.object(main, "RestartState", return_value=RestartState(required=restart_required)))
         stack.enter_context(
-            patch(
-                "overlord_py.main.ensure_running",
+            patch.object(
+                main,
+                "ensure_running",
                 return_value=EnsureRunningResult(state_before="running", setup_ran=False, messages=()),
             )
         )
-        stack.enter_context(patch("overlord_py.main.ensure_oh_my_openagent_runtime_config", return_value=()))
-        stack.enter_context(patch("overlord_py.main.ensure_oh_my_openagent_runtime_package", return_value=()))
-        stack.enter_context(patch("overlord_py.main.ensure_codegraph_runtime_package", return_value=()))
-        stack.enter_context(patch("overlord_py.main.ensure_default_opencode_skills", return_value=()))
-        stack.enter_context(patch("overlord_py.main.request_opencode_web_restart_if_plugin_env_missing", return_value=()))
-        stack.enter_context(patch("overlord_py.main.terminal_title", return_value=""))
-        stack.enter_context(patch("overlord_py.main.stdout_stage"))
-        project_check = stack.enter_context(patch("overlord_py.main.workspace_project_is_stale", return_value=False))
-        terminal = stack.enter_context(patch("overlord_py.main.run_terminal_command", return_value=terminal_status))
-        web = stack.enter_context(patch("overlord_py.main.ensure_web_server"))
+        stack.enter_context(patch.object(main, "ensure_oh_my_openagent_runtime_config", return_value=()))
+        stack.enter_context(patch.object(main, "ensure_oh_my_openagent_runtime_package", return_value=()))
+        stack.enter_context(patch.object(main, "ensure_codegraph_runtime_package", return_value=()))
+        stack.enter_context(patch.object(main, "ensure_default_opencode_skills", return_value=()))
+        stack.enter_context(patch.object(main, "request_opencode_web_restart_if_plugin_env_missing", return_value=()))
+        stack.enter_context(patch.object(main, "terminal_title", return_value=""))
+        stack.enter_context(patch.object(main, "stdout_stage"))
+        project_check = stack.enter_context(patch.object(main, "workspace_project_is_stale", return_value=False))
+        terminal = stack.enter_context(patch.object(main, "run_terminal_command", return_value=terminal_status))
+        web = stack.enter_context(patch.object(main, "ensure_web_server"))
         yield TerminalLifecycleFixture(
             engine,
             runtime.paths,

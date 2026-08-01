@@ -4,12 +4,11 @@ from typing import Final
 
 HELP_TEXT: Final = """overlord - Launch isolated OpenCode workspace container
 
-USAGE: overlord [--list-configs | --config PRESET | --lms-model MODEL] [command]
+USAGE: overlord [--list-configs | --config PRESET] [command]
 
 OPTIONS:
 \t--list-configs     List available oh-my-openagent routing presets
 \t--config PRESET    Use an oh-my-openagent routing preset with config/opencode.json
-\t--lms-model MODEL  Rewrite all oh-my-openagent routes to lmstudio/MODEL
 
 COMMANDS:
     web            Start/reuse OpenCode web mode and print local/network URLs (default)
@@ -24,11 +23,11 @@ EXAMPLES:
 \t    overlord --list-configs          # List available agent routing presets
 \t    overlord                         # Start/reuse the OpenCode web UI (default config)
 \t    overlord --config default        # Use config/oh-my-openagent.jsonc
-\tAZURE_API_KEY=... AZURE_RESOURCE_NAME=... overlord  # Start web UI with the default Azure routing
+\t    overlord --config azure          # Use Azure GPT-5.6 Sol/Luna routing
+\t    overlord --config gemini         # Route every agent and category through Vertex AI
+\t    overlord --config openrouter     # Route every agent and category through OpenRouter
     overlord web                     # Start/reuse the OpenCode web UI explicitly
     overlord opencode                # Alias for 'overlord web'
-\t    overlord --lms-model qwen3-8b web       # Use LM Studio with an explicit runtime model
-\t    overlord --lms-model qwen3-8b zellij    # Same runtime model, with zellij
     overlord shell                   # Open a shell
     overlord fresh && overlord       # Fresh container, then launch
     overlord purge && overlord       # Full rebuild, then launch

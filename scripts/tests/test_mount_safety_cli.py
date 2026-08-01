@@ -139,9 +139,6 @@ def options(command: Command) -> CliOptions:
         command=command,
         config_name="default",
         config_file=Path("oh-my-openagent.jsonc"),
-        config_explicit=False,
-        lms_model="",
-        model_override="",
     )
 
 

@@ -178,9 +178,6 @@ def orchestration_fixture(
             command=Command.WEB,
             config_name="default",
             config_file=runtime.context.oh_my_config_file,
-            config_explicit=False,
-            lms_model="",
-            model_override="",
         )
         readiness_scripts: list[tuple[str, ...]] = []
 
@@ -194,14 +191,14 @@ def orchestration_fixture(
                 )
             )
 
-        stack.enter_context(patch("overlord_py.main.ensure_opencode_runtime_version", return_value=()))
-        stack.enter_context(patch("overlord_py.main.stdout_stage"))
-        health = stack.enter_context(patch("overlord_py.main.wait_for_opencode_web", side_effect=record_readiness))
-        ui = stack.enter_context(patch("overlord_py.main.wait_for_opencode_web_ui", side_effect=record_readiness))
-        access = stack.enter_context(patch("overlord_py.main.resolve_access_port_for_engine", return_value="49152"))
-        mcp = stack.enter_context(patch("overlord_py.main.verify_oh_my_openagent_loaded"))
-        network = stack.enter_context(patch("overlord_py.main.resolve_network_host_ip", return_value=""))
-        stack.enter_context(patch("overlord_py.main.format_access_urls", return_value=""))
+        stack.enter_context(patch.object(main, "ensure_opencode_runtime_version", return_value=()))
+        stack.enter_context(patch.object(main, "stdout_stage"))
+        health = stack.enter_context(patch.object(main, "wait_for_opencode_web", side_effect=record_readiness))
+        ui = stack.enter_context(patch.object(main, "wait_for_opencode_web_ui", side_effect=record_readiness))
+        access = stack.enter_context(patch.object(main, "resolve_access_port_for_engine", return_value="49152"))
+        mcp = stack.enter_context(patch.object(main, "verify_oh_my_openagent_loaded"))
+        network = stack.enter_context(patch.object(main, "resolve_network_host_ip", return_value=""))
+        stack.enter_context(patch.object(main, "format_access_urls", return_value=""))
         yield OrchestrationFixture(
             engine,
             runtime.paths,

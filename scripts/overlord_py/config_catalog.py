@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 from pathlib import Path
-import re
 from typing import Final, TypeAlias
 
 from .tool_versions import load_tool_versions
@@ -19,13 +18,6 @@ TOOL_VERSIONS: Final = load_tool_versions()
 OH_MY_OPENAGENT_PACKAGE: Final = TOOL_VERSIONS.oh_my_openagent_package
 JSON_VALUE: TypeAlias = None | bool | int | float | str | list["JSON_VALUE"] | dict[str, "JSON_VALUE"]
 JSON_OBJECT: TypeAlias = dict[str, JSON_VALUE]
-MODEL_LINE_PATTERN: Final = re.compile(r'"model": ".*"')
-
-
-@dataclass(frozen=True, slots=True)
-class OpencodeRenderOptions:
-    plugin_spec: str = OH_MY_OPENAGENT_PACKAGE
-    lms_model: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,7 +63,12 @@ def validate_opencode_catalog(repo_root: Path) -> tuple[Path | None, str]:
 def available_configs_text(repo_root: Path) -> str:
     lines = ["Available oh-my-openagent routing presets:"]
     found = False
-    for path in sorted(config_dir(repo_root).glob("oh-my-openagent*.jsonc")):
+    root_config_dir = config_dir(repo_root)
+    config_paths = [
+        root_config_dir / DEFAULT_OH_MY_CONFIG_NAME,
+        *sorted(root_config_dir.glob("oh-my-openagent.*.jsonc")),
+    ]
+    for path in config_paths:
         if not is_oh_my_config_file(path):
             continue
         name = path.name.removeprefix("oh-my-openagent").removesuffix(".jsonc").removeprefix(".")
@@ -110,34 +107,26 @@ def resolve_oh_my_config_file(repo_root: Path, config_name: str) -> tuple[Path |
     return candidate, ""
 
 
-def render_oh_my_runtime_config(config_file: Path, *, model_override: str = "") -> str:
-    content = config_file.read_text(encoding="utf-8")
-    if not model_override:
-        return content
-    return rewrite_oh_my_models(content, model_override)
+def render_oh_my_runtime_config(config_file: Path) -> str:
+    return config_file.read_text(encoding="utf-8")
 
 
-def rewrite_oh_my_models(content: str, model_override: str) -> str:
-    return MODEL_LINE_PATTERN.sub(f'"model": "{model_override}"', content)
+def render_opencode_runtime_config(
+    catalog_file: Path,
+    *,
+    plugin_spec: str = OH_MY_OPENAGENT_PACKAGE,
+) -> str:
+    return render_opencode_runtime_config_text(catalog_file.read_text(encoding="utf-8"), plugin_spec=plugin_spec)
 
 
-def render_opencode_runtime_config(catalog_file: Path, options: OpencodeRenderOptions | None = None) -> str:
-    render_options = OpencodeRenderOptions() if options is None else options
-    return render_opencode_runtime_config_text(catalog_file.read_text(encoding="utf-8"), render_options)
-
-
-def render_opencode_runtime_config_text(source: str, options: OpencodeRenderOptions | None = None) -> str:
-    render_options = OpencodeRenderOptions() if options is None else options
-    rewritten_source = rewrite_opencode_lms_catalog(source, render_options.lms_model)
-    catalog = load_json_object(rewritten_source)
-    catalog["plugin"] = opencode_plugins_with_oh_my(catalog.get("plugin"), render_options.plugin_spec)
+def render_opencode_runtime_config_text(
+    source: str,
+    *,
+    plugin_spec: str = OH_MY_OPENAGENT_PACKAGE,
+) -> str:
+    catalog = load_json_object(source)
+    catalog["plugin"] = opencode_plugins_with_oh_my(catalog.get("plugin"), plugin_spec)
     return json.dumps(catalog, indent=2) + "\n"
-
-
-def rewrite_opencode_lms_catalog(source: str, lms_model: str) -> str:
-    if not lms_model:
-        return source
-    return source.replace('"qwopus3.5-9b-coder-mtp"', f'"{lms_model}"')
 
 
 def load_json_object(source: str) -> JSON_OBJECT:

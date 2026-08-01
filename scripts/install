@@ -47,12 +47,11 @@ show_help() {
 	cat <<USAGE
 install - Install Overlord's OpenCode setup directly on this machine
 
-USAGE: install [--list-configs | --config PRESET | --lms-model MODEL] [--skip-package-install]
+USAGE: install [--list-configs | --config PRESET] [--skip-package-install]
 
 OPTIONS:
 	--list-configs          List available oh-my-openagent routing presets
 	--config PRESET         Use an oh-my-openagent routing preset with config/opencode.json
-	--lms-model MODEL       Rewrite all oh-my-openagent routes to lmstudio/MODEL
 	--skip-package-install  Only install static configs, env, and repository-owned skills; do not install packages
 	-h, --help              Show this help
 
@@ -73,25 +72,6 @@ WRITES:
 Existing files are backed up before they are replaced.
 Bun is required unless --skip-package-install is used.
 USAGE
-}
-
-validate_lms_model() {
-	local model="$1"
-
-	if [[ ! "${model}" =~ ^[A-Za-z0-9._:@/+-]+$ ]]; then
-		echo "Error: --lms-model may only contain letters, numbers, '.', '_', ':', '@', '/', '+', or '-'." >&2
-		exit 1
-	fi
-}
-
-escape_sed_replacement() {
-	local value="$1"
-
-	value="${value//\\/\\\\}"
-	value="${value//&/\\&}"
-	value="${value//|/\\|}"
-	value="${value//\"/\\\"}"
-	printf '%s' "${value}"
 }
 
 is_opencode_config_file() {
@@ -120,7 +100,7 @@ print_available_configs() {
 	local found=0
 
 	echo "Available oh-my-openagent routing presets:"
-	for path in "${OVERLORD_DIR}"/config/oh-my-openagent*.jsonc; do
+	for path in "${OVERLORD_DIR}/config/${DEFAULT_OH_MY_CONFIG_NAME}" "${OVERLORD_DIR}"/config/oh-my-openagent.*.jsonc; do
 		if is_oh_my_config_file "${path}"; then
 			name="$(basename "${path}")"
 			name="${name#oh-my-openagent}"
@@ -236,37 +216,19 @@ safe_symlink() {
 
 write_opencode_config() {
 	local tmp_file
-	local escaped_model
 
 	stage "Installing OpenCode provider catalog..."
 	tmp_file="$(mktemp)"
-	if [[ -n "${LMS_MODEL}" ]]; then
-		escaped_model="$(escape_sed_replacement "${LMS_MODEL}")"
-		sed 's|"qwopus3.5-9b-coder-mtp"|"'"${escaped_model}"'"|g; s|"plugin": \[\]|"plugin": ["'"${OH_MY_OPENAGENT_PACKAGE}"'"]|' \
-			"${CONFIG_FILE}" >"${tmp_file}"
-	else
-		sed 's|"plugin": \[\]|"plugin": ["'"${OH_MY_OPENAGENT_PACKAGE}"'"]|' \
-			"${CONFIG_FILE}" >"${tmp_file}"
-	fi
+	sed 's|"plugin": \[\]|"plugin": ["'"${OH_MY_OPENAGENT_PACKAGE}"'"]|' \
+		"${CONFIG_FILE}" >"${tmp_file}"
 	install_file "${tmp_file}" "${RUNTIME_OPENCODE_CONFIG_FILE}" 600
 	rm -f "${tmp_file}"
 }
 
 write_oh_my_config() {
-	local tmp_file
-	local escaped_override
-
 	stage "Installing oh-my-openagent routing configs..."
-	tmp_file="$(mktemp)"
-	if [[ -n "${MODEL_OVERRIDE}" ]]; then
-		escaped_override="$(escape_sed_replacement "${MODEL_OVERRIDE}")"
-		sed 's|"model": ".*"|"model": "'"${escaped_override}"'"|g' "${OH_MY_CONFIG_FILE}" >"${tmp_file}"
-	else
-		cp "${OH_MY_CONFIG_FILE}" "${tmp_file}"
-	fi
-	install_file "${tmp_file}" "${RUNTIME_OH_MY_OPENAGENT_CONFIG_FILE}" 600
-	install_file "${tmp_file}" "${RUNTIME_OH_MY_OPENCODE_CONFIG_FILE}" 600
-	rm -f "${tmp_file}"
+	install_file "${OH_MY_CONFIG_FILE}" "${RUNTIME_OH_MY_OPENAGENT_CONFIG_FILE}" 600
+	install_file "${OH_MY_CONFIG_FILE}" "${RUNTIME_OH_MY_OPENCODE_CONFIG_FILE}" 600
 }
 
 write_zellij_config() {
@@ -287,20 +249,17 @@ write_env_file() {
 		AZURE_API_KEY
 		EXA_API_KEY
 		TAVILY_API_KEY
-		LMSTUDIO_BASE_URL
-		LMSTUDIO_API_KEY
 		UV_CACHE_DIR
 		CONTEXT7_API_KEY
 		OPENCODE_SERVER_PASSWORD
 	)
 
 	stage "Writing OpenCode environment file..."
-	: "${LMSTUDIO_BASE_URL:=http://localhost:1234/v1}"
-	: "${LMSTUDIO_API_KEY:=lm-studio}"
 	: "${UV_CACHE_DIR:=${XDG_CACHE_HOME}/uv}"
-	: "${GOOGLE_CLOUD_LOCATION:=${VERTEX_LOCATION:-}}"
+	: "${AWS_REGION:=eu-central-1}"
+	: "${GOOGLE_CLOUD_LOCATION:=${VERTEX_LOCATION:-global}}"
 	: "${GOOGLE_CLOUD_PROJECT:=${GCP_PROJECT:-${GCLOUD_PROJECT:-}}}"
-	export LMSTUDIO_BASE_URL LMSTUDIO_API_KEY UV_CACHE_DIR GOOGLE_CLOUD_LOCATION GOOGLE_CLOUD_PROJECT
+	export UV_CACHE_DIR AWS_REGION GOOGLE_CLOUD_LOCATION GOOGLE_CLOUD_PROJECT
 
 	mkdir -p "${RUNTIME_OPENCODE_CONFIG_DIR}"
 	chmod 700 "${RUNTIME_OPENCODE_CONFIG_DIR}" 2>/dev/null || true
@@ -478,7 +437,6 @@ main() {
 	CONFIG_NAME="${DEFAULT_OH_MY_CONFIG_NAME}"
 	CONFIG_EXPLICIT=0
 	LIST_CONFIGS=0
-	LMS_MODEL=""
 	SKIP_PACKAGE_INSTALL=0
 
 	while [[ $# -gt 0 ]]; do
@@ -495,16 +453,6 @@ main() {
 			fi
 			CONFIG_NAME="$2"
 			CONFIG_EXPLICIT=1
-			shift 2
-			;;
-		--lms-model)
-			if [[ $# -lt 2 || "$2" == -* ]]; then
-				echo "Error: --lms-model requires a model name" >&2
-				echo "Example: scripts/install --lms-model qwen3-8b" >&2
-				exit 1
-			fi
-			validate_lms_model "$2"
-			LMS_MODEL="$2"
 			shift 2
 			;;
 		--skip-package-install)
@@ -524,7 +472,7 @@ main() {
 	done
 
 	if [[ "${LIST_CONFIGS}" -eq 1 ]]; then
-		if [[ "${CONFIG_EXPLICIT}" -eq 1 || -n "${LMS_MODEL}" || "${SKIP_PACKAGE_INSTALL}" -eq 1 ]]; then
+		if [[ "${CONFIG_EXPLICIT}" -eq 1 || "${SKIP_PACKAGE_INSTALL}" -eq 1 ]]; then
 			echo "Error: --list-configs cannot be combined with install options" >&2
 			exit 1
 		fi
@@ -537,18 +485,6 @@ main() {
 	if ! is_opencode_config_file "${CONFIG_FILE}"; then
 		echo "Error: ${CONFIG_FILE} is not a valid OpenCode provider catalog from config/" >&2
 		exit 1
-	fi
-
-	if [[ "${CONFIG_EXPLICIT}" -eq 1 && -n "${LMS_MODEL}" ]]; then
-		echo "Error: --config cannot be combined with --lms-model" >&2
-		echo "Choose either a checked-in routing preset or an explicit LM Studio model." >&2
-		exit 1
-	fi
-
-	MODEL_OVERRIDE=""
-	if [[ -n "${LMS_MODEL}" ]]; then
-		MODEL_OVERRIDE="lmstudio/${LMS_MODEL}"
-		echo "LM Studio override: all oh-my-openagent agents -> ${MODEL_OVERRIDE}"
 	fi
 
 	OH_MY_CONFIG_FILE="$(resolve_oh_my_config_file "${CONFIG_NAME}")"

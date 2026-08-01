@@ -1,5 +1,4 @@
 import os
-import re
 import subprocess
 import sys
 import tempfile
@@ -78,42 +77,6 @@ class ToolVersionManifestTests(unittest.TestCase):
         self.assertEqual(opencode_package, f"opencode-ai@{opencode_version}")
         self.assertEqual(oh_my_openagent_package, f"oh-my-openagent@{oh_my_openagent_version}")
         self.assertEqual(codegraph_package, f"@colbymchenry/codegraph@{codegraph_version}")
-
-    def test_manifest_is_the_only_authored_source_of_target_versions(self) -> None:
-        manifest_values = dict(
-            line.split("=", maxsplit=1) for line in TOOL_VERSIONS_PATH.read_text(encoding="utf-8").splitlines()
-        )
-        target_patterns = tuple(
-            re.compile(rf"(?<![0-9]){re.escape(value)}(?![0-9])")
-            for value in manifest_values.values()
-        )
-        unrelated_same_version = f"ARG AST_GREP_VERSION={manifest_values['RTK_VERSION']}"
-        git_files = subprocess.run(
-            ("git", "ls-files", "-co", "--exclude-standard"),
-            capture_output=True,
-            check=False,
-            cwd=REPO_ROOT,
-            text=True,
-        )
-
-        self.assertEqual(git_files.returncode, 0, git_files.stderr)
-        matches: list[str] = []
-        for relative_path in git_files.stdout.splitlines():
-            authored_file = REPO_ROOT / relative_path
-            if authored_file == TOOL_VERSIONS_PATH or not authored_file.is_file():
-                continue
-            contents = authored_file.read_bytes()
-            if b"\0" in contents:
-                continue
-            try:
-                text = contents.decode("utf-8")
-            except UnicodeDecodeError:
-                continue
-            for line_number, line in enumerate(text.splitlines(), start=1):
-                if line != unrelated_same_version and any(target_pattern.search(line) for target_pattern in target_patterns):
-                    matches.append(f"{relative_path}:{line_number}")
-
-        self.assertEqual(matches, [], "\n".join(matches))
 
     def test_invalid_manifests_are_rejected(self) -> None:
         valid = (

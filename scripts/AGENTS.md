@@ -23,10 +23,10 @@ RTK is an install-time tool. The launcher does not orchestrate it or forward RTK
 |------|----------|-------|
 | Change local CLI command behavior | `overlord_py/` command dispatch | Validates `help`, `fresh`, `purge`, `web`, `opencode`, `shell`, `zellij` |
 | Change launcher shim behavior | `overlord` | Keep this as minimal host `python3` resolution plus `exec` into `overlord_py/` |
-| Change native host install behavior | `install` | Validates `--list-configs`, `--config`, `--lms-model`, config injection, and host package setup without Docker/Podman |
+| Change native host install behavior | `install` | Validates `--list-configs`, `--config`, config injection, cloud environment output, and host package setup without Docker/Podman |
 | Change native RTK installation | `install` and `config/tool-versions.env` | Selects the pinned Linux asset, requires the exact version, and initializes the OpenCode plugin |
 | Change `--config` selection rules | routing preset validation, arg parsing | Selects checked-in `oh-my-openagent*.jsonc` presets; rejects paths and invalid presets |
-| Change provider catalog or env forwarding | `config/opencode.json`, `PROVIDER_ENV_VARS` in `overlord` | Keep single provider catalog and forwarded env vars in sync |
+| Change provider catalog or env forwarding | `config/opencode.json`, `overlord_py/env_builder.py`, `install` | Keep the single provider catalog, container forwarding, and native environment file in sync |
 | Change local persistence/gitignore behavior | `ensure_state_dir`, `persisted_state_mounts` | `.overlord/` creation, direct-bind verification, and gitignore wiring live here |
 | Change workspace Git topology preflight | `overlord_py/paths.py`, `overlord_py/main.py` | Missing `.git` is allowed; external gitdirs stop launch modes before image/container lifecycle without blocking recovery commands |
 | Change runtime config injection | `ensure_runtime_config_dirs` in `overlord` | Host `config/*` -> in-container `~/.config/*` flow |
@@ -48,6 +48,9 @@ RTK is an install-time tool. The launcher does not orchestrate it or forward RTK
 - Legacy-container migration is an explicit manual recovery procedure: quiesce first, copy unmounted state only to a separate staging directory, verify it, then remove the exact incompatible container. Never turn that procedure into an automatic launcher fallback.
 - A submodule or linked-worktree gitfile is launchable only when its resolved Git metadata remains inside the workspace bind mount. Otherwise launch modes fail before lifecycle work and direct the user to the containing repository or a standalone clone.
 - Adding or removing providers is incomplete unless `config/opencode.json`, `PROVIDER_ENV_VARS`, and routing presets are updated together.
+- Routing presets are `default` (Bedrock Opus 4.5 with high reasoning effort for every category and agent except `explore`, which uses low), `azure` (GPT-5.6 Sol/Luna), `gemini` (Vertex Gemini 3.6 Flash), and `openrouter` (existing OpenRouter routing).
+- Container and native paths support only `AWS_BEARER_TOKEN_BEDROCK` and `AWS_REGION` for Bedrock; both default an unset or empty region to `eu-central-1`.
+- Google project aliases and `VERTEX_LOCATION` remain supported; when no location is supplied, both paths set `GOOGLE_CLOUD_LOCATION=global`.
 
 ## MANUAL VERIFICATION
 

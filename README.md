@@ -44,8 +44,9 @@ overlord shell                   # open zsh in the workspace container
 overlord zellij                  # open the configured zellij session
 overlord --list-configs          # list checked-in routing presets
 overlord --config default        # select the default routing preset
+overlord --config azure          # use Azure GPT-5.6 Sol/Luna routing
+overlord --config gemini         # route every agent/category through Vertex AI
 overlord --config openrouter     # route every agent/category through OpenRouter
-overlord --lms-model qwen3-8b    # route all agents to this LM Studio model
 overlord fresh                   # request container removal; retain image and .overlord state
 overlord purge                   # remove the container and image; retain .overlord state
 overlord help                    # show launcher usage
@@ -55,7 +56,7 @@ To recreate a workspace container, run `overlord fresh`, then run `overlord` sep
 
 Use `overlord purge && overlord` after changing the Dockerfile, image-provided tooling, or image bootstrap files.
 
-To change `--config` or `--lms-model` for an existing workspace, run `overlord fresh`, then relaunch with the desired option. Catalog and routing injection occurs when the container is created or restarted.
+To change `--config` for an existing workspace, run `overlord fresh`, then relaunch with the desired preset. Catalog and routing injection occurs when the container is created or restarted.
 
 ## Native host install
 
@@ -65,8 +66,9 @@ Run the installer from this repository. It installs the checked-in provider cata
 scripts/install
 scripts/install --list-configs
 scripts/install --config default
+scripts/install --config azure
+scripts/install --config gemini
 scripts/install --config openrouter
-scripts/install --lms-model qwen3-8b
 ```
 
 A full install requires Bun in `PATH`. It installs OpenCode, oh-my-openagent, and CodeGraph with Bun, installs the pinned RTK Linux release for amd64 or arm64, then creates command shims in `~/.local/bin` when their installed targets are available.
@@ -96,15 +98,18 @@ The installer configures zellij but does not install it. Install zellij separate
 
 Checked-in `config/` is authoritative for both workflows. The native installer replaces managed copies on rerun and backs them up first. The launcher replaces container copies during create or restart injection; normal reuse only repairs missing or invalid runtime config.
 
-## Routing, OpenRouter, and LM Studio
+## Routing presets and cloud providers
 
 `config/opencode.json` is the sole checked-in OpenCode provider and model catalog. Checked-in `config/oh-my-openagent*.jsonc` files are routing presets.
 
-The checked-in presets are `default` (`oh-my-openagent.jsonc`) and `openrouter` (`oh-my-openagent.openrouter.jsonc`).
+The checked-in presets are:
 
-The default routes agents and categories to Azure `gpt-5.6-sol` with role-specific reasoning effort. The Azure deployment ID must be `gpt-5.6-sol`, or you must change its `id` in `config/opencode.json`.
+- `default` (`oh-my-openagent.jsonc`) routes every category and agent to Bedrock Claude Opus 4.5, using high reasoning effort everywhere except `explore`, which uses low reasoning effort.
+- `azure` (`oh-my-openagent.azure.jsonc`) preserves the GPT-5.6 Sol/Luna split and role-specific reasoning effort.
+- `gemini` (`oh-my-openagent.gemini.jsonc`) routes every category and agent to Gemini 3.6 Flash through Google Vertex AI.
+- `openrouter` (`oh-my-openagent.openrouter.jsonc`) preserves the existing OpenRouter Ling routing and concurrency limits.
 
-The catalog includes Azure GPT-5.6 Sol and Terra; OpenRouter Ling-3.0-flash (free); Bedrock Claude Opus 4.8 and Haiku 4.5; Vertex Gemini 3.1 Pro, 3.5 Flash, and 3 Flash; and LM Studio `qwopus3.5-9b-coder-mtp`.
+The single catalog contains Bedrock Claude Opus 4.5, Vertex Gemini 3.6 Flash under the intentional `google` provider selector, Azure GPT-5.6 Sol and Luna, and the existing OpenRouter Laguna model entry. The Azure deployment IDs must remain `gpt-5.6-sol` and `gpt-5.6-luna` unless their `id` values in `config/opencode.json` are changed to match the deployments.
 
 Managed container files are `/home/overlord/.config/opencode/opencode.json`, `oh-my-openagent.jsonc`, and `oh-my-opencode.jsonc`, plus `/home/overlord/.config/zellij/config.kdl`.
 
@@ -113,40 +118,38 @@ They are generated copies of checked-in `config/` and are replaced when the laun
 ```bash
 overlord --list-configs
 overlord --config default
+overlord --config azure
+overlord --config gemini
 overlord --config openrouter
 scripts/install --list-configs
 scripts/install --config default
+scripts/install --config azure
+scripts/install --config gemini
 scripts/install --config openrouter
 ```
 
-`--config` selects a checked-in routing preset and cannot be combined with `--lms-model`.
-
-`--lms-model MODEL` rewrites all routing targets to `lmstudio/MODEL` and replaces the catalog's LM Studio model name for that run or installation.
-
-```bash
-overlord --lms-model qwen3-8b
-scripts/install --lms-model qwen3-8b
-```
-
-LM Studio defaults differ by workflow. Native installation writes `LMSTUDIO_BASE_URL=http://localhost:1234/v1`.
-
-The container launcher forwards `LMSTUDIO_BASE_URL=http://host.docker.internal:1234/v1` unless the host overrides it. Both default `LMSTUDIO_API_KEY` to `lm-studio`.
+`--config` selects one checked-in routing preset. The provider catalog is not selectable and is always sourced from `config/opencode.json`.
 
 ## Credentials and environment
 
 Supply credentials through the launching shell; do not put real credentials in checked-in files or image layers. The container forwards configured provider, MCP, and web-password environment variables at runtime.
 
 ```bash
+export AWS_BEARER_TOKEN_BEDROCK="replace-with-your-bedrock-api-key"
+export AWS_REGION="eu-central-1"
 export AZURE_API_KEY="replace-with-your-key"
 export AZURE_RESOURCE_NAME="replace-with-your-resource"
+export GOOGLE_CLOUD_PROJECT="replace-with-your-project"
 export OPENROUTER_API_KEY="replace-with-your-key"
 export OPENCODE_SERVER_PASSWORD="replace-with-a-password"
 overlord
 ```
 
-Relevant provider settings include `AWS_REGION`, `AWS_BEARER_TOKEN_BEDROCK`, `GOOGLE_CLOUD_PROJECT`, and `GOOGLE_CLOUD_LOCATION`.
+Bedrock is the default routing provider. Both the container launcher and native installer support `AWS_BEARER_TOKEN_BEDROCK` plus `AWS_REGION`. When `AWS_REGION` is unset or empty, Overlord uses `eu-central-1`; export a different `AWS_REGION` to override it. The checked-in provider catalog does not fix a region, so the environment remains authoritative.
 
-They also include `AZURE_API_KEY`, `AZURE_RESOURCE_NAME`, `OPENROUTER_API_KEY`, `LMSTUDIO_BASE_URL`, and `LMSTUDIO_API_KEY`.
+Google Vertex AI uses `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION`. `GCP_PROJECT` and `GCLOUD_PROJECT` remain project aliases, and `VERTEX_LOCATION` remains the location alias. When no location or alias is supplied, Overlord sets `GOOGLE_CLOUD_LOCATION=global` because the catalog consumes that environment value.
+
+Azure uses `AZURE_API_KEY` and `AZURE_RESOURCE_NAME`. OpenRouter uses `OPENROUTER_API_KEY`.
 
 For containers, `OPENROUTER_API_KEY` is forwarded from the host when a new container is created and included in its rendered runtime environment. Recreate the container after changing the key. The native installer can select the `openrouter` preset but does not persist this credential; export it in the shell that launches native OpenCode.
 
@@ -253,9 +256,7 @@ overlord purge && overlord
 
 **A lifecycle command refuses mounts:** treat this as a data-protection stop, not a warning. Follow the concise legacy recovery procedure in [Persistence and lifecycle](#persistence-and-lifecycle).
 
-**API calls fail:** export the appropriate placeholder-replaced credential values before launching.
-
-For LM Studio in a container, confirm the host service is reachable at `host.docker.internal` or set `LMSTUDIO_BASE_URL` explicitly.
+**API calls fail:** export the appropriate placeholder-replaced credential values before launching. For the default preset, verify `AWS_BEARER_TOKEN_BEDROCK` and the effective `AWS_REGION` (default `eu-central-1`). For the Gemini preset, verify Vertex project, location, and ADC access.
 
 ## Verification
 

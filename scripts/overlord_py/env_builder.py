@@ -25,8 +25,6 @@ PROVIDER_ENV_VARS: Final = (
     "OPENROUTER_API_KEY",
     "EXA_API_KEY",
     "TAVILY_API_KEY",
-    "LMSTUDIO_BASE_URL",
-    "LMSTUDIO_API_KEY",
     "DOCKER_HOST",
     "DOCKER_TLS_VERIFY",
     "DOCKER_CERT_PATH",
@@ -98,10 +96,10 @@ def normalized_host_env(host_env: Mapping[str, str]) -> dict[str, str]:
     normalized.setdefault("TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE", "/var/run/docker.sock")
     normalized.setdefault("TESTCONTAINERS_HOST_OVERRIDE", "host.docker.internal")
     normalized.setdefault("UV_CACHE_DIR", "/home/overlord/.cache/uv")
-    normalized.setdefault("LMSTUDIO_BASE_URL", "http://host.docker.internal:1234/v1")
-    normalized.setdefault("LMSTUDIO_API_KEY", "lm-studio")
+    if not normalized.get("AWS_REGION"):
+        normalized["AWS_REGION"] = "eu-central-1"
     if not normalized.get("GOOGLE_CLOUD_LOCATION"):
-        normalized["GOOGLE_CLOUD_LOCATION"] = normalized.get("VERTEX_LOCATION", "")
+        normalized["GOOGLE_CLOUD_LOCATION"] = normalized.get("VERTEX_LOCATION") or "global"
     if not normalized.get("GOOGLE_CLOUD_PROJECT"):
         normalized["GOOGLE_CLOUD_PROJECT"] = normalized.get("GCP_PROJECT", normalized.get("GCLOUD_PROJECT", ""))
     return normalized

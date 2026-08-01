@@ -21,7 +21,10 @@ RTK integration is a generated OpenCode plugin created by the full-install workf
 | File | Role | Runtime target / note |
 |------|------|------------------------|
 | `opencode.json` | Single OpenCode provider/model catalog | Copied to `/home/overlord/.config/opencode/opencode.json` |
-| `oh-my-openagent.jsonc` | Default agent/category routing preset | Copied to `/home/overlord/.config/opencode/oh-my-openagent.jsonc` by default |
+| `oh-my-openagent.jsonc` | Default Bedrock Opus 4.5 routing preset | Copied to `/home/overlord/.config/opencode/oh-my-openagent.jsonc` by default |
+| `oh-my-openagent.azure.jsonc` | Azure GPT-5.6 Sol/Luna routing preset | Selected with `--config azure` |
+| `oh-my-openagent.gemini.jsonc` | Vertex Gemini 3.6 Flash routing preset | Selected with `--config gemini` |
+| `oh-my-openagent.openrouter.jsonc` | Existing OpenRouter routing preset | Selected with `--config openrouter` |
 | `entrypoint.sh` | Container bootstrap entrypoint | Root startup, permission repair, privilege drop |
 | `jdtls.sh` | Java LSP wrapper reference | Not installed by the shared image; Java repos own JDTLS setup |
 | `zellij-config.kdl` | Active zellij config source | Copied to `/home/overlord/.config/zellij/config.kdl` |
@@ -31,6 +34,9 @@ RTK integration is a generated OpenCode plugin created by the full-install workf
 ## LOCAL INVARIANTS
 
 - `opencode.json` is the only selectable OpenCode provider catalog; routing choices live in checked-in `oh-my-openagent*.jsonc` presets.
+- The routing preset set is exactly `default`, `azure`, `gemini`, and `openrouter`; default uses Bedrock with high reasoning effort for every category and agent except `explore`, which uses low, while the cloud-specific presets do not carry provider-inappropriate reasoning fields.
+- Bedrock region and credentials resolve from the runtime AWS environment. The catalog must not set a fixed region.
+- Vertex uses provider key `google` with `@ai-sdk/google-vertex`; `GOOGLE_CLOUD_LOCATION` is supplied by launcher/installer environment normalization.
 - RTK must integrate through `${XDG_CONFIG_HOME}/opencode/plugins/rtk.ts`, not a provider entry in `opencode.json`.
 - `entrypoint.sh` must preserve root bootstrap -> UID/GID remap -> ownership repair -> `exec gosu overlord "$@"` handoff.
 - `zellij-config.kdl` intentionally maps tab mode to `Ctrl+b` and leaves `Ctrl+t` available for app passthrough.

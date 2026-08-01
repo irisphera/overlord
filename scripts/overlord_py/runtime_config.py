@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Protocol
 
-from overlord_py.config_catalog import OpencodeRenderOptions, render_oh_my_runtime_config, render_opencode_runtime_config
+from overlord_py.config_catalog import OH_MY_OPENAGENT_PACKAGE, render_oh_my_runtime_config, render_opencode_runtime_config
 from overlord_py.engine import CommandResult
 from overlord_py.env_builder import EnvironmentPlan, render_overlord_env
 from overlord_py.paths import WorkspacePaths
@@ -68,8 +68,7 @@ class RuntimeConfigContext:
     oh_my_config_file: Path
     zellij_config_file: Path
     environment: EnvironmentPlan
-    opencode_options: OpencodeRenderOptions
-    model_override: str = ""
+    plugin_spec: str = OH_MY_OPENAGENT_PACKAGE
 
 
 class EngineRunner(Protocol):
@@ -136,7 +135,7 @@ def write_runtime_opencode_config(
         env=env,
     )
     require_success(mkdir_result)
-    content = render_opencode_runtime_config(context.opencode_config_file, context.opencode_options)
+    content = render_opencode_runtime_config(context.opencode_config_file, plugin_spec=context.plugin_spec)
     write_text(engine, paths, RUNTIME_OPENCODE_CONFIG_FILE, content, env=env)
 
 
@@ -147,7 +146,7 @@ def write_oh_my_runtime_configs(
     *,
     env: Mapping[str, str],
 ) -> None:
-    content = render_oh_my_runtime_config(context.oh_my_config_file, model_override=context.model_override)
+    content = render_oh_my_runtime_config(context.oh_my_config_file)
     write_text(engine, paths, RUNTIME_OH_MY_OPENCODE_CONFIG_FILE, content, env=env)
     write_text(engine, paths, RUNTIME_OH_MY_OPENAGENT_CONFIG_FILE, content, env=env)
 
@@ -173,7 +172,7 @@ def ensure_oh_my_openagent_runtime_config(
             "-s",
             "--",
             RUNTIME_OPENCODE_CONFIG_FILE,
-            context.opencode_options.plugin_spec,
+            context.plugin_spec,
         ],
         cwd=paths.workspace,
         env=env,
@@ -182,7 +181,7 @@ def ensure_oh_my_openagent_runtime_config(
     if config_check.returncode != 0:
         message = (
             "Ensuring OpenCode runtime config includes "
-            f"{context.opencode_options.plugin_spec} in {paths.identity.container_name}..."
+            f"{context.plugin_spec} in {paths.identity.container_name}..."
         )
         stage(message.replace("Ensuring", "Repairing", 1).replace("includes", "to include", 1))
         messages.extend(stage_return_message(stage, message))
@@ -192,12 +191,12 @@ def ensure_oh_my_openagent_runtime_config(
         stage(f"Repairing oh-my-openagent routing config in {paths.identity.container_name}...")
         message = f"Ensuring oh-my-openagent routing config in {paths.identity.container_name}..."
         messages.extend(stage_return_message(stage, message))
-        content = render_oh_my_runtime_config(context.oh_my_config_file, model_override=context.model_override)
+        content = render_oh_my_runtime_config(context.oh_my_config_file)
         write_text(engine, paths, RUNTIME_OH_MY_OPENAGENT_CONFIG_FILE, content, env=env)
         repaired = True
     if runtime_file_missing(engine, paths, RUNTIME_OH_MY_OPENCODE_CONFIG_FILE, env=env):
         stage(f"Repairing oh-my-opencode compatibility routing config in {paths.identity.container_name}...")
-        content = render_oh_my_runtime_config(context.oh_my_config_file, model_override=context.model_override)
+        content = render_oh_my_runtime_config(context.oh_my_config_file)
         write_text(engine, paths, RUNTIME_OH_MY_OPENCODE_CONFIG_FILE, content, env=env)
         repaired = True
     if repaired:

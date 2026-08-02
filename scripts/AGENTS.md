@@ -54,9 +54,8 @@ RTK lifecycle and installation remain image-owned for containers and `install`-o
 - Legacy-container migration is an explicit manual recovery procedure: quiesce first, copy unmounted state only to a separate staging directory, verify it, then remove the exact incompatible container. Never turn that procedure into an automatic launcher fallback.
 - A submodule or linked-worktree gitfile is launchable only when its resolved Git metadata remains inside the workspace bind mount. Otherwise launch modes fail before lifecycle work and direct the user to the containing repository or a standalone clone.
 - Adding or removing custom catalog providers is incomplete unless `config/opencode.json`, `PROVIDER_ENV_VARS`, and routing presets are updated together. Built-in OpenCode providers need only their routing preset and required environment forwarding.
-- Routing presets are `default` (Bedrock Opus 4.5 with high reasoning effort for every category and agent except `explore`, which uses low), `azure` (GPT-5.6 Sol/Luna), `gemini` (Vertex Gemini 3.6 Flash), `opencode-ds` (built-in OpenCode Go DeepSeek-V4-Flash-0731), and `openrouter` (existing OpenRouter routing).
+- Routing presets are `default` (byte-identical to `opencode-ds`), `azure` (GPT-5.6 Sol/Luna), `gemini` (Vertex Gemini 3.6 Flash), `opencode-ds` (built-in OpenCode Go DeepSeek-V4-Flash-0731 with reasoning effort `max` on heavy routes via the `reasoning` category field and the OpenCode-native `variant` agent key), and `openrouter` (existing OpenRouter routing).
 - `OPENCODE_API_KEY` is optional and has no default. Container creation, web, shell, and zellij forward a non-empty host value; native install records a non-empty value in mode-`600` `overlord-env` without logging it.
-- Container and native paths support only `AWS_BEARER_TOKEN_BEDROCK` and `AWS_REGION` for Bedrock; both default an unset or empty region to `eu-central-1`.
 - Google project aliases and `VERTEX_LOCATION` remain supported; when no location is supplied, both paths set `GOOGLE_CLOUD_LOCATION=global`.
 
 ## MANUAL VERIFICATION

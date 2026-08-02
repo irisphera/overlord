@@ -108,13 +108,13 @@ Checked-in `config/` is authoritative for both workflows. The native installer r
 
 The checked-in presets are:
 
-- `default` (`oh-my-openagent.jsonc`) routes every category and agent to Bedrock Claude Opus 4.5, using high reasoning effort everywhere except `explore`, which uses low reasoning effort.
+- `default` (`oh-my-openagent.jsonc`) is the same routing as `opencode-ds`: every category and agent routes to DeepSeek-V4-Flash-0731 through the built-in `opencode-go/deepseek-v4-flash` model.
 - `azure` (`oh-my-openagent.azure.jsonc`) preserves the GPT-5.6 Sol/Luna split and role-specific reasoning effort.
 - `gemini` (`oh-my-openagent.gemini.jsonc`) routes every category and agent to Gemini 3.6 Flash through Google Vertex AI.
-- `opencode-ds` (`oh-my-openagent.opencode-ds.jsonc`) routes every category and agent to DeepSeek-V4-Flash-0731 through the built-in `opencode-go/deepseek-v4-flash` model, using provider defaults without variants, reasoning fields, provider options, or concurrency limits.
+- `opencode-ds` (`oh-my-openagent.opencode-ds.jsonc`) routes every category and agent to DeepSeek-V4-Flash-0731 through the built-in `opencode-go/deepseek-v4-flash` model. Heavy categories and agents select reasoning effort `max` — categories via the canonical `reasoning` field and agents via the OpenCode-native `variant` key, which is the per-agent selector that survives the full request path for this model (it declares reasoning effort variants `high` and `max`). Light routes (`quick`, `unspecified-low`, `multimodal-looker`, `explore`, `librarian`) keep provider defaults.
 - `openrouter` (`oh-my-openagent.openrouter.jsonc`) preserves the existing OpenRouter Ling routing and concurrency limits.
 
-The single catalog contains Bedrock Claude Opus 4.5, Vertex Gemini 3.6 Flash under the intentional `google` provider selector, Azure GPT-5.6 Sol and Luna, and the existing OpenRouter Laguna model entry. OpenCode Go is built into OpenCode, so the `opencode-ds` preset does not add a custom provider or model entry to `config/opencode.json`. The Azure deployment IDs must remain `gpt-5.6-sol` and `gpt-5.6-luna` unless their `id` values in `config/opencode.json` are changed to match the deployments.
+The single catalog contains Vertex Gemini 3.6 Flash under the intentional `google` provider selector, Azure GPT-5.6 Sol and Luna, and the existing OpenRouter Laguna model entry. OpenCode Go is built into OpenCode, so the `opencode-ds` preset does not add a custom provider or model entry to `config/opencode.json`. The Azure deployment IDs must remain `gpt-5.6-sol` and `gpt-5.6-luna` unless their `id` values in `config/opencode.json` are changed to match the deployments.
 
 Managed container files are `/home/overlord/.config/opencode/opencode.json`, `oh-my-openagent.jsonc`, and `oh-my-opencode.jsonc`, plus `/home/overlord/.config/zellij/config.kdl`.
 
@@ -142,8 +142,6 @@ scripts/install --config openrouter
 Supply credentials through the launching shell; do not put real credentials in checked-in files or image layers. The container forwards configured provider, MCP, and web-password environment variables at runtime.
 
 ```bash
-export AWS_BEARER_TOKEN_BEDROCK="replace-with-your-bedrock-api-key"
-export AWS_REGION="eu-central-1"
 export AZURE_API_KEY="replace-with-your-key"
 export AZURE_RESOURCE_NAME="replace-with-your-resource"
 export GOOGLE_CLOUD_PROJECT="replace-with-your-project"
@@ -153,7 +151,7 @@ export OPENCODE_SERVER_PASSWORD="replace-with-a-password"
 overlord
 ```
 
-Bedrock is the default routing provider. Both the container launcher and native installer support `AWS_BEARER_TOKEN_BEDROCK` plus `AWS_REGION`. When `AWS_REGION` is unset or empty, Overlord uses `eu-central-1`; export a different `AWS_REGION` to override it. The checked-in provider catalog does not fix a region, so the environment remains authoritative.
+OpenCode Go is the default routing provider: the `default` preset routes every category and agent through `opencode-go/deepseek-v4-flash` and reads the `OPENCODE_API_KEY` credential from the launching environment. The checked-in provider catalog does not declare OpenCode Go because it is built into OpenCode.
 
 Google Vertex AI uses `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION`. `GCP_PROJECT` and `GCLOUD_PROJECT` remain project aliases, and `VERTEX_LOCATION` remains the location alias. When no location or alias is supplied, Overlord sets `GOOGLE_CLOUD_LOCATION=global` because the catalog consumes that environment value.
 
@@ -161,9 +159,9 @@ Azure uses `AZURE_API_KEY` and `AZURE_RESOURCE_NAME`. OpenCode Go uses `OPENCODE
 
 For persistent host setup, put the `OPENCODE_API_KEY` export in your personal shell configuration outside the repository: `~/.zshrc` for zsh, `~/.bashrc` for Bash, or use `set -Ux OPENCODE_API_KEY "replace-with-your-opencode-go-key"` for fish. Do not put the key in this repository or another tracked project file. Start a new shell, or source the updated zsh/Bash file, before running Overlord.
 
-For containers, Overlord forwards `OPENCODE_API_KEY` to container creation, web mode, shell, and zellij through the shared provider environment. After changing or removing the host key, run `overlord fresh`, then relaunch with `overlord --config opencode-ds` so the recreated container receives the new value.
+For containers, Overlord forwards `OPENCODE_API_KEY` to container creation, web mode, shell, and zellij through the shared provider environment. After changing or removing the host key, run `overlord fresh`, then relaunch with `overlord` (the default preset) so the recreated container receives the new value.
 
-For native installs, `scripts/install` writes a non-empty `OPENCODE_API_KEY` to the mode-`600` `overlord-env` file. Rerun `scripts/install --config opencode-ds` after changing the key if native OpenCode sources that file. The installer does not print the key.
+For native installs, `scripts/install` writes a non-empty `OPENCODE_API_KEY` to the mode-`600` `overlord-env` file. Rerun `scripts/install` after changing the key if native OpenCode sources that file. The installer does not print the key.
 
 For containers, `OPENROUTER_API_KEY` is forwarded from the host when a new container is created and included in its rendered runtime environment. Recreate the container after changing the key. The native installer can select the `openrouter` preset but does not persist this credential; export it in the shell that launches native OpenCode.
 
@@ -290,7 +288,7 @@ overlord purge && overlord
 
 **A lifecycle command refuses mounts:** treat this as a data-protection stop, not a warning. Follow the concise legacy recovery procedure in [Persistence and lifecycle](#persistence-and-lifecycle).
 
-**API calls fail:** export the appropriate placeholder-replaced credential values before launching. For the default preset, verify `AWS_BEARER_TOKEN_BEDROCK` and the effective `AWS_REGION` (default `eu-central-1`). For the Gemini preset, verify Vertex project, location, and ADC access.
+**API calls fail:** export the appropriate placeholder-replaced credential values before launching. For the default preset, verify `OPENCODE_API_KEY` is set in the launching shell. For the Gemini preset, verify Vertex project, location, and ADC access.
 
 ## Verification
 

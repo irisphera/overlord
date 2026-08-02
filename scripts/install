@@ -241,8 +241,6 @@ write_env_file() {
 	local var
 	local gcloud_adc
 	local provider_env_vars=(
-		AWS_REGION
-		AWS_BEARER_TOKEN_BEDROCK
 		GOOGLE_CLOUD_PROJECT
 		GOOGLE_CLOUD_LOCATION
 		AZURE_RESOURCE_NAME
@@ -257,10 +255,9 @@ write_env_file() {
 
 	stage "Writing OpenCode environment file..."
 	: "${UV_CACHE_DIR:=${XDG_CACHE_HOME}/uv}"
-	: "${AWS_REGION:=eu-central-1}"
 	: "${GOOGLE_CLOUD_LOCATION:=${VERTEX_LOCATION:-global}}"
 	: "${GOOGLE_CLOUD_PROJECT:=${GCP_PROJECT:-${GCLOUD_PROJECT:-}}}"
-	export UV_CACHE_DIR AWS_REGION GOOGLE_CLOUD_LOCATION GOOGLE_CLOUD_PROJECT
+	export UV_CACHE_DIR GOOGLE_CLOUD_LOCATION GOOGLE_CLOUD_PROJECT
 
 	mkdir -p "${RUNTIME_OPENCODE_CONFIG_DIR}"
 	chmod 700 "${RUNTIME_OPENCODE_CONFIG_DIR}" 2>/dev/null || true

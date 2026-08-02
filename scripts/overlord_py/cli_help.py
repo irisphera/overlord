@@ -22,9 +22,10 @@ COMMANDS:
 EXAMPLES:
 \t    overlord --list-configs          # List available agent routing presets
 \t    overlord                         # Start/reuse the OpenCode web UI (default config)
-\t    overlord --config default        # Use config/oh-my-openagent.jsonc
+\t    overlord --config default        # Use config/oh-my-openagent.jsonc (opencode-ds routing)
 \t    overlord --config azure          # Use Azure GPT-5.6 Sol/Luna routing
 \t    overlord --config gemini         # Route every agent and category through Vertex AI
+\t    overlord --config opencode-ds    # Route every agent and category through OpenCode Go
 \t    overlord --config openrouter     # Route every agent and category through OpenRouter
     overlord web                     # Start/reuse the OpenCode web UI explicitly
     overlord opencode                # Alias for 'overlord web'

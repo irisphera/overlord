@@ -6,6 +6,16 @@
     "lsp": "allow"
   },
   "provider": {
+    "opencode-go": {
+      "models": {
+        "deepseek-v4-flash": {
+          "limit": {
+            "context": 200000,
+            "output": 32768
+          }
+        }
+      }
+    },
     "google": {
       "npm": "@ai-sdk/google-vertex",
       "name": "Google Vertex AI",
@@ -21,22 +31,6 @@
           "limit": {
             "context": 128000,
             "output": 65536
-          }
-        }
-      }
-    },
-    "amazon-bedrock": {
-      "npm": "@ai-sdk/amazon-bedrock",
-      "name": "Amazon Bedrock",
-      "models": {
-        "anthropic.claude-opus-4-6-v1": {
-          "name": "Bedrock Opus 4.6",
-          "id": "anthropic.claude-opus-4-6-v1",
-          "reasoning": true,
-          "tool_call": true,
-          "limit": {
-            "context": 200000,
-            "output": 64000
           }
         }
       }

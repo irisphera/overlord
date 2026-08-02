@@ -13,113 +13,94 @@
     "telemetry": false
   },
   "categories": {
-    // HIGH reasoning — all categories use high effort
+    // Default routing is the opencode-ds preset: DeepSeek-V4-Flash-0731 through
+    // the built-in opencode-go provider. Categories use the canonical `reasoning`
+    // field; it is lowered to the deepseek variant/reasoning effort for delegated tasks.
     "ultrabrain": {
-      "model": "amazon-bedrock/anthropic.claude-opus-4-6-v1",
-      "reasoningEffort": "high"
+      "model": "opencode-go/deepseek-v4-flash",
+      "reasoning": "max"
     },
     "unspecified-high": {
-      "model": "amazon-bedrock/anthropic.claude-opus-4-6-v1",
-      "reasoningEffort": "high"
+      "model": "opencode-go/deepseek-v4-flash",
+      "reasoning": "max"
     },
-    // HIGH reasoning — creative, visual, and writing tasks
     "visual-engineering": {
-      "model": "amazon-bedrock/anthropic.claude-opus-4-6-v1",
-      "reasoningEffort": "high"
+      "model": "opencode-go/deepseek-v4-flash",
+      "reasoning": "max"
     },
     "artistry": {
-      "model": "amazon-bedrock/anthropic.claude-opus-4-6-v1",
-      "reasoningEffort": "high"
+      "model": "opencode-go/deepseek-v4-flash",
+      "reasoning": "max"
     },
     "writing": {
-      "model": "amazon-bedrock/anthropic.claude-opus-4-6-v1",
-      "reasoningEffort": "high"
+      "model": "opencode-go/deepseek-v4-flash",
+      "reasoning": "max"
     },
-    // HIGH reasoning — quick and unspecified-low tasks
     "quick": {
-      "model": "amazon-bedrock/anthropic.claude-opus-4-6-v1",
-      "reasoningEffort": "high"
+      "model": "opencode-go/deepseek-v4-flash"
     },
     "unspecified-low": {
-      "model": "amazon-bedrock/anthropic.claude-opus-4-6-v1",
-      "reasoningEffort": "high"
+      "model": "opencode-go/deepseek-v4-flash"
     }
   },
   "agents": {
-    // HIGH reasoning — all agents except explore
+    // Agents use the OpenCode-native `variant` key, which is the only per-agent
+    // selector that survives the full request path for opencode-go/deepseek-v4-flash
+    // (the model declares reasoning effort variants "high" and "max").
     "sisyphus": {
-      "model": "amazon-bedrock/anthropic.claude-opus-4-6-v1",
-      "reasoningEffort": "high",
-      
+      "model": "opencode-go/deepseek-v4-flash",
+      "variant": "max"
     },
     "atlas": {
-      "model": "amazon-bedrock/anthropic.claude-opus-4-6-v1",
-      "reasoningEffort": "high",
-      
+      "model": "opencode-go/deepseek-v4-flash",
+      "variant": "max"
     },
     "oracle": {
-      "model": "amazon-bedrock/anthropic.claude-opus-4-6-v1",
-      "reasoningEffort": "high",
-      
+      "model": "opencode-go/deepseek-v4-flash",
+      "variant": "max"
     },
     "prometheus": {
-      "model": "amazon-bedrock/anthropic.claude-opus-4-6-v1",
-      "reasoningEffort": "high",
-      
+      "model": "opencode-go/deepseek-v4-flash",
+      "variant": "max"
     },
     "hephaestus": {
-      "model": "amazon-bedrock/anthropic.claude-opus-4-6-v1",
-      "reasoningEffort": "high",
-      
+      "model": "opencode-go/deepseek-v4-flash",
+      "variant": "max"
     },
     "plan": {
-      "model": "amazon-bedrock/anthropic.claude-opus-4-6-v1",
-      "reasoningEffort": "high",
-      
+      "model": "opencode-go/deepseek-v4-flash",
+      "variant": "max"
     },
-    // HIGH reasoning — validation, building, and general work
     "sisyphus-junior": {
-      "model": "amazon-bedrock/anthropic.claude-opus-4-6-v1",
-      "reasoningEffort": "high",
-      
+      "model": "opencode-go/deepseek-v4-flash",
+      "variant": "max"
     },
     "OpenCode-Builder": {
-      "model": "amazon-bedrock/anthropic.claude-opus-4-6-v1",
-      "reasoningEffort": "high",
-      
+      "model": "opencode-go/deepseek-v4-flash",
+      "variant": "max"
     },
     "build": {
-      "model": "amazon-bedrock/anthropic.claude-opus-4-6-v1",
-      "reasoningEffort": "high",
-      
+      "model": "opencode-go/deepseek-v4-flash",
+      "variant": "max"
     },
     "metis": {
-      "model": "amazon-bedrock/anthropic.claude-opus-4-6-v1",
-      "reasoningEffort": "high",
-      
+      "model": "opencode-go/deepseek-v4-flash",
+      "variant": "max"
     },
     "momus": {
-      "model": "amazon-bedrock/anthropic.claude-opus-4-6-v1",
-      "reasoningEffort": "high",
-      
+      "model": "opencode-go/deepseek-v4-flash",
+      "variant": "max"
     },
     "multimodal-looker": {
-      "model": "amazon-bedrock/anthropic.claude-opus-4-6-v1",
-      "reasoningEffort": "high",
-      
+      "model": "opencode-go/deepseek-v4-flash"
     },
-    // LOW reasoning — exploration only
     "explore": {
-      "model": "amazon-bedrock/anthropic.claude-opus-4-6-v1",
-      "reasoningEffort": "low",
-      "category": "unspecified-low",
-      
+      "model": "opencode-go/deepseek-v4-flash",
+      "category": "unspecified-low"
     },
     "librarian": {
-      "model": "amazon-bedrock/anthropic.claude-opus-4-6-v1",
-      "reasoningEffort": "high",
-      "category": "unspecified-low",
-      
+      "model": "opencode-go/deepseek-v4-flash",
+      "category": "unspecified-high"
     }
   }
 }

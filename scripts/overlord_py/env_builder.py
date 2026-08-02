@@ -17,8 +17,6 @@ CODEGRAPH_NODE_BIN: Final = "/usr/bin/node"
 RTK_DB_PATH: Final = "/workspace/.overlord/rtk/history.db"
 RUNTIME_GCLOUD_ADC_FILE: Final = "/home/overlord/.config/gcloud/application_default_credentials.json"
 PROVIDER_ENV_VARS: Final = (
-    "AWS_REGION",
-    "AWS_BEARER_TOKEN_BEDROCK",
     "GOOGLE_CLOUD_PROJECT",
     "GOOGLE_CLOUD_LOCATION",
     "AZURE_RESOURCE_NAME",
@@ -98,8 +96,6 @@ def normalized_host_env(host_env: Mapping[str, str]) -> dict[str, str]:
     normalized.setdefault("TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE", "/var/run/docker.sock")
     normalized.setdefault("TESTCONTAINERS_HOST_OVERRIDE", "host.docker.internal")
     normalized.setdefault("UV_CACHE_DIR", "/home/overlord/.cache/uv")
-    if not normalized.get("AWS_REGION"):
-        normalized["AWS_REGION"] = "eu-central-1"
     if not normalized.get("GOOGLE_CLOUD_LOCATION"):
         normalized["GOOGLE_CLOUD_LOCATION"] = normalized.get("VERTEX_LOCATION") or "global"
     if not normalized.get("GOOGLE_CLOUD_PROJECT"):

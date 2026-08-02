@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import unittest
 from pathlib import Path
 from typing import Final
@@ -211,16 +212,10 @@ class NativeInstallStageTests(unittest.TestCase):
             self.assertFalse((workspace.path / "home" / ".cache").exists())
             self.assertFalse((workspace.path / "home" / ".local").exists())
 
-    def test_gemini_preset_and_supported_bedrock_environment_are_written(self) -> None:
+    def test_gemini_preset_and_supported_vertex_environment_are_written(self) -> None:
         with native_workspace() as workspace:
             home = workspace.path / "home"
             env = isolated_env(home)
-            env.update(
-                {
-                    "AWS_REGION": "us-west-2",
-                    "AWS_BEARER_TOKEN_BEDROCK": "bearer-token",
-                }
-            )
 
             result = workspace.run_command(
                 (str(INSTALLER), "--config", "gemini", "--skip-package-install"),
@@ -238,20 +233,7 @@ class NativeInstallStageTests(unittest.TestCase):
                         {"google/gemini-3.6-flash"},
                     )
             self.assertIn("export GOOGLE_CLOUD_LOCATION=global", installed_env)
-            for name, value in (
-                ("AWS_REGION", "us-west-2"),
-                ("AWS_BEARER_TOKEN_BEDROCK", "bearer-token"),
-            ):
-                with self.subTest(name=name):
-                    self.assertIn(f"export {name}={value}", installed_env)
-            self.assertEqual(
-                tuple(
-                    line.split("=", 1)[0].removeprefix("export ")
-                    for line in installed_env.splitlines()
-                    if line.startswith("export AWS_")
-                ),
-                ("AWS_REGION", "AWS_BEARER_TOKEN_BEDROCK"),
-            )
+            self.assertNotIn("export AWS_", installed_env)
 
     def test_opencode_ds_preset_and_api_key_are_written_without_logging_secret(self) -> None:
         with native_workspace() as workspace:
@@ -259,7 +241,6 @@ class NativeInstallStageTests(unittest.TestCase):
             env = isolated_env(home)
             api_key = "sentinel-opencode-api-key"
             for name in (
-                "AWS_BEARER_TOKEN_BEDROCK",
                 "AZURE_API_KEY",
                 "AZURE_RESOURCE_NAME",
                 "CONTEXT7_API_KEY",
@@ -304,18 +285,6 @@ class NativeInstallStageTests(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertNotIn("OPENCODE_API_KEY", installed_env)
-
-    def test_native_environment_defaults_aws_region_to_eu_central_1(self) -> None:
-        with native_workspace() as workspace:
-            home = workspace.path / "home"
-            env = isolated_env(home)
-            env["AWS_REGION"] = ""
-
-            result = workspace.run_command((str(INSTALLER), "--skip-package-install"), env=env)
-            installed_env = (home / ".config" / "opencode" / "overlord-env").read_text(encoding="utf-8")
-
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn("export AWS_REGION=eu-central-1", installed_env)
 
     def test_native_environment_keeps_vertex_location_alias(self) -> None:
         with native_workspace() as workspace:
@@ -370,6 +339,7 @@ def load_jsonc(path: Path) -> dict[str, dict[str, dict[str, str]]]:
     source = "\n".join(
         line for line in path.read_text(encoding="utf-8").splitlines() if not line.lstrip().startswith("//")
     )
+    source = re.sub(r",\s*([}\]])", r"\1", source)
     return json.loads(source)
 
 

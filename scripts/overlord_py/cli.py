@@ -139,7 +139,7 @@ def list_configs_decision(raw: RawArgs, repo_root: Path) -> CliParseResult:
 def extra_args_decision(extra_args: tuple[str, ...]) -> CliParseResult | None:
     provider = extra_args[0]
     match provider:
-        case "bedrock" | "gemini":
+        case "gemini":
             return failure(
                 "Error: positional provider overrides were removed\n"
                 "Use '--config <routing-preset>' for reviewed agent routing.\n"

@@ -42,7 +42,7 @@ def run_install(workspace: TempLauncherWorkspace, *args: str) -> HarnessRun:
 
 
 def isolated_env(home: Path) -> dict[str, str]:
-    return {
+    env = {
         "HOME": str(home),
         "XDG_CONFIG_HOME": str(home / ".config"),
         "XDG_CACHE_HOME": str(home / ".cache"),
@@ -50,6 +50,27 @@ def isolated_env(home: Path) -> dict[str, str]:
         "XDG_STATE_HOME": str(home / ".local" / "state"),
         "BUN_INSTALL": str(home / ".bun"),
     }
+    # Scrub provider and credential variables from the ambient environment so
+    # tests never inherit real values from the launching shell.
+    for name in (
+        "GOOGLE_CLOUD_PROJECT",
+        "GOOGLE_CLOUD_LOCATION",
+        "GCP_PROJECT",
+        "GCLOUD_PROJECT",
+        "VERTEX_LOCATION",
+        "AZURE_RESOURCE_NAME",
+        "AZURE_API_KEY",
+        "OPENCODE_API_KEY",
+        "OPENROUTER_API_KEY",
+        "EXA_API_KEY",
+        "TAVILY_API_KEY",
+        "CONTEXT7_API_KEY",
+        "UV_CACHE_DIR",
+        "OPENCODE_SERVER_PASSWORD",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+    ):
+        env[name] = ""
+    return env
 
 
 def install_fake_package_commands(

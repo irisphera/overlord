@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import unittest
 from pathlib import Path
 from typing import Final, TypeAlias
@@ -8,7 +9,6 @@ from typing import Final, TypeAlias
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[2]
 CONFIG_DIR: Final = REPO_ROOT / "config"
-BEDROCK_MODEL: Final = "amazon-bedrock/anthropic.claude-opus-4-5-20251101-v1:0"
 GEMINI_MODEL: Final = "google/gemini-3.6-flash"
 OPENROUTER_MODEL: Final = "openrouter/inclusionai/ling-3.0-flash:free"
 OPENCODE_DS_MODEL: Final = "opencode-go/deepseek-v4-flash"
@@ -39,6 +39,22 @@ AGENT_NAMES: Final = {
     "explore",
     "librarian",
 }
+HEAVY_CATEGORIES: Final = {"ultrabrain", "unspecified-high", "visual-engineering", "artistry", "writing"}
+LIGHT_CATEGORIES: Final = {"quick", "unspecified-low"}
+HEAVY_AGENTS: Final = {
+    "sisyphus",
+    "atlas",
+    "oracle",
+    "prometheus",
+    "hephaestus",
+    "plan",
+    "sisyphus-junior",
+    "OpenCode-Builder",
+    "build",
+    "metis",
+    "momus",
+}
+LIGHT_AGENTS: Final = {"multimodal-looker", "explore", "librarian"}
 
 
 class RoutingCatalogTests(unittest.TestCase):
@@ -46,7 +62,7 @@ class RoutingCatalogTests(unittest.TestCase):
         catalog = load_json(CONFIG_DIR / "opencode.json")
         providers = require_object(catalog["provider"])
 
-        self.assertEqual(set(providers), {"amazon-bedrock", "azure", "google", "openrouter"})
+        self.assertEqual(set(providers), {"azure", "google", "openrouter"})
 
         google = require_object(providers["google"])
         self.assertEqual(google["npm"], "@ai-sdk/google-vertex")
@@ -58,21 +74,8 @@ class RoutingCatalogTests(unittest.TestCase):
         self.assertEqual(set(google_models), {"gemini-3.6-flash"})
         gemini = require_object(google_models["gemini-3.6-flash"])
         self.assertEqual(gemini["id"], "gemini-3.6-flash")
-        self.assertEqual(gemini["limit"], {"context": 1048576, "output": 65536})
+        self.assertEqual(gemini["limit"], {"context": 128000, "output": 65536})
         self.assertEqual(gemini["tool_call"], True)
-
-        bedrock = require_object(providers["amazon-bedrock"])
-        self.assertEqual(bedrock["npm"], "@ai-sdk/amazon-bedrock")
-        bedrock_models = require_object(bedrock["models"])
-        self.assertEqual(set(bedrock_models), {"anthropic.claude-opus-4-5-20251101-v1:0"})
-        opus = require_object(bedrock_models["anthropic.claude-opus-4-5-20251101-v1:0"])
-        self.assertEqual(opus["id"], "anthropic.claude-opus-4-5-20251101-v1:0")
-        self.assertEqual(opus["name"], "Claude Opus 4.5")
-        self.assertEqual(opus["reasoning"], True)
-        self.assertEqual(opus["tool_call"], True)
-        self.assertEqual(opus["limit"], {"context": 100000, "output": 64000})
-        self.assertNotIn("region", bedrock)
-        self.assertNotIn("options", bedrock)
 
         azure = require_object(providers["azure"])
         azure_models = require_object(azure["models"])
@@ -89,42 +92,49 @@ class RoutingCatalogTests(unittest.TestCase):
         laguna = require_object(openrouter_models["poolside/laguna-s-2.1:free"])
         self.assertEqual(laguna["limit"], {"context": 262144, "output": 32768})
 
-    def test_default_routes_every_category_and_agent_to_bedrock(self) -> None:
+    def test_default_preset_matches_opencode_ds_routing(self) -> None:
         default = load_jsonc(CONFIG_DIR / "oh-my-openagent.jsonc")
+        opencode_ds = load_jsonc(CONFIG_DIR / "oh-my-openagent.opencode-ds.jsonc")
 
-        self.assertEqual(route_models(default, "categories"), {name: BEDROCK_MODEL for name in CATEGORY_NAMES})
-        self.assertEqual(route_models(default, "agents"), {name: BEDROCK_MODEL for name in AGENT_NAMES})
-        self.assertEqual(
-            reasoning_efforts(default, "categories"),
-            {
-                "ultrabrain": "high",
-                "unspecified-high": "high",
-                "visual-engineering": "high",
-                "artistry": "high",
-                "writing": "high",
-                "quick": "high",
-                "unspecified-low": "high",
-            },
-        )
-        self.assertEqual(
-            reasoning_efforts(default, "agents"),
-            {
-                "sisyphus": "high",
-                "atlas": "high",
-                "oracle": "high",
-                "prometheus": "high",
-                "hephaestus": "high",
-                "plan": "high",
-                "sisyphus-junior": "high",
-                "OpenCode-Builder": "high",
-                "build": "high",
-                "metis": "high",
-                "momus": "high",
-                "multimodal-looker": "high",
-                "explore": "low",
-                "librarian": "high",
-            },
-        )
+        self.assertEqual(default, opencode_ds)
+        self.assert_opencode_ds_routing(default)
+
+    def test_opencode_ds_routes_every_category_and_agent_through_deepseek_v4_flash(self) -> None:
+        opencode_ds = load_jsonc(CONFIG_DIR / "oh-my-openagent.opencode-ds.jsonc")
+        azure = load_jsonc(CONFIG_DIR / "oh-my-openagent.azure.jsonc")
+
+        self.assert_opencode_ds_routing(opencode_ds)
+        for setting in ("sisyphus_agent", "team_mode", "codegraph"):
+            with self.subTest(setting=setting):
+                self.assertEqual(opencode_ds[setting], azure[setting])
+        self.assertNotIn("background_task", opencode_ds)
+
+    def assert_opencode_ds_routing(self, config: JSON_OBJECT) -> None:
+        self.assertEqual(route_models(config, "categories"), {name: OPENCODE_DS_MODEL for name in CATEGORY_NAMES})
+        self.assertEqual(route_models(config, "agents"), {name: OPENCODE_DS_MODEL for name in AGENT_NAMES})
+
+        categories = require_object(config["categories"])
+        for name in HEAVY_CATEGORIES:
+            with self.subTest(category=name):
+                route = require_object(categories[name])
+                self.assertEqual(set(route), {"model", "reasoning"})
+                self.assertEqual(route["reasoning"], "max")
+        for name in LIGHT_CATEGORIES:
+            with self.subTest(category=name):
+                self.assertEqual(set(require_object(categories[name])), {"model"})
+
+        agents = require_object(config["agents"])
+        for name in HEAVY_AGENTS:
+            with self.subTest(agent=name):
+                route = require_object(agents[name])
+                self.assertEqual(set(route), {"model", "variant"})
+                self.assertEqual(route["variant"], "max")
+        for name in LIGHT_AGENTS:
+            with self.subTest(agent=name):
+                route = require_object(agents[name])
+                self.assertEqual(set(route), {"model", "category"} if name in {"explore", "librarian"} else {"model"})
+                if "category" in route:
+                    self.assertEqual(route["category"], "unspecified-low" if name == "explore" else "unspecified-high")
 
     def test_gemini_routes_every_category_and_agent_to_vertex_selector(self) -> None:
         gemini = load_jsonc(CONFIG_DIR / "oh-my-openagent.gemini.jsonc")
@@ -198,27 +208,6 @@ class RoutingCatalogTests(unittest.TestCase):
         self.assertEqual(openrouter["background_task"], {"providerConcurrency": {"openrouter": 1}})
         self.assertEqual(openrouter["team_mode"], {"enabled": True, "max_parallel_members": 1})
 
-    def test_opencode_ds_routes_every_category_and_agent_with_model_only(self) -> None:
-        opencode_ds = load_jsonc(CONFIG_DIR / "oh-my-openagent.opencode-ds.jsonc")
-        azure = load_jsonc(CONFIG_DIR / "oh-my-openagent.azure.jsonc")
-
-        self.assertEqual(route_models(opencode_ds, "categories"), {name: OPENCODE_DS_MODEL for name in CATEGORY_NAMES})
-        self.assertEqual(route_models(opencode_ds, "agents"), {name: OPENCODE_DS_MODEL for name in AGENT_NAMES})
-        for setting in ("sisyphus_agent", "team_mode", "codegraph"):
-            with self.subTest(setting=setting):
-                self.assertEqual(opencode_ds[setting], azure[setting])
-        self.assertNotIn("background_task", opencode_ds)
-
-        for section in ("categories", "agents"):
-            routes = require_object(opencode_ds[section])
-            for name, route_value in routes.items():
-                route = require_object(route_value)
-                expected_keys = {"model", "category"} if name in {"explore", "librarian"} else {"model"}
-                with self.subTest(section=section, name=name):
-                    self.assertEqual(set(route), expected_keys)
-                    if "category" in expected_keys:
-                        self.assertEqual(route["category"], "unspecified-low")
-
 
 def load_json(path: Path) -> JSON_OBJECT:
     loaded: JSON_VALUE = json.loads(path.read_text(encoding="utf-8"))
@@ -229,6 +218,7 @@ def load_jsonc(path: Path) -> JSON_OBJECT:
     source = "\n".join(
         line for line in path.read_text(encoding="utf-8").splitlines() if not line.lstrip().startswith("//")
     )
+    source = re.sub(r",\s*([}\]])", r"\1", source)
     loaded: JSON_VALUE = json.loads(source)
     return require_object(loaded)
 

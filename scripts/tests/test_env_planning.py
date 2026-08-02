@@ -36,8 +36,6 @@ SENTINEL_OPENCODE_API_KEY: Final = "sentinel-opencode-api-key"
 SENTINEL_OPENROUTER: Final = "sentinel-openrouter-secret"
 SENTINEL_OPENCODE_PASSWORD: Final = "sentinel-opencode-password"
 EXPECTED_PROVIDER_ENV_VARS: Final = (
-    "AWS_REGION",
-    "AWS_BEARER_TOKEN_BEDROCK",
     "GOOGLE_CLOUD_PROJECT",
     "GOOGLE_CLOUD_LOCATION",
     "AZURE_RESOURCE_NAME",
@@ -54,7 +52,6 @@ EXPECTED_PROVIDER_ENV_VARS: Final = (
     "TESTCONTAINERS_RYUK_DISABLED",
     "UV_CACHE_DIR",
 )
-EXPECTED_AWS_ENV_VARS: Final = ("AWS_REGION", "AWS_BEARER_TOKEN_BEDROCK")
 
 
 class PathEngineStateTests(unittest.TestCase):
@@ -139,7 +136,6 @@ class PathEngineStateTests(unittest.TestCase):
 class EnvironmentPlanningTests(unittest.TestCase):
     def test_provider_lists_match_bash_readme_and_mcp_credentials_are_explicit(self) -> None:
         self.assertEqual(PROVIDER_ENV_VARS, EXPECTED_PROVIDER_ENV_VARS)
-        self.assertEqual(tuple(name for name in PROVIDER_ENV_VARS if name.startswith("AWS_")), EXPECTED_AWS_ENV_VARS)
         self.assertEqual(MCP_CREDENTIAL_ENV_VARS, ("CONTEXT7_API_KEY", "EXA_API_KEY", "TAVILY_API_KEY"))
 
     def test_empty_opencode_password_is_explicit_once_for_web_only(self) -> None:
@@ -184,8 +180,6 @@ class EnvironmentPlanningTests(unittest.TestCase):
                 "TAVILY_API_KEY": "tavily-secret",
                 "GCP_PROJECT": "gcp-project",
                 "VERTEX_LOCATION": "us-central1",
-                "AWS_REGION": "us-west-2",
-                "AWS_BEARER_TOKEN_BEDROCK": "bearer-token",
             }
 
             plan = build_environment_plan(host_env, home=home, workspace_name="My Project!")
@@ -201,8 +195,6 @@ class EnvironmentPlanningTests(unittest.TestCase):
         self.assertNotIn(f"OPENCODE_SERVER_PASSWORD={SENTINEL_OPENCODE_PASSWORD}", plan.exec_env_values)
         self.assertIn("GOOGLE_CLOUD_PROJECT=gcp-project", plan.exec_env_values)
         self.assertIn("GOOGLE_CLOUD_LOCATION=us-central1", plan.exec_env_values)
-        self.assertIn("AWS_REGION=us-west-2", plan.exec_env_values)
-        self.assertIn("AWS_BEARER_TOKEN_BEDROCK=bearer-token", plan.exec_env_values)
         self.assertEqual(plan.package_env["UV_CACHE_DIR"], "/home/overlord/.cache/uv")
         self.assertIn("DOCKER_HOST=unix:///var/run/docker.sock", plan.exec_env_values)
         self.assertIn("TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock", plan.exec_env_values)
@@ -212,18 +204,6 @@ class EnvironmentPlanningTests(unittest.TestCase):
         self.assertNotIn(SENTINEL_OPENCODE_API_KEY, plan.redacted_summary())
         self.assertNotIn(SENTINEL_OPENROUTER, plan.redacted_summary())
         self.assertNotIn(SENTINEL_OPENCODE_PASSWORD, plan.redacted_summary())
-
-    def test_aws_region_defaults_to_eu_central_1_and_honors_override(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="overlord-aws-region-") as temp_home:
-            home = Path(temp_home)
-
-            default_plan = build_environment_plan({}, home=home, workspace_name="demo")
-            override_plan = build_environment_plan({"AWS_REGION": "us-west-2"}, home=home, workspace_name="demo")
-
-        self.assertEqual(default_plan.provider_env["AWS_REGION"], "eu-central-1")
-        self.assertIn("AWS_REGION=eu-central-1", default_plan.exec_env_values)
-        self.assertEqual(override_plan.provider_env["AWS_REGION"], "us-west-2")
-        self.assertIn("AWS_REGION=us-west-2", override_plan.exec_env_values)
 
     def test_google_location_defaults_to_global_without_location_alias(self) -> None:
         with tempfile.TemporaryDirectory(prefix="overlord-env-home-") as temp_home:
@@ -266,7 +246,6 @@ class EnvironmentPlanningTests(unittest.TestCase):
                     "AZURE_API_KEY": SENTINEL_AZURE,
                     "OPENCODE_API_KEY": SENTINEL_OPENCODE_API_KEY,
                     "OPENROUTER_API_KEY": SENTINEL_OPENROUTER,
-                    "AWS_BEARER_TOKEN_BEDROCK": "bearer-token",
                     "EXA_API_KEY": SENTINEL_EXA,
                     "OPENCODE_SERVER_PASSWORD": SENTINEL_OPENCODE_PASSWORD,
                 },
@@ -279,12 +258,6 @@ class EnvironmentPlanningTests(unittest.TestCase):
         self.assertIn(f"export AZURE_API_KEY={SENTINEL_AZURE}", rendered)
         self.assertIn(f"export OPENCODE_API_KEY={SENTINEL_OPENCODE_API_KEY}", rendered)
         self.assertIn(f"export OPENROUTER_API_KEY={SENTINEL_OPENROUTER}", rendered)
-        self.assertIn("export AWS_REGION=eu-central-1", rendered)
-        self.assertIn("export AWS_BEARER_TOKEN_BEDROCK=bearer-token", rendered)
-        self.assertEqual(
-            tuple(line.split("=", 1)[0].removeprefix("export ") for line in rendered.splitlines() if line.startswith("export AWS_")),
-            EXPECTED_AWS_ENV_VARS,
-        )
         self.assertIn(f"export EXA_API_KEY={SENTINEL_EXA}", rendered)
         self.assertIn("export GOOGLE_APPLICATION_CREDENTIALS=/home/overlord/.config/gcloud/application_default_credentials.json", rendered)
         self.assertIn("export CODEGRAPH_INSTALL_DIR=/home/overlord/.omo/codegraph", rendered)

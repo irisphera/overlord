@@ -27,6 +27,7 @@ from overlord_py.paths import (
 from overlord_py.persisted_state_mounts import MountSafetyFailure
 from overlord_py.progress import stdout_stage
 from overlord_py.runtime_config import RestartState, RuntimeConfigContext, ensure_oh_my_openagent_runtime_config, inject_initial_runtime_config
+from overlord_py.state import ensure_state_dir
 from overlord_py.terminal import run_terminal_command, terminal_title
 from overlord_py.web_server import (
     WebServerError,
@@ -112,6 +113,7 @@ def run_launcher(engine: ContainerEngine, paths: WorkspacePaths, options: CliOpt
 
 def run_container_command(engine: ContainerEngine, paths: WorkspacePaths, options: CliOptions, host_env: Mapping[str, str]) -> int:
     ensure_gitdir_within_workspace(paths)
+    _ = ensure_state_dir(paths.state)
     write_messages(ensure_image(engine, paths, env=host_env, stage=stdout_stage))
     home = Path(host_env.get("HOME", str(Path.home())))
     environment = build_environment_plan(host_env, home=home, workspace_name=paths.identity.workspace_name)

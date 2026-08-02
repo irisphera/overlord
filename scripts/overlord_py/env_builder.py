@@ -14,6 +14,7 @@ CONTAINER_HOME: Final = "/home/overlord"
 CODEGRAPH_INSTALL_DIR: Final = "/home/overlord/.omo/codegraph"
 CODEGRAPH_BIN: Final = "/home/overlord/.local/bin/codegraph"
 CODEGRAPH_NODE_BIN: Final = "/usr/bin/node"
+RTK_DB_PATH: Final = "/workspace/.overlord/rtk/history.db"
 RUNTIME_GCLOUD_ADC_FILE: Final = "/home/overlord/.config/gcloud/application_default_credentials.json"
 PROVIDER_ENV_VARS: Final = (
     "AWS_REGION",
@@ -22,6 +23,7 @@ PROVIDER_ENV_VARS: Final = (
     "GOOGLE_CLOUD_LOCATION",
     "AZURE_RESOURCE_NAME",
     "AZURE_API_KEY",
+    "OPENCODE_API_KEY",
     "OPENROUTER_API_KEY",
     "EXA_API_KEY",
     "TAVILY_API_KEY",
@@ -138,6 +140,7 @@ def base_exec_env(host_env: Mapping[str, str], workspace_name: str) -> list[str]
         f"CODEGRAPH_INSTALL_DIR={CODEGRAPH_INSTALL_DIR}",
         f"OMO_CODEGRAPH_BIN={CODEGRAPH_BIN}",
         f"CODEGRAPH_NODE_BIN={CODEGRAPH_NODE_BIN}",
+        f"RTK_DB_PATH={RTK_DB_PATH}",
     ]
 
 
@@ -187,6 +190,7 @@ def render_overlord_env(plan: EnvironmentPlan) -> str:
             f"export CODEGRAPH_INSTALL_DIR={quote_env(CODEGRAPH_INSTALL_DIR)}",
             f"export OMO_CODEGRAPH_BIN={quote_env(CODEGRAPH_BIN)}",
             f"export CODEGRAPH_NODE_BIN={quote_env(CODEGRAPH_NODE_BIN)}",
+            f"export RTK_DB_PATH={quote_env(RTK_DB_PATH)}",
             f"export OVERLORD_WORKSPACE={quote_env(plan.workspace_name)}",
             TITLE_HOOKS.rstrip("\n"),
         )

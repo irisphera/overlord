@@ -24,6 +24,7 @@ RTK integration is a generated OpenCode plugin created by the full-install workf
 | `oh-my-openagent.jsonc` | Default Bedrock Opus 4.5 routing preset | Copied to `/home/overlord/.config/opencode/oh-my-openagent.jsonc` by default |
 | `oh-my-openagent.azure.jsonc` | Azure GPT-5.6 Sol/Luna routing preset | Selected with `--config azure` |
 | `oh-my-openagent.gemini.jsonc` | Vertex Gemini 3.6 Flash routing preset | Selected with `--config gemini` |
+| `oh-my-openagent.opencode-ds.jsonc` | OpenCode Go DeepSeek-V4-Flash-0731 routing preset | Selected with `--config opencode-ds` |
 | `oh-my-openagent.openrouter.jsonc` | Existing OpenRouter routing preset | Selected with `--config openrouter` |
 | `entrypoint.sh` | Container bootstrap entrypoint | Root startup, permission repair, privilege drop |
 | `jdtls.sh` | Java LSP wrapper reference | Not installed by the shared image; Java repos own JDTLS setup |
@@ -34,7 +35,8 @@ RTK integration is a generated OpenCode plugin created by the full-install workf
 ## LOCAL INVARIANTS
 
 - `opencode.json` is the only selectable OpenCode provider catalog; routing choices live in checked-in `oh-my-openagent*.jsonc` presets.
-- The routing preset set is exactly `default`, `azure`, `gemini`, and `openrouter`; default uses Bedrock with high reasoning effort for every category and agent except `explore`, which uses low, while the cloud-specific presets do not carry provider-inappropriate reasoning fields.
+- The routing preset set is exactly `default`, `azure`, `gemini`, `opencode-ds`, and `openrouter`; default uses Bedrock with high reasoning effort for every category and agent except `explore`, which uses low, while the cloud-specific presets do not carry provider-inappropriate reasoning fields.
+- `opencode-ds` uses the built-in `opencode-go/deepseek-v4-flash` model for DeepSeek-V4-Flash-0731. It keeps only model routes plus the `explore`/`librarian` low-category override, with no variant, reasoning, provider-option, custom-catalog, or concurrency fields.
 - Bedrock region and credentials resolve from the runtime AWS environment. The catalog must not set a fixed region.
 - Vertex uses provider key `google` with `@ai-sdk/google-vertex`; `GOOGLE_CLOUD_LOCATION` is supplied by launcher/installer environment normalization.
 - RTK must integrate through `${XDG_CONFIG_HOME}/opencode/plugins/rtk.ts`, not a provider entry in `opencode.json`.

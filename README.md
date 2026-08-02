@@ -10,6 +10,8 @@ Container isolation separates the workspace filesystem and toolchain; it is not 
 
 Choose **native** when OpenCode must run directly on the host. `scripts/install` configures and optionally installs host packages; it does not launch web mode, create containers or `.overlord`, or install zellij.
 
+The managed workspace-state layout described below belongs only to the container launcher. `scripts/install` remains unchanged and does not create, migrate, or manage workspace `.omo`, `.codegraph`, or RTK history.
+
 ## Container quick start
 
 The launcher requires host Python 3 and either Podman or Docker. It selects Podman when available and otherwise uses Docker.
@@ -46,6 +48,7 @@ overlord --list-configs          # list checked-in routing presets
 overlord --config default        # select the default routing preset
 overlord --config azure          # use Azure GPT-5.6 Sol/Luna routing
 overlord --config gemini         # route every agent/category through Vertex AI
+overlord --config opencode-ds    # route every agent/category through OpenCode Go
 overlord --config openrouter     # route every agent/category through OpenRouter
 overlord fresh                   # request container removal; retain image and .overlord state
 overlord purge                   # remove the container and image; retain .overlord state
@@ -68,6 +71,7 @@ scripts/install --list-configs
 scripts/install --config default
 scripts/install --config azure
 scripts/install --config gemini
+scripts/install --config opencode-ds
 scripts/install --config openrouter
 ```
 
@@ -107,9 +111,10 @@ The checked-in presets are:
 - `default` (`oh-my-openagent.jsonc`) routes every category and agent to Bedrock Claude Opus 4.5, using high reasoning effort everywhere except `explore`, which uses low reasoning effort.
 - `azure` (`oh-my-openagent.azure.jsonc`) preserves the GPT-5.6 Sol/Luna split and role-specific reasoning effort.
 - `gemini` (`oh-my-openagent.gemini.jsonc`) routes every category and agent to Gemini 3.6 Flash through Google Vertex AI.
+- `opencode-ds` (`oh-my-openagent.opencode-ds.jsonc`) routes every category and agent to DeepSeek-V4-Flash-0731 through the built-in `opencode-go/deepseek-v4-flash` model, using provider defaults without variants, reasoning fields, provider options, or concurrency limits.
 - `openrouter` (`oh-my-openagent.openrouter.jsonc`) preserves the existing OpenRouter Ling routing and concurrency limits.
 
-The single catalog contains Bedrock Claude Opus 4.5, Vertex Gemini 3.6 Flash under the intentional `google` provider selector, Azure GPT-5.6 Sol and Luna, and the existing OpenRouter Laguna model entry. The Azure deployment IDs must remain `gpt-5.6-sol` and `gpt-5.6-luna` unless their `id` values in `config/opencode.json` are changed to match the deployments.
+The single catalog contains Bedrock Claude Opus 4.5, Vertex Gemini 3.6 Flash under the intentional `google` provider selector, Azure GPT-5.6 Sol and Luna, and the existing OpenRouter Laguna model entry. OpenCode Go is built into OpenCode, so the `opencode-ds` preset does not add a custom provider or model entry to `config/opencode.json`. The Azure deployment IDs must remain `gpt-5.6-sol` and `gpt-5.6-luna` unless their `id` values in `config/opencode.json` are changed to match the deployments.
 
 Managed container files are `/home/overlord/.config/opencode/opencode.json`, `oh-my-openagent.jsonc`, and `oh-my-opencode.jsonc`, plus `/home/overlord/.config/zellij/config.kdl`.
 
@@ -120,11 +125,13 @@ overlord --list-configs
 overlord --config default
 overlord --config azure
 overlord --config gemini
+overlord --config opencode-ds
 overlord --config openrouter
 scripts/install --list-configs
 scripts/install --config default
 scripts/install --config azure
 scripts/install --config gemini
+scripts/install --config opencode-ds
 scripts/install --config openrouter
 ```
 
@@ -140,6 +147,7 @@ export AWS_REGION="eu-central-1"
 export AZURE_API_KEY="replace-with-your-key"
 export AZURE_RESOURCE_NAME="replace-with-your-resource"
 export GOOGLE_CLOUD_PROJECT="replace-with-your-project"
+export OPENCODE_API_KEY="replace-with-your-opencode-go-key"
 export OPENROUTER_API_KEY="replace-with-your-key"
 export OPENCODE_SERVER_PASSWORD="replace-with-a-password"
 overlord
@@ -149,7 +157,13 @@ Bedrock is the default routing provider. Both the container launcher and native 
 
 Google Vertex AI uses `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION`. `GCP_PROJECT` and `GCLOUD_PROJECT` remain project aliases, and `VERTEX_LOCATION` remains the location alias. When no location or alias is supplied, Overlord sets `GOOGLE_CLOUD_LOCATION=global` because the catalog consumes that environment value.
 
-Azure uses `AZURE_API_KEY` and `AZURE_RESOURCE_NAME`. OpenRouter uses `OPENROUTER_API_KEY`.
+Azure uses `AZURE_API_KEY` and `AZURE_RESOURCE_NAME`. OpenCode Go uses `OPENCODE_API_KEY`. OpenRouter uses `OPENROUTER_API_KEY`.
+
+For persistent host setup, put the `OPENCODE_API_KEY` export in your personal shell configuration outside the repository: `~/.zshrc` for zsh, `~/.bashrc` for Bash, or use `set -Ux OPENCODE_API_KEY "replace-with-your-opencode-go-key"` for fish. Do not put the key in this repository or another tracked project file. Start a new shell, or source the updated zsh/Bash file, before running Overlord.
+
+For containers, Overlord forwards `OPENCODE_API_KEY` to container creation, web mode, shell, and zellij through the shared provider environment. After changing or removing the host key, run `overlord fresh`, then relaunch with `overlord --config opencode-ds` so the recreated container receives the new value.
+
+For native installs, `scripts/install` writes a non-empty `OPENCODE_API_KEY` to the mode-`600` `overlord-env` file. Rerun `scripts/install --config opencode-ds` after changing the key if native OpenCode sources that file. The installer does not print the key.
 
 For containers, `OPENROUTER_API_KEY` is forwarded from the host when a new container is created and included in its rendered runtime environment. Recreate the container after changing the key. The native installer can select the `openrouter` preset but does not persist this credential; export it in the shell that launches native OpenCode.
 
@@ -170,11 +184,29 @@ Rerun `overlord` after changing or removing `EXA_API_KEY` or `OPENCODE_SERVER_PA
 
 Each workspace receives one persistent container and a git-ignored `.overlord/` directory.
 
-OpenCode data and zsh data are direct writable bind mounts from `.overlord/`, so conversations, memory, and shell history survive both `fresh` and `purge`.
+The workspace keeps managed tool state at these paths:
+
+| Managed path | Purpose |
+| --- | --- |
+| `.overlord/.omo/` | Workspace oh-my-openagent state |
+| `.overlord/.codegraph/` | Workspace CodeGraph index and state |
+| `.overlord/rtk/history.db` | Workspace RTK history, exposed in the container as `/workspace/.overlord/rtk/history.db` |
+
+The workspace root contains literal relative links `.omo -> .overlord/.omo` and `.codegraph -> .overlord/.codegraph`. These links keep the tools' expected workspace entry points while storing their data under `.overlord/`.
+
+Normal launch commands preflight this layout after the workspace Git topology check and before any image or container lifecycle work. If a lone root `.omo/` or `.codegraph/` directory exists and its managed counterpart does not, Overlord moves that directory to `.overlord/.omo/` or `.overlord/.codegraph/`, then installs the relative link. This is a rename, not a copy or merge.
+
+If a root directory and its managed directory both exist independently, launch refuses and preserves both. Overlord does not copy, merge, or delete either entry. Reconcile the contents manually, leaving the managed directory and expected relative link, then launch again. Unsafe files, unexpected links, broken managed links, and other ambiguous layouts also fail closed. `fresh`, `purge`, `help`, and config listing remain available while normal launch is blocked.
+
+OpenCode data and zsh data are direct writable bind mounts from `.overlord/`. The managed `.omo`, `.codegraph`, and RTK paths live inside the workspace mount. Together, these paths keep conversations, memory, shell history, workspace indexes, and workspace RTK history across both `fresh` and `purge`.
+
+Overlord does not migrate RTK history from an older global location. Container RTK history written through `RTK_DB_PATH=/workspace/.overlord/rtk/history.db` uses the managed path.
 
 `fresh` requests removal of the workspace container but keeps its image and `.overlord/` state. `purge` removes the container and image; the next launch rebuilds them.
 
 Packages installed into a container outside persisted mounts disappear with `fresh`.
+
+Workspace `.codegraph` is state, not the CodeGraph package installation. The container installs that package under `/home/overlord/.omo/codegraph`; it can be recreated with the container and must not be confused with `/workspace/.codegraph`, which links to persistent `.overlord/.codegraph` state.
 
 Before `fresh`, or before `purge` removes an existing container, Overlord verifies exactly one writable bind mount for `/workspace`, OpenCode data, and zsh data, each from the expected workspace source. If `purge` proves the container is already absent, it skips mount inspection and continues image cleanup.
 
@@ -234,6 +266,8 @@ Open zellij with `overlord zellij`. Its checked-in configuration uses zsh, maps 
 Both full-install workflows pin RTK through `config/tool-versions.env`. The Docker image selects the matching Linux release asset from `TARGETARCH`; the native installer selects it from `uname -m`. Both require the exact `rtk VERSION` output and initialize the OpenCode plugin as the user who runs OpenCode.
 
 RTK integration is provided by `${XDG_CONFIG_HOME:-$HOME/.config}/opencode/plugins/rtk.ts`; it does not add a provider or modify `config/opencode.json`.
+
+In the container workflow, the launcher fixes `RTK_DB_PATH` at `/workspace/.overlord/rtk/history.db` for container creation, terminal sessions, and web-server restarts. The image still owns RTK installation and plugin initialization. The native `scripts/install` workflow keeps its existing host behavior and does not use the managed workspace RTK path.
 
 ## Troubleshooting
 

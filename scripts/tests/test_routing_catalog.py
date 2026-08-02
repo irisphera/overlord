@@ -11,6 +11,7 @@ CONFIG_DIR: Final = REPO_ROOT / "config"
 BEDROCK_MODEL: Final = "amazon-bedrock/anthropic.claude-opus-4-5-20251101-v1:0"
 GEMINI_MODEL: Final = "google/gemini-3.6-flash"
 OPENROUTER_MODEL: Final = "openrouter/inclusionai/ling-3.0-flash:free"
+OPENCODE_DS_MODEL: Final = "opencode-go/deepseek-v4-flash"
 JSON_VALUE: TypeAlias = None | bool | int | float | str | list["JSON_VALUE"] | dict[str, "JSON_VALUE"]
 JSON_OBJECT: TypeAlias = dict[str, JSON_VALUE]
 CATEGORY_NAMES: Final = {
@@ -196,6 +197,27 @@ class RoutingCatalogTests(unittest.TestCase):
         self.assertEqual(route_models(openrouter, "agents"), {name: OPENROUTER_MODEL for name in AGENT_NAMES})
         self.assertEqual(openrouter["background_task"], {"providerConcurrency": {"openrouter": 1}})
         self.assertEqual(openrouter["team_mode"], {"enabled": True, "max_parallel_members": 1})
+
+    def test_opencode_ds_routes_every_category_and_agent_with_model_only(self) -> None:
+        opencode_ds = load_jsonc(CONFIG_DIR / "oh-my-openagent.opencode-ds.jsonc")
+        azure = load_jsonc(CONFIG_DIR / "oh-my-openagent.azure.jsonc")
+
+        self.assertEqual(route_models(opencode_ds, "categories"), {name: OPENCODE_DS_MODEL for name in CATEGORY_NAMES})
+        self.assertEqual(route_models(opencode_ds, "agents"), {name: OPENCODE_DS_MODEL for name in AGENT_NAMES})
+        for setting in ("sisyphus_agent", "team_mode", "codegraph"):
+            with self.subTest(setting=setting):
+                self.assertEqual(opencode_ds[setting], azure[setting])
+        self.assertNotIn("background_task", opencode_ds)
+
+        for section in ("categories", "agents"):
+            routes = require_object(opencode_ds[section])
+            for name, route_value in routes.items():
+                route = require_object(route_value)
+                expected_keys = {"model", "category"} if name in {"explore", "librarian"} else {"model"}
+                with self.subTest(section=section, name=name):
+                    self.assertEqual(set(route), expected_keys)
+                    if "category" in expected_keys:
+                        self.assertEqual(route["category"], "unspecified-low")
 
 
 def load_json(path: Path) -> JSON_OBJECT:

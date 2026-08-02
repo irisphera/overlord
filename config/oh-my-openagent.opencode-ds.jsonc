@@ -1,0 +1,85 @@
+{
+  "$schema": "https://raw.githubusercontent.com/code-yeongyu/oh-my-openagent/dev/assets/oh-my-opencode.schema.json",
+  "sisyphus_agent": {
+    "planner_enabled": true,
+    "replace_plan": true
+  },
+  "team_mode": {
+    "enabled": true
+  },
+  "codegraph": {
+    "enabled": true,
+    "auto_provision": true,
+    "telemetry": false
+  },
+  "categories": {
+    // DeepSeek-V4-Flash-0731 uses opencode-go provider defaults for every route.
+    "ultrabrain": {
+      "model": "opencode-go/deepseek-v4-flash"
+    },
+    "unspecified-high": {
+      "model": "opencode-go/deepseek-v4-flash"
+    },
+    "visual-engineering": {
+      "model": "opencode-go/deepseek-v4-flash"
+    },
+    "artistry": {
+      "model": "opencode-go/deepseek-v4-flash"
+    },
+    "writing": {
+      "model": "opencode-go/deepseek-v4-flash"
+    },
+    "quick": {
+      "model": "opencode-go/deepseek-v4-flash"
+    },
+    "unspecified-low": {
+      "model": "opencode-go/deepseek-v4-flash"
+    }
+  },
+  "agents": {
+    "sisyphus": {
+      "model": "opencode-go/deepseek-v4-flash"
+    },
+    "atlas": {
+      "model": "opencode-go/deepseek-v4-flash"
+    },
+    "oracle": {
+      "model": "opencode-go/deepseek-v4-flash"
+    },
+    "prometheus": {
+      "model": "opencode-go/deepseek-v4-flash"
+    },
+    "hephaestus": {
+      "model": "opencode-go/deepseek-v4-flash"
+    },
+    "plan": {
+      "model": "opencode-go/deepseek-v4-flash"
+    },
+    "sisyphus-junior": {
+      "model": "opencode-go/deepseek-v4-flash"
+    },
+    "OpenCode-Builder": {
+      "model": "opencode-go/deepseek-v4-flash"
+    },
+    "build": {
+      "model": "opencode-go/deepseek-v4-flash"
+    },
+    "metis": {
+      "model": "opencode-go/deepseek-v4-flash"
+    },
+    "momus": {
+      "model": "opencode-go/deepseek-v4-flash"
+    },
+    "multimodal-looker": {
+      "model": "opencode-go/deepseek-v4-flash"
+    },
+    "explore": {
+      "model": "opencode-go/deepseek-v4-flash",
+      "category": "unspecified-low"
+    },
+    "librarian": {
+      "model": "opencode-go/deepseek-v4-flash",
+      "category": "unspecified-low"
+    }
+  }
+}

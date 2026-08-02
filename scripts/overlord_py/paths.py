@@ -37,10 +37,19 @@ class WorkspaceIdentity:
 
 
 @dataclass(frozen=True, slots=True)
+class ManagedStatePaths:
+    workspace_entry: Path
+    managed_directory: Path
+    relative_target: Path
+
+
+@dataclass(frozen=True, slots=True)
 class StatePaths:
     root: Path
     opencode_data: Path
     zsh_data: Path
+    omo: ManagedStatePaths
+    codegraph: ManagedStatePaths
     host_proxy_script: Path
     host_proxy_pid_file: Path
     host_proxy_port_file: Path
@@ -87,10 +96,20 @@ def state_paths(workspace: Path) -> StatePaths:
         root=root,
         opencode_data=root / "opencode-data",
         zsh_data=root / "zsh-data",
+        omo=managed_state_paths(workspace, root, ".omo"),
+        codegraph=managed_state_paths(workspace, root, ".codegraph"),
         host_proxy_script=root / "opencode-web-proxy.cjs",
         host_proxy_pid_file=root / "opencode-web-proxy.pid",
         host_proxy_port_file=root / "opencode-web-proxy.port",
         host_proxy_log_file=root / "opencode-web-proxy.log",
+    )
+
+
+def managed_state_paths(workspace: Path, state_root: Path, name: str) -> ManagedStatePaths:
+    return ManagedStatePaths(
+        workspace_entry=workspace / name,
+        managed_directory=state_root / name,
+        relative_target=Path(".overlord") / name,
     )
 
 

@@ -74,7 +74,8 @@ class NativeInstallStageTests(unittest.TestCase):
             )
             self.assertTrue((workspace.path / "home" / ".config" / "opencode" / "oh-my-openagent.jsonc").is_file())
             self.assertTrue((workspace.path / "home" / ".config" / "opencode" / "oh-my-opencode.jsonc").is_file())
-            self.assertTrue((workspace.path / "home" / ".config" / "opencode" / "overlord-env").is_file())
+            installed_env_file = workspace.path / "home" / ".config" / "opencode" / "overlord-env"
+            self.assertTrue(installed_env_file.is_file())
             self.assertTrue((workspace.path / "home" / ".config" / "zellij" / "config.kdl").is_file())
             self.assertTrue((workspace.path / "home" / ".agents" / "skills" / "setup-devcontainer" / "SKILL.md").is_file())
             self.assertFalse((workspace.path / "home" / ".local" / "bin" / "rtk").exists())
@@ -199,6 +200,7 @@ class NativeInstallStageTests(unittest.TestCase):
                         "  default (oh-my-openagent.jsonc)",
                         "  azure (oh-my-openagent.azure.jsonc)",
                         "  gemini (oh-my-openagent.gemini.jsonc)",
+                        "  opencode-ds (oh-my-openagent.opencode-ds.jsonc)",
                         "  openrouter (oh-my-openagent.openrouter.jsonc)",
                         "",
                     )
@@ -250,6 +252,58 @@ class NativeInstallStageTests(unittest.TestCase):
                 ),
                 ("AWS_REGION", "AWS_BEARER_TOKEN_BEDROCK"),
             )
+
+    def test_opencode_ds_preset_and_api_key_are_written_without_logging_secret(self) -> None:
+        with native_workspace() as workspace:
+            home = workspace.path / "home"
+            env = isolated_env(home)
+            api_key = "sentinel-opencode-api-key"
+            for name in (
+                "AWS_BEARER_TOKEN_BEDROCK",
+                "AZURE_API_KEY",
+                "AZURE_RESOURCE_NAME",
+                "CONTEXT7_API_KEY",
+                "EXA_API_KEY",
+                "GOOGLE_CLOUD_PROJECT",
+                "OPENROUTER_API_KEY",
+                "OPENCODE_SERVER_PASSWORD",
+                "TAVILY_API_KEY",
+            ):
+                env[name] = ""
+            env["OPENCODE_API_KEY"] = api_key
+
+            result = workspace.run_command(
+                (str(INSTALLER), "--config", "opencode-ds", "--skip-package-install"),
+                env=env,
+            )
+            opencode_config_dir = home / ".config" / "opencode"
+            installed_routing = load_jsonc(opencode_config_dir / "oh-my-openagent.jsonc")
+            installed_env_file = opencode_config_dir / "overlord-env"
+            installed_env = installed_env_file.read_text(encoding="utf-8")
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            for section in ("categories", "agents"):
+                with self.subTest(section=section):
+                    self.assertEqual(
+                        {route["model"] for route in installed_routing[section].values()},
+                        {"opencode-go/deepseek-v4-flash"},
+                    )
+            self.assertIn(f"export OPENCODE_API_KEY={api_key}", installed_env)
+            self.assertEqual(installed_env_file.stat().st_mode & 0o777, 0o600)
+            self.assertNotIn(api_key, result.stdout)
+            self.assertNotIn(api_key, result.stderr)
+
+    def test_native_environment_omits_unset_opencode_api_key(self) -> None:
+        with native_workspace() as workspace:
+            home = workspace.path / "home"
+            env = isolated_env(home)
+            env["OPENCODE_API_KEY"] = ""
+
+            result = workspace.run_command((str(INSTALLER), "--skip-package-install"), env=env)
+            installed_env = (home / ".config" / "opencode" / "overlord-env").read_text(encoding="utf-8")
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertNotIn("OPENCODE_API_KEY", installed_env)
 
     def test_native_environment_defaults_aws_region_to_eu_central_1(self) -> None:
         with native_workspace() as workspace:

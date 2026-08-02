@@ -16,6 +16,7 @@ EXPECTED_CONFIG_LIST: Final = """Available oh-my-openagent routing presets:
   default (oh-my-openagent.jsonc)
   azure (oh-my-openagent.azure.jsonc)
   gemini (oh-my-openagent.gemini.jsonc)
+  opencode-ds (oh-my-openagent.opencode-ds.jsonc)
   openrouter (oh-my-openagent.openrouter.jsonc)
 """
 

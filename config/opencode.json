@@ -30,7 +30,7 @@
       "name": "Amazon Bedrock",
       "models": {
         "anthropic.claude-opus-4-6-v1": {
-          "name": "Claude Opus 4.5",
+          "name": "Bedrock Opus 4.6",
           "id": "anthropic.claude-opus-4-6-v1",
           "reasoning": true,
           "tool_call": true,

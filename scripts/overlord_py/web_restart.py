@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
-from overlord_py.env_builder import CODEGRAPH_BIN, CODEGRAPH_INSTALL_DIR, CODEGRAPH_NODE_BIN
+from overlord_py.env_builder import CODEGRAPH_BIN, CODEGRAPH_INSTALL_DIR, CODEGRAPH_NODE_BIN, RTK_DB_PATH
 from overlord_py.paths import WorkspacePaths
 from overlord_py.progress import StageReporter, noop_stage, stage_return_message
 from overlord_py.runtime_config import CONTAINER_HOME, RestartState
@@ -30,7 +30,7 @@ def request_opencode_web_restart_if_plugin_env_missing(
     if result.returncode == 0:
         return ()
     restart.request()
-    message = f"Restarting existing OpenCode web server because its HOME/XDG/CodeGraph/MCP credential environment is not canonical in {paths.identity.container_name}..."
+    message = f"Restarting existing OpenCode web server because its HOME/XDG/CodeGraph/RTK/MCP credential environment is not canonical in {paths.identity.container_name}..."
     stage(message)
     return stage_return_message(stage, message)
 
@@ -92,7 +92,7 @@ def restart_opencode_web_if_needed(
 
 
 def plugin_env_check_args(paths: WorkspacePaths, credential_flags: Sequence[str]) -> list[str]:
-    return ["exec", "-i", *credential_flags, paths.identity.container_name, "sh", "-s", "--", OPENCODE_WEB_PID_FILE, OPENCODE_WEB_HOSTNAME, OPENCODE_WEB_PORT, CONTAINER_HOME, CODEGRAPH_INSTALL_DIR, CODEGRAPH_BIN, CODEGRAPH_NODE_BIN]
+    return ["exec", "-i", *credential_flags, paths.identity.container_name, "sh", "-s", "--", OPENCODE_WEB_PID_FILE, OPENCODE_WEB_HOSTNAME, OPENCODE_WEB_PORT, CONTAINER_HOME, CODEGRAPH_INSTALL_DIR, CODEGRAPH_BIN, CODEGRAPH_NODE_BIN, RTK_DB_PATH]
 
 
 def workspace_project_stale_check_args(paths: WorkspacePaths, credential_flags: Sequence[str]) -> list[str]:

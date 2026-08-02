@@ -86,7 +86,7 @@ class ContainerLifecycleTests(unittest.TestCase):
             self.assertIn(f"{fixture.home / '.gitconfig'}:/home/overlord/.gitconfig:ro", run)
             self.assertIn(f"{fixture.home / '.ssh'}:/home/overlord/.ssh:ro", run)
             self.assertEqual(run[-3:], [f"localhost/{fixture.paths.identity.image_name}:latest", "sleep", "infinity"])
-            self.assertEqual((fixture.paths.workspace / ".gitignore").read_text(encoding="utf-8"), ".overlord/\n")
+            self.assertFalse((fixture.paths.workspace / ".gitignore").exists())
             self.assertTrue(traversal_dir.stat().st_mode & 0o111)
             self.assertEqual(external_dir.stat().st_mode & 0o777, 0o700)
             self.assertTrue(setup)
@@ -156,6 +156,7 @@ class ContainerLifecycleTests(unittest.TestCase):
             self.assertIn("0.0.0.0::4090", args)
             self.assertIn("HOME=/home/overlord", args)
             self.assertIn("AZURE_API_KEY=sentinel-azure-secret", args)
+            self.assertIn("OPENCODE_API_KEY=sentinel-opencode-api-key", args)
             self.assertIn("OPENROUTER_API_KEY=sentinel-openrouter-secret", args)
             self.assertFalse(any("sentinel-opencode-password" in arg for arg in args))
 
@@ -292,6 +293,7 @@ class LifecycleFixture:
                 "HOME": str(home),
                 "TERM": "xterm-256color",
                 "AZURE_API_KEY": "sentinel-azure-secret",
+                "OPENCODE_API_KEY": "sentinel-opencode-api-key",
                 "OPENROUTER_API_KEY": "sentinel-openrouter-secret",
                 "OPENCODE_SERVER_PASSWORD": "sentinel-opencode-password",
             },

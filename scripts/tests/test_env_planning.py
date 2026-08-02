@@ -32,6 +32,7 @@ from overlord_py.state import (  # noqa: E402
 
 SENTINEL_AZURE: Final = "sentinel-azure-secret"
 SENTINEL_EXA: Final = "sentinel-exa-secret"
+SENTINEL_OPENCODE_API_KEY: Final = "sentinel-opencode-api-key"
 SENTINEL_OPENROUTER: Final = "sentinel-openrouter-secret"
 SENTINEL_OPENCODE_PASSWORD: Final = "sentinel-opencode-password"
 EXPECTED_PROVIDER_ENV_VARS: Final = (
@@ -41,6 +42,7 @@ EXPECTED_PROVIDER_ENV_VARS: Final = (
     "GOOGLE_CLOUD_LOCATION",
     "AZURE_RESOURCE_NAME",
     "AZURE_API_KEY",
+    "OPENCODE_API_KEY",
     "OPENROUTER_API_KEY",
     "EXA_API_KEY",
     "TAVILY_API_KEY",
@@ -128,7 +130,7 @@ class PathEngineStateTests(unittest.TestCase):
 
         self.assertTrue(ensure_result.opencode_data_created)
         self.assertTrue(ensure_result.zsh_data_created)
-        self.assertEqual(gitignore_content, "keep-me\n.overlord/\n")
+        self.assertEqual(gitignore_content, "keep-me\n.overlord/\n.omo\n.codegraph\n")
         self.assertTrue(sentinel_survived)
         self.assertFalse(pid_exists)
         self.assertEqual({path.name for path in cleared}, {"overlord-serve.pid", "overlord-serve.log"})
@@ -174,6 +176,7 @@ class EnvironmentPlanningTests(unittest.TestCase):
                 "TERM": "screen-256color",
                 "AZURE_API_KEY": SENTINEL_AZURE,
                 "AZURE_RESOURCE_NAME": "azure-resource",
+                "OPENCODE_API_KEY": SENTINEL_OPENCODE_API_KEY,
                 "OPENROUTER_API_KEY": SENTINEL_OPENROUTER,
                 "CONTEXT7_API_KEY": "context7-secret",
                 "EXA_API_KEY": SENTINEL_EXA,
@@ -188,6 +191,7 @@ class EnvironmentPlanningTests(unittest.TestCase):
             plan = build_environment_plan(host_env, home=home, workspace_name="My Project!")
 
         self.assertIn(f"AZURE_API_KEY={SENTINEL_AZURE}", plan.exec_env_values)
+        self.assertIn(f"OPENCODE_API_KEY={SENTINEL_OPENCODE_API_KEY}", plan.exec_env_values)
         self.assertIn(f"OPENROUTER_API_KEY={SENTINEL_OPENROUTER}", plan.exec_env_values)
         self.assertIn(f"EXA_API_KEY={SENTINEL_EXA}", plan.exec_env_values)
         self.assertIn("OVERLORD_HOST_EXA_API_KEY_PRESENT=1", plan.opencode_web_credential_values)
@@ -205,6 +209,7 @@ class EnvironmentPlanningTests(unittest.TestCase):
         self.assertIn("TESTCONTAINERS_HOST_OVERRIDE=host.docker.internal", plan.exec_env_values)
         self.assertNotIn(SENTINEL_AZURE, plan.redacted_summary())
         self.assertNotIn(SENTINEL_EXA, plan.redacted_summary())
+        self.assertNotIn(SENTINEL_OPENCODE_API_KEY, plan.redacted_summary())
         self.assertNotIn(SENTINEL_OPENROUTER, plan.redacted_summary())
         self.assertNotIn(SENTINEL_OPENCODE_PASSWORD, plan.redacted_summary())
 
@@ -259,6 +264,7 @@ class EnvironmentPlanningTests(unittest.TestCase):
                 {
                     "HOME": str(home),
                     "AZURE_API_KEY": SENTINEL_AZURE,
+                    "OPENCODE_API_KEY": SENTINEL_OPENCODE_API_KEY,
                     "OPENROUTER_API_KEY": SENTINEL_OPENROUTER,
                     "AWS_BEARER_TOKEN_BEDROCK": "bearer-token",
                     "EXA_API_KEY": SENTINEL_EXA,
@@ -271,6 +277,7 @@ class EnvironmentPlanningTests(unittest.TestCase):
             rendered = render_overlord_env(plan)
 
         self.assertIn(f"export AZURE_API_KEY={SENTINEL_AZURE}", rendered)
+        self.assertIn(f"export OPENCODE_API_KEY={SENTINEL_OPENCODE_API_KEY}", rendered)
         self.assertIn(f"export OPENROUTER_API_KEY={SENTINEL_OPENROUTER}", rendered)
         self.assertIn("export AWS_REGION=eu-central-1", rendered)
         self.assertIn("export AWS_BEARER_TOKEN_BEDROCK=bearer-token", rendered)

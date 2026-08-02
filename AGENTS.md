@@ -19,6 +19,8 @@ overlord/
 ├── skills/         # Repository-owned default OpenCode skills
 ├── scripts/        # Host-side launcher shim, Python launcher modules, tests, and native installer
 ├── .overlord/      # Per-workspace runtime state, git-ignored
+├── .omo             # Relative runtime link to .overlord/.omo
+├── .codegraph       # Relative runtime link to .overlord/.codegraph
 ├── README.md       # User-facing install and operations guide
 └── .claude/        # Local tool metadata
 ```
@@ -31,6 +33,8 @@ overlord/
 | Change local launcher command surface | `scripts/overlord` | Minimal shim that resolves host `python3` and execs the Python launcher |
 | Change local launcher behavior or lifecycle | `scripts/overlord_py/` | Authoritative Python implementation for the bind-mounted workflow; Podman preferred if present |
 | Change workspace Git topology checks | `scripts/overlord_py/paths.py`, `scripts/overlord_py/main.py` | Non-Git workspaces are valid; launch modes reject only gitfiles whose resolved metadata lies outside the workspace bind mount |
+| Change managed workspace-state layout or migration | `scripts/overlord_py/paths.py`, `scripts/overlord_py/state.py`, `scripts/overlord_py/main.py` | Owns `.overlord/.omo`, `.overlord/.codegraph`, root relative links, and fail-closed launch preflight |
+| Change workspace RTK history forwarding | `scripts/overlord_py/env_builder.py`, `scripts/overlord_py/web_restart.py` | The only launcher RTK setting is fixed `RTK_DB_PATH=/workspace/.overlord/rtk/history.db` forwarding |
 | Change native host install behavior | `scripts/install` | Installs checked-in OpenCode/oh-my-openagent/zellij config and Bun-managed packages directly on the host |
 | Change RTK image install | `Dockerfile` | Selects the pinned Linux asset by `TARGETARCH`, verifies its version, and initializes the plugin as `overlord` |
 | Change Playwright image install | `Dockerfile` | Install browser dependencies as root and bundled Chromium as `overlord` |
@@ -40,7 +44,7 @@ overlord/
 | Change repository-owned default skills | `skills/` | Wire authored skill changes into both `Dockerfile` and `scripts/install` |
 | Change local container bootstrap permissions | `config/entrypoint.sh` | Root bootstrap, UID/GID remap, ownership repair, `gosu` handoff |
 | Change zellij UX | `config/zellij-config.kdl` | Non-default `Ctrl+b` tab mode and `Ctrl+t` passthrough |
-| Inspect local persisted sessions/history | `.overlord/` | Runtime state only, not authored source |
+| Inspect local persisted sessions/history | `.overlord/` | Includes `.omo/`, `.codegraph/`, and `rtk/history.db`; runtime state only, not authored source |
 
 ## CONVENTIONS
 
@@ -52,6 +56,10 @@ overlord/
 - `skills/setup-devcontainer/SKILL.md` is authoritative; container and native copies are generated distribution outputs and remain separate from pinned third-party skills.
 - Project-specific tooling belongs in workspace `setup-devcontainer.sh`, which runs as root from `/workspace` only on container create or restart.
 - Launch modes preflight `.git` gitfiles before image/container lifecycle. External gitdirs produce an actionable error rather than an incomplete isolated mount; recovery and inspection commands remain available.
+- After Git topology preflight, normal launch modes reconcile managed workspace state before image/container lifecycle. Lone root `.omo/` or `.codegraph/` directories are renamed under `.overlord/` and replaced with literal relative links; independent root and managed directories fail closed without copy, merge, or deletion.
+- Managed `.omo`, `.codegraph`, and RTK history survive `fresh` and `purge` through the workspace mount. Old global RTK history is not migrated.
+- Workspace `.codegraph` is persistent project state. `/home/overlord/.omo/codegraph` is the container package installation path and is not the workspace index.
+- The managed workspace-state behavior is container-only. Native `scripts/install` behavior remains separate and unchanged.
 - Shared tool version changes belong in `config/tool-versions.env`; Docker and native installs must consume the relevant pins from that manifest.
 
 ## ANTI-PATTERNS (THIS PROJECT)

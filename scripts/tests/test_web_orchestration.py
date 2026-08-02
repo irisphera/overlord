@@ -10,6 +10,7 @@ from typing import Final
 from unittest.mock import Mock, patch
 
 from runtime_support import FakeResponse, RecordingEngine, runtime_workspace
+from scripts.tests.test_terminal_project_lifecycle import RecordingContainerEngine
 
 
 SCRIPTS_DIR: Final = Path(__file__).resolve().parents[1]
@@ -19,10 +20,11 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 from overlord_py import main  # noqa: E402
 from overlord_py.cli import CliOptions, Command  # noqa: E402
+from scripts.overlord_py.container_lifecycle import EnsureRunningResult  # noqa: E402
 from overlord_py.env_builder import EnvironmentPlan, build_environment_plan  # noqa: E402
 from overlord_py.paths import WorkspacePaths  # noqa: E402
 from overlord_py.runtime_config import RestartState  # noqa: E402
-from overlord_py.web_scripts import ENSURE_OPENCODE_WEB_SERVER_SCRIPT, REQUEST_RESTART_IF_WORKSPACE_PROJECT_STALE_SCRIPT, RESTART_OPENCODE_WEB_SCRIPT  # noqa: E402
+from overlord_py.web_scripts import ENSURE_OPENCODE_WEB_SERVER_SCRIPT, REQUEST_RESTART_IF_PLUGIN_ENV_MISSING_SCRIPT, REQUEST_RESTART_IF_WORKSPACE_PROJECT_STALE_SCRIPT, RESTART_OPENCODE_WEB_SCRIPT  # noqa: E402
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +50,67 @@ class OrchestrationFixture:
 
 
 class WebOrchestrationTests(unittest.TestCase):
+    def test_reused_server_with_noncanonical_rtk_restarts_before_ensure_with_one_canonical_assignment(self) -> None:
+        engine = RecordingContainerEngine("docker")
+        with runtime_workspace(engine=engine.recorder) as runtime, ExitStack() as stack:
+            # Given: a reused container whose live OpenCode server has a missing or wrong RTK path.
+            engine.recorder.responses.extend(
+                (
+                    ("process_has_env_value RTK_DB_PATH", FakeResponse(returncode=1)),
+                    (f"port {runtime.paths.identity.container_name} 4090/tcp", FakeResponse(stdout="0.0.0.0:49152\n")),
+                    ("workspace_project_is_stale", FakeResponse()),
+                )
+            )
+            options = CliOptions(Command.WEB, "default", runtime.context.oh_my_config_file)
+            host_env = {
+                "HOME": str(runtime.workspace.path / "host-home"),
+                "OPENCODE_SERVER_PASSWORD": "secret",
+            }
+            _ = stack.enter_context(patch.object(main, "ensure_image", return_value=()))
+            _ = stack.enter_context(
+                patch.object(
+                    main,
+                    "ensure_running",
+                    return_value=EnsureRunningResult(state_before="running", setup_ran=False, messages=()),
+                )
+            )
+            _ = stack.enter_context(patch.object(main, "ensure_oh_my_openagent_runtime_config", return_value=()))
+            _ = stack.enter_context(patch.object(main, "ensure_oh_my_openagent_runtime_package", return_value=()))
+            _ = stack.enter_context(patch.object(main, "ensure_codegraph_runtime_package", return_value=()))
+            _ = stack.enter_context(patch.object(main, "ensure_default_opencode_skills", return_value=()))
+            _ = stack.enter_context(patch.object(main, "ensure_opencode_runtime_version", return_value=()))
+            _ = stack.enter_context(patch.object(main, "terminal_title", return_value=""))
+            _ = stack.enter_context(patch.object(main, "stdout_stage"))
+            _ = stack.enter_context(patch.object(main, "wait_for_opencode_web"))
+            _ = stack.enter_context(patch.object(main, "wait_for_opencode_web_ui"))
+            _ = stack.enter_context(patch.object(main, "resolve_access_port_for_engine", return_value="49152"))
+            _ = stack.enter_context(patch.object(main, "verify_oh_my_openagent_loaded"))
+            _ = stack.enter_context(patch.object(main, "resolve_network_host_ip", return_value=""))
+            _ = stack.enter_context(patch.object(main, "format_access_urls", return_value=""))
+
+            # When: the normal web launcher path reconciles and serves the workspace.
+            status = main.run_container_command(engine, runtime.paths, options, host_env)
+
+            # Then: RTK reconciliation restarts before ensure, and the replacement gets one canonical assignment.
+            lifecycle_scripts = [
+                run.input_text
+                for run in engine.recorder.runs
+                if run.input_text
+                in {
+                    REQUEST_RESTART_IF_PLUGIN_ENV_MISSING_SCRIPT,
+                    RESTART_OPENCODE_WEB_SCRIPT,
+                    ENSURE_OPENCODE_WEB_SERVER_SCRIPT,
+                }
+            ]
+            ensure_runs = [run for run in engine.recorder.runs if run.input_text == ENSURE_OPENCODE_WEB_SERVER_SCRIPT]
+            self.assertEqual(status, 0)
+            self.assertEqual(
+                lifecycle_scripts,
+                [REQUEST_RESTART_IF_PLUGIN_ENV_MISSING_SCRIPT, RESTART_OPENCODE_WEB_SCRIPT, ENSURE_OPENCODE_WEB_SERVER_SCRIPT],
+            )
+            self.assertEqual(len(ensure_runs), 1)
+            self.assertEqual(ensure_runs[0].args.count("RTK_DB_PATH=/workspace/.overlord/rtk/history.db"), 1)
+
     def test_pending_restart_runs_once_before_first_readiness_attempt(self) -> None:
         with orchestration_fixture((0,), restart_required=True) as fixture:
             # Given: password reconciliation already requested a web restart.

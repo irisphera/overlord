@@ -36,7 +36,7 @@ class LifecycleCharacterizationTests(unittest.TestCase):
             self.assertIn(f"Local access:   http://localhost:{server.port}", result.stdout)
             self.assertEqual(result.stderr, "")
             self.assert_state_dir(workspace)
-            self.assertEqual((workspace.path / ".gitignore").read_text(encoding="utf-8"), ".overlord/\n")
+            self.assertEqual((workspace.path / ".gitignore").read_text(encoding="utf-8"), ".overlord/\n.omo\n.codegraph\n")
             docker = engine_records(workspace, "docker")
             self.assertEqual(docker[0]["argv"], ["docker", "image", "inspect", "localhost/overlord-opencode-my-project-:latest"])
             self.assertIn(["docker", "build", "--load", "-t", "localhost/overlord-opencode-my-project-:latest", str(Path(__file__).resolve().parents[2])], argv_list(docker))
@@ -173,7 +173,7 @@ class LifecycleCharacterizationTests(unittest.TestCase):
             result = run_launcher(workspace, "shell", env=host_env(workspace))
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(gitignore.read_text(encoding="utf-8"), "keep-me\n.overlord/\n")
+            self.assertEqual(gitignore.read_text(encoding="utf-8"), "keep-me\n.overlord/\n.omo\n.codegraph\n")
 
     def test_missing_engine_uses_current_error_without_real_podman_or_docker(self) -> None:
         with launcher_workspace() as workspace:

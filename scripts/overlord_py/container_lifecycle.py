@@ -14,7 +14,7 @@ from overlord_py.engine import CommandResult, ContainerEngine
 from overlord_py.paths import WorkspacePaths
 from overlord_py.persisted_state_mounts import PersistedStateMounts, verify_persisted_state_mounts
 from overlord_py.progress import StageReporter, noop_stage, report_stage, stage_return_message
-from overlord_py.state import clear_persisted_opencode_server_state, ensure_state_dir
+from overlord_py.state import clear_persisted_opencode_server_state
 
 RESPONSIBILITY: Final = "preserve image/container lifecycle, mounts, setup timing, and removal semantics"
 SETUP_SCRIPT_CONTAINER_PATH: Final = "/workspace/setup-devcontainer.sh"
@@ -98,7 +98,6 @@ def ensure_running(
         case "missing":
             message = f"Creating container {paths.identity.container_name}..."
             messages.extend(report_stage(stage, message))
-            ensure_state_dir(paths.state)
             host_home = Path.home() if home is None else home
             bind_sources = resolve_bind_source_paths(engine, paths, env=env, home=host_home)
             run = engine.run(

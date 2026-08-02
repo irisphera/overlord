@@ -16,6 +16,7 @@ container_home="$4"
 codegraph_install_dir="$5"
 codegraph_bin="$6"
 codegraph_node_bin="$7"
+rtk_db_path="$8"
 
 if [ ! -s "${pid_file}" ]; then
     exit 0
@@ -69,7 +70,8 @@ printf '%s\n' "${process_environ}" | grep -qx "HOME=${container_home}" && \
 	printf '%s\n' "${process_environ}" | grep -qx "XDG_STATE_HOME=${container_home}/.local/state" && \
 	printf '%s\n' "${process_environ}" | grep -qx "CODEGRAPH_INSTALL_DIR=${codegraph_install_dir}" && \
 	printf '%s\n' "${process_environ}" | grep -qx "OMO_CODEGRAPH_BIN=${codegraph_bin}" && \
-	printf '%s\n' "${process_environ}" | grep -qx "CODEGRAPH_NODE_BIN=${codegraph_node_bin}"
+	printf '%s\n' "${process_environ}" | grep -qx "CODEGRAPH_NODE_BIN=${codegraph_node_bin}" && \
+	process_has_env_value RTK_DB_PATH "${rtk_db_path}"
 '''
 
 REQUEST_RESTART_IF_WORKSPACE_PROJECT_STALE_SCRIPT: Final = OPENCODE_CMDLINE_MATCHER_SCRIPT + r'''pid_file="$1"

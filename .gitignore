@@ -26,3 +26,5 @@ opencode.json
 .log
 .overlord/
 .opencode/*
+.omo
+.codegraph

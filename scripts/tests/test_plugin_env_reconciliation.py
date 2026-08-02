@@ -21,6 +21,7 @@ from scripts.overlord_py.env_builder import (  # noqa: E402
     CODEGRAPH_BIN,
     CODEGRAPH_INSTALL_DIR,
     CODEGRAPH_NODE_BIN,
+    RTK_DB_PATH,
 )
 from scripts.overlord_py.runtime_config import CONTAINER_HOME  # noqa: E402
 from scripts.overlord_py.web_restart_scripts import REQUEST_RESTART_IF_PLUGIN_ENV_MISSING_SCRIPT  # noqa: E402
@@ -217,6 +218,7 @@ def canonical_process_environment() -> dict[str, str]:
         "CODEGRAPH_INSTALL_DIR": CODEGRAPH_INSTALL_DIR,
         "OMO_CODEGRAPH_BIN": CODEGRAPH_BIN,
         "CODEGRAPH_NODE_BIN": CODEGRAPH_NODE_BIN,
+        "RTK_DB_PATH": RTK_DB_PATH,
     }
 
 
@@ -276,6 +278,7 @@ def run_plugin_probe(pid_file: Path, desired_password: str) -> subprocess.Comple
             CODEGRAPH_INSTALL_DIR,
             CODEGRAPH_BIN,
             CODEGRAPH_NODE_BIN,
+            RTK_DB_PATH,
         ),
         env=probe_env,
         input=REQUEST_RESTART_IF_PLUGIN_ENV_MISSING_SCRIPT,

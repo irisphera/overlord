@@ -3,6 +3,10 @@
 **Generated:** 2026-04-12 (UTC)
 **Parent:** `/workspace/AGENTS.md`
 
+## Language and writing style
+
+Use ISO 24495-1 writing style
+
 ## OVERVIEW
 
 `scripts/` owns the host-side launcher and native installer. `overlord` is the bind-mounted local workflow. `scripts/overlord` is a minimal shim that resolves host `python3` and execs the standard-library Python launcher under `scripts/overlord_py/`. `install` is the Bash native installer for users who do not want containerized OpenCode.

@@ -17,11 +17,11 @@
     // the built-in opencode-go provider. Categories use the canonical `reasoning`
     // field; it is lowered to the deepseek variant/reasoning effort for delegated tasks.
     "ultrabrain": {
-      "model": "opencode-go/deepseek-v4-flash",
+      "model": "opencode-go/deepseek-v4-pro",
       "reasoning": "max"
     },
     "unspecified-high": {
-      "model": "opencode-go/deepseek-v4-flash",
+      "model": "opencode-go/deepseek-v4-pro",
       "reasoning": "max"
     },
     "visual-engineering": {
@@ -48,47 +48,47 @@
     // selector that survives the full request path for opencode-go/deepseek-v4-flash
     // (the model declares reasoning effort variants "high" and "max").
     "sisyphus": {
-      "model": "opencode-go/deepseek-v4-flash",
+      "model": "opencode-go/deepseek-v4-pro",
       "variant": "max"
     },
     "atlas": {
-      "model": "opencode-go/deepseek-v4-flash",
+      "model": "opencode-go/deepseek-v4-pro",
       "variant": "max"
     },
     "oracle": {
-      "model": "opencode-go/deepseek-v4-flash",
+      "model": "opencode-go/deepseek-v4-pro",
       "variant": "max"
     },
     "prometheus": {
-      "model": "opencode-go/deepseek-v4-flash",
+      "model": "opencode-go/deepseek-v4-pro",
       "variant": "max"
     },
     "hephaestus": {
-      "model": "opencode-go/deepseek-v4-flash",
+      "model": "opencode-go/deepseek-v4-pro",
       "variant": "max"
     },
     "plan": {
-      "model": "opencode-go/deepseek-v4-flash",
+      "model": "opencode-go/deepseek-v4-pro",
       "variant": "max"
     },
     "sisyphus-junior": {
-      "model": "opencode-go/deepseek-v4-flash",
+      "model": "opencode-go/deepseek-v4-pro",
       "variant": "max"
     },
     "OpenCode-Builder": {
-      "model": "opencode-go/deepseek-v4-flash",
+      "model": "opencode-go/deepseek-v4-pro",
       "variant": "max"
     },
     "build": {
-      "model": "opencode-go/deepseek-v4-flash",
+      "model": "opencode-go/deepseek-v4-pro",
       "variant": "max"
     },
     "metis": {
-      "model": "opencode-go/deepseek-v4-flash",
+      "model": "opencode-go/deepseek-v4-pro",
       "variant": "max"
     },
     "momus": {
-      "model": "opencode-go/deepseek-v4-flash",
+      "model": "opencode-go/deepseek-v4-pro",
       "variant": "max"
     },
     "multimodal-looker": {

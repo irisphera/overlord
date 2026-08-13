@@ -14,7 +14,7 @@ RTK integration is a generated OpenCode plugin created by the full-install workf
 - Edit files here.
 - The runtime files actually consumed by OpenCode and zellij live under `/home/overlord/.config/*` inside the container and are overwritten by `scripts/overlord` during lifecycle actions.
 - `entrypoint.sh` is copied into the image by the Dockerfile. `jdtls.sh` is retained only as a reference wrapper for repo-local Java setup scripts; the shared image no longer installs JDTLS.
-- `tool-versions.env` pins semantic versions used by the container and native full-install workflows.
+- `tool-versions.env` pins semantic versions used by the container and native full-install workflows. Prime Agent and Playwright pins are container-only.
 
 ## FILE MAP
 
@@ -23,14 +23,14 @@ RTK integration is a generated OpenCode plugin created by the full-install workf
 | `opencode.json` | Single OpenCode provider/model catalog | Copied to `/home/overlord/.config/opencode/opencode.json` |
 | `oh-my-openagent.jsonc` | Default OpenCode Go DeepSeek-V4-Flash-0731 routing preset (same routing as `opencode-ds`) | Copied to `/home/overlord/.config/opencode/oh-my-openagent.jsonc` by default |
 | `oh-my-openagent.azure.jsonc` | Azure GPT-5.6 Sol/Luna routing preset | Selected with `--config azure` |
-| `oh-my-openagent.gemini.jsonc` | Vertex Gemini 3.6 Flash routing preset | Selected with `--config gemini` |
+| `oh-my-openagent.gemini.jsonc` | Vertex Gemini 3.7 Flash routing preset | Selected with `--config gemini` |
 | `oh-my-openagent.opencode-ds.jsonc` | OpenCode Go DeepSeek-V4-Flash-0731 routing preset | Selected with `--config opencode-ds` |
 | `oh-my-openagent.openrouter.jsonc` | Existing OpenRouter routing preset | Selected with `--config openrouter` |
 | `entrypoint.sh` | Container bootstrap entrypoint | Root startup, permission repair, privilege drop |
 | `jdtls.sh` | Java LSP wrapper reference | Not installed by the shared image; Java repos own JDTLS setup |
 | `zellij-config.kdl` | Active zellij config source | Copied to `/home/overlord/.config/zellij/config.kdl` |
 | `zellij-opencode.kdl` | Checked-in layout file | Present in repo, not currently injected by launcher |
-| `tool-versions.env` | Shared semantic-version pins | Sourced by Docker and native install; parsed by launcher package checks. Playwright remains container-only. |
+| `tool-versions.env` | Shared semantic-version pins | Sourced by Docker and native install; parsed by launcher package checks. Prime Agent and Playwright remain container-only. |
 
 ## LOCAL INVARIANTS
 

@@ -15,6 +15,18 @@ from .engine import CommandResult
 WORKSPACE_DESTINATION: Final = "/workspace"
 OPENCODE_DATA_DESTINATION: Final = "/home/overlord/.local/share/opencode"
 ZSH_DATA_DESTINATION: Final = "/home/overlord/.zsh_data"
+PRIME_AGENT_DATA_DESTINATION: Final = "/home/overlord/.prime/agent"
+LEGACY_PRIME_AGENT_STATE_CHECK_SCRIPT: Final = r'''state_path="$1"
+if [ ! -e "${state_path}" ]; then
+	printf 'absent\n'
+elif [ ! -d "${state_path}" ]; then
+	printf 'unsafe\n'
+elif [ -z "$(find "${state_path}" -mindepth 1 -print -quit 2>/dev/null)" ]; then
+	printf 'empty\n'
+else
+	printf 'nonempty\n'
+fi
+'''
 
 type JsonValue = None | bool | int | float | str | list[JsonValue] | dict[str, JsonValue]
 
@@ -51,6 +63,7 @@ class PersistedStateMounts:
     workspace: VerifiedMount
     opencode_data: VerifiedMount
     zsh_data: VerifiedMount
+    prime_agent_data: VerifiedMount | None
 
 
 class EngineRunner(Protocol):
@@ -71,6 +84,7 @@ def verify_persisted_state_mounts(
     expected_sources: BindSourcePaths,
     cwd: Path,
     env: Mapping[str, str],
+    allow_empty_legacy_prime_agent_data: bool = False,
 ) -> PersistedStateMounts:
     result = engine.run(["inspect", container], cwd=cwd, env=env)
     if result.returncode != 0:
@@ -81,16 +95,63 @@ def verify_persisted_state_mounts(
     workspace = _required_mount(mounts, WORKSPACE_DESTINATION)
     opencode_data = _required_mount(mounts, OPENCODE_DATA_DESTINATION)
     zsh_data = _required_mount(mounts, ZSH_DATA_DESTINATION)
+    prime_agent_data = _optional_legacy_prime_agent_mount(
+        engine,
+        container,
+        mounts,
+        cwd=cwd,
+        env=env,
+        allow_empty_legacy=allow_empty_legacy_prime_agent_data,
+    )
 
     _require_source(workspace, _normalize_absolute_posix(str(expected_sources.workspace), "expected Source"))
     _require_source(opencode_data, _normalize_absolute_posix(str(expected_sources.opencode_data), "expected Source"))
     _require_source(zsh_data, _normalize_absolute_posix(str(expected_sources.zsh_data), "expected Source"))
+    if prime_agent_data is not None:
+        _require_source(
+            prime_agent_data,
+            _normalize_absolute_posix(str(expected_sources.prime_agent_data), "expected Source"),
+        )
 
     return PersistedStateMounts(
         workspace=_verified(workspace),
         opencode_data=_verified(opencode_data),
         zsh_data=_verified(zsh_data),
+        prime_agent_data=None if prime_agent_data is None else _verified(prime_agent_data),
     )
+
+
+def _optional_legacy_prime_agent_mount(
+    engine: EngineRunner,
+    container: str,
+    mounts: tuple[InspectedMount, ...],
+    *,
+    cwd: Path,
+    env: Mapping[str, str],
+    allow_empty_legacy: bool,
+) -> InspectedMount | None:
+    matching = tuple(mount for mount in mounts if mount.destination == PRIME_AGENT_DATA_DESTINATION)
+    if matching:
+        return _required_mount(mounts, PRIME_AGENT_DATA_DESTINATION)
+
+    check = engine.run(
+        ["exec", container, "sh", "-c", LEGACY_PRIME_AGENT_STATE_CHECK_SCRIPT, "sh", PRIME_AGENT_DATA_DESTINATION],
+        cwd=cwd,
+        env=env,
+    )
+    state = check.stdout.strip() if check.returncode == 0 else "unknown"
+    if state not in {"absent", "empty"}:
+        detail = check.stderr.strip() or check.stdout.strip() or "legacy state could not be inspected"
+        raise MountSafetyFailure(
+            f"Legacy container has no mount at {PRIME_AGENT_DATA_DESTINATION}, and unpersisted Prime Agent "
+            f"data may exist there ({detail}). Preserve that data before removing the container."
+        )
+    if not allow_empty_legacy:
+        raise MountSafetyFailure(
+            "Legacy container predates Prime Agent persistence and has no Prime Agent data to preserve. "
+            "Run 'overlord purge' to replace its container and image safely."
+        )
+    return None
 
 
 def _parse_inspect_mounts(

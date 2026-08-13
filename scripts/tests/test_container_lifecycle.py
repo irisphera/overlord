@@ -79,6 +79,7 @@ class ContainerLifecycleTests(unittest.TestCase):
             self.assertIn("/var/run/docker.sock:/var/run/docker.sock", run)
             self.assertIn(f"{fixture.paths.state.opencode_data}:/home/overlord/.local/share/opencode", run)
             self.assertIn(f"{fixture.paths.state.zsh_data}:/home/overlord/.zsh_data", run)
+            self.assertIn(f"{fixture.paths.state.prime_agent_data}:/home/overlord/.prime/agent", run)
             self.assertIn("0.0.0.0::4090", run)
             self.assertIn("--security-opt", run)
             self.assertIn("label=disable", run)
@@ -165,6 +166,9 @@ class ContainerLifecycleTests(unittest.TestCase):
             sentinel = fixture.paths.state.root / "sentinel.txt"
             sentinel.parent.mkdir()
             sentinel.write_text("keep\n", encoding="utf-8")
+            harness_state = fixture.paths.state.prime_agent_data / "harness" / "harness_state.json"
+            harness_state.parent.mkdir(parents=True)
+            harness_state.write_text('{"memory":"keep"}\n', encoding="utf-8")
             stale_pid = fixture.paths.state.opencode_data / "overlord-serve.pid"
             stale_log = fixture.paths.state.opencode_data / "overlord-serve.log"
             stale_pid.parent.mkdir(parents=True)
@@ -174,6 +178,7 @@ class ContainerLifecycleTests(unittest.TestCase):
             messages = fresh(fixture.engine, fixture.paths, env=fixture.runner_env)
 
             self.assertTrue(sentinel.exists())
+            self.assertEqual(harness_state.read_text(encoding="utf-8"), '{"memory":"keep"}\n')
             self.assertFalse(stale_pid.exists())
             self.assertFalse(stale_log.exists())
             self.assertIn(f"Removing container {fixture.paths.identity.container_name}...", messages)
@@ -215,9 +220,20 @@ class ContainerLifecycleTests(unittest.TestCase):
             sentinel.parent.mkdir()
             sentinel.write_text("keep\n", encoding="utf-8")
 
+            harness_state = (
+                fixture.paths.state.prime_agent_data
+                / "session-artifacts"
+                / "session"
+                / "harness"
+                / "harness_state.json"
+            )
+            harness_state.parent.mkdir(parents=True)
+            harness_state.write_text('{"prompt":"keep"}\n', encoding="utf-8")
+
             messages = purge(fixture.engine, fixture.paths, env=fixture.runner_env)
 
             self.assertTrue(sentinel.exists())
+            self.assertEqual(harness_state.read_text(encoding="utf-8"), '{"prompt":"keep"}\n')
             self.assertIn(f"==> Removing image {fixture.paths.identity.image_name}...", messages)
             self.assertIn("==> Done. Run 'overlord' to rebuild and launch.", messages)
             image_ref = f"localhost/{fixture.paths.identity.image_name}:latest"
@@ -244,6 +260,16 @@ class ContainerLifecycleTests(unittest.TestCase):
                 with self.assertRaises(MountSafetyFailure):
                     _ = purge(fixture.engine, fixture.paths, env=fixture.runner_env)
                 self.assertEqual(argv_list(fixture.records()), purge_preflight_argv(fixture.paths))
+
+    def test_purge_replaces_legacy_container_when_prime_agent_state_is_absent(self) -> None:
+        with lifecycle_workspace(state="running", image_exists=True) as fixture:
+            engine = LegacyPrimeAgentEngine(fixture.paths.identity.container_name, fixture.paths.workspace)
+
+            messages = purge(engine, fixture.paths, env=fixture.runner_env)
+
+            self.assertIn("==> Done. Run 'overlord' to rebuild and launch.", messages)
+            self.assertIn(["rm", "-f", fixture.paths.identity.container_name], engine.runs)
+            self.assertTrue(any(args[:2] == ["exec", fixture.paths.identity.container_name] for args in engine.runs))
 
     def test_purge_force_removes_stopped_container_before_image(self) -> None:
         with lifecycle_workspace(state="exited", image_exists=True) as fixture:
@@ -355,6 +381,45 @@ class lifecycle_workspace:
 
 
 @dataclass(frozen=True, slots=True)
+class LegacyPrimeAgentEngine(ContainerEngine):
+    container_name: str
+    workspace: Path
+    runs: list[list[str]]
+
+    def __init__(self, container_name: str, workspace: Path) -> None:
+        ContainerEngine.__init__(self, "docker")
+        object.__setattr__(self, "container_name", container_name)
+        object.__setattr__(self, "workspace", workspace)
+        object.__setattr__(self, "runs", [])
+
+    def run(
+        self,
+        args: Sequence[str],
+        *,
+        cwd: Path,
+        env: Mapping[str, str],
+        input_text: str | None = None,
+    ) -> CommandResult:
+        del cwd, env, input_text
+        args_list = [*args]
+        self.runs.append(args_list)
+        if args_list[:3] == ["inspect", "--format", "{{.State.Status}}"]:
+            return CommandResult(argv=self.argv(args_list), returncode=0, stdout="running\n", stderr="")
+        if args_list[:2] == ["inspect", "--format"]:
+            return CommandResult(argv=self.argv(args_list), returncode=1, stdout="", stderr="not nested")
+        if args_list == ["inspect", self.container_name]:
+            return CommandResult(
+                argv=self.argv(args_list),
+                returncode=0,
+                stdout=legacy_mount_inspect(self.workspace),
+                stderr="",
+            )
+        if args_list[:2] == ["exec", self.container_name]:
+            return CommandResult(argv=self.argv(args_list), returncode=0, stdout="absent\n", stderr="")
+        return CommandResult(argv=self.argv(args_list), returncode=0, stdout="", stderr="")
+
+
+@dataclass(frozen=True, slots=True)
 class SetupFailureEngine(ContainerEngine):
     runs: list[list[str]]
 
@@ -409,6 +474,14 @@ def purge_preflight_argv(paths: WorkspacePaths) -> list[list[str]]:
     ]
 
 
+def legacy_mount_inspect(workspace: Path) -> str:
+    document = json.loads(valid_mount_inspect(workspace))
+    document[0]["Mounts"] = [
+        mount for mount in document[0]["Mounts"] if mount["Destination"] != "/home/overlord/.prime/agent"
+    ]
+    return json.dumps(document)
+
+
 def valid_mount_inspect(workspace: Path) -> str:
     return json.dumps(
         [
@@ -425,6 +498,12 @@ def valid_mount_inspect(workspace: Path) -> str:
                         "Type": "bind",
                         "Source": str(workspace / ".overlord" / "zsh-data"),
                         "Destination": "/home/overlord/.zsh_data",
+                        "RW": True,
+                    },
+                    {
+                        "Type": "bind",
+                        "Source": str(workspace / ".overlord" / "prime-agent-data"),
+                        "Destination": "/home/overlord/.prime/agent",
                         "RW": True,
                     },
                 ]

@@ -53,6 +53,9 @@ class DockerBindSourceTests(unittest.TestCase):
             self.assertIn(f"{host_workspace}:/workspace:rw", run)
             self.assertIn(f"{host_workspace / '.overlord' / 'opencode-data'}:/home/overlord/.local/share/opencode", run)
             self.assertIn(f"{host_workspace / '.overlord' / 'zsh-data'}:/home/overlord/.zsh_data", run)
+            self.assertIn(
+                f"{host_workspace / '.overlord' / 'prime-agent-data'}:/home/overlord/.prime/agent", run
+            )
             self.assertIn(f"{host_gitconfig}:/home/overlord/.gitconfig:ro", run)
             self.assertIn(f"{host_ssh_dir}:/home/overlord/.ssh:ro", run)
 
@@ -278,6 +281,12 @@ def persisted_mount_inspect(workspace: Path) -> str:
                         "Type": "bind",
                         "Source": str(workspace / ".overlord" / "zsh-data"),
                         "Destination": "/home/overlord/.zsh_data",
+                        "RW": True,
+                    },
+                    {
+                        "Type": "bind",
+                        "Source": str(workspace / ".overlord" / "prime-agent-data"),
+                        "Destination": "/home/overlord/.prime/agent",
                         "RW": True,
                     },
                 ]

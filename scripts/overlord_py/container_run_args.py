@@ -22,6 +22,7 @@ def build_container_run_args(
         workspace=paths.workspace,
         opencode_data=paths.state.opencode_data,
         zsh_data=paths.state.zsh_data,
+        prime_agent_data=paths.state.prime_agent_data,
         gitconfig=host_home / ".gitconfig",
         ssh_dir=host_home / ".ssh",
     )
@@ -42,6 +43,8 @@ def build_container_run_args(
         f"{sources.opencode_data}:/home/overlord/.local/share/opencode",
         "-v",
         f"{sources.zsh_data}:/home/overlord/.zsh_data",
+        "-v",
+        f"{sources.prime_agent_data}:/home/overlord/.prime/agent",
         "-p",
         f"0.0.0.0::{OPENCODE_WEB_PORT}",
         *exec_env_flags,

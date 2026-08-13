@@ -15,105 +15,105 @@
   "categories": {
     // HIGH thinking — all categories use high thinking level
     "ultrabrain": {
-      "model": "google/gemini-3.6-flash",
+      "model": "google/gemini-3.7-flash",
       "variant": "high"
     },
     "unspecified-high": {
-      "model": "google/gemini-3.6-flash",
+      "model": "google/gemini-3.7-flash",
       "variant": "high"
     },
     "visual-engineering": {
-      "model": "google/gemini-3.6-flash",
+      "model": "google/gemini-3.7-flash",
       "variant": "high"
     },
     "artistry": {
-      "model": "google/gemini-3.6-flash",
+      "model": "google/gemini-3.7-flash",
       "variant": "high"
     },
     "writing": {
-      "model": "google/gemini-3.6-flash",
+      "model": "google/gemini-3.7-flash",
       "variant": "high"
     },
     "quick": {
-      "model": "google/gemini-3.6-flash",
+      "model": "google/gemini-3.7-flash",
       "variant": "high"
     },
     "unspecified-low": {
-      "model": "google/gemini-3.6-flash",
+      "model": "google/gemini-3.7-flash",
       "variant": "high"
     }
   },
   "agents": {
     // HIGH thinking — all agents except explore
     "sisyphus": {
-      "model": "google/gemini-3.6-flash",
+      "model": "google/gemini-3.7-flash",
       "variant": "high",
       
     },
     "atlas": {
-      "model": "google/gemini-3.6-flash",
+      "model": "google/gemini-3.7-flash",
       "variant": "high",
       
     },
     "oracle": {
-      "model": "google/gemini-3.6-flash",
+      "model": "google/gemini-3.7-flash",
       "variant": "high",
       
     },
     "prometheus": {
-      "model": "google/gemini-3.6-flash",
+      "model": "google/gemini-3.7-flash",
       "variant": "high",
       
     },
     "hephaestus": {
-      "model": "google/gemini-3.6-flash",
+      "model": "google/gemini-3.7-flash",
       "variant": "high",
       
     },
     "plan": {
-      "model": "google/gemini-3.6-flash",
+      "model": "google/gemini-3.7-flash",
       "variant": "high",
       
     },
     "sisyphus-junior": {
-      "model": "google/gemini-3.6-flash",
+      "model": "google/gemini-3.7-flash",
       "variant": "high",
       
     },
     "OpenCode-Builder": {
-      "model": "google/gemini-3.6-flash",
+      "model": "google/gemini-3.7-flash",
       "variant": "high",
       
     },
     "build": {
-      "model": "google/gemini-3.6-flash",
+      "model": "google/gemini-3.7-flash",
       "variant": "high",
       
     },
     "metis": {
-      "model": "google/gemini-3.6-flash",
+      "model": "google/gemini-3.7-flash",
       "variant": "high",
       
     },
     "momus": {
-      "model": "google/gemini-3.6-flash",
+      "model": "google/gemini-3.7-flash",
       "variant": "high",
       
     },
     "multimodal-looker": {
-      "model": "google/gemini-3.6-flash",
+      "model": "google/gemini-3.7-flash",
       "variant": "high",
       
     },
     // LOW thinking — exploration only
     "explore": {
-      "model": "google/gemini-3.6-flash",
+      "model": "google/gemini-3.7-flash",
       "variant": "low",
       "category": "unspecified-low",
       
     },
     "librarian": {
-      "model": "google/gemini-3.6-flash",
+      "model": "google/gemini-3.7-flash",
       "variant": "high",
       "category": "unspecified-low",
       

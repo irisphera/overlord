@@ -18,6 +18,7 @@ class BindSourcePaths:
     workspace: Path
     opencode_data: Path
     zsh_data: Path
+    prime_agent_data: Path
     gitconfig: Path
     ssh_dir: Path
 
@@ -40,6 +41,7 @@ def resolve_bind_source_paths(
         workspace=translate_path(paths.workspace, mounts),
         opencode_data=translate_path(paths.state.opencode_data, mounts),
         zsh_data=translate_path(paths.state.zsh_data, mounts),
+        prime_agent_data=translate_path(paths.state.prime_agent_data, mounts),
         gitconfig=translate_path(home / ".gitconfig", mounts),
         ssh_dir=translate_path(home / ".ssh", mounts),
     )

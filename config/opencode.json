@@ -12,12 +12,107 @@
           "limit": {
             "context": 200000,
             "output": 32768
+          }
+        },
+        "deepseek-v4-pro": {
+          "limit": {
+            "context": 250000,
+            "output": 32768
+          }
+        }
+      }
+    },
+    "google": {
+      "npm": "@ai-sdk/google-vertex",
+      "name": "Google Vertex AI",
+      "options": {
+        "project": "{env:GOOGLE_CLOUD_PROJECT}",
+        "location": "{env:GOOGLE_CLOUD_LOCATION}"
+      },
+      "models": {
+        "gemini-3.7-flash": {
+          "name": "Gemini 3.7 Flash",
+          "id": "gemini-3.7-flash",
+          "tool_call": true,
+          "limit": {
+            "context": 272000,
+            "output": 65536
+          }
+        }
+      }
+    },
+    "azure": {
+      "npm": "@ai-sdk/azure",
+      "name": "Azure OpenAI",
+      "env": [
+        "AZURE_API_KEY"
+      ],
+      "models": {
+        "gpt-5.6-sol": {
+          "name": "GPT-5.6 Sol",
+          "id": "gpt-5.6-sol",
+          "options": {
+            "serviceTier": "priority"
           },
-          "deepseek-v4-pro": {
-            "limit": {
-              "context": 250000,
-              "output": 32768
-            }
+          "reasoning": true,
+          "tool_call": true,
+          "attachment": true,
+          "modalities": {
+            "input": [
+              "text",
+              "image"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 272000,
+            "input": 272000,
+            "output": 128000
+          }
+        },
+        "gpt-5.6-luna": {
+          "name": "GPT-5.6 Luna",
+          "id": "gpt-5.6-luna",
+          "reasoning": true,
+          "tool_call": true,
+          "attachment": true,
+          "modalities": {
+            "input": [
+              "text",
+              "image"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 272000,
+            "input": 272000,
+            "output": 128000
+          }
+        }
+      }
+    },
+    "openrouter": {
+      "models": {
+        "inclusionai/ling-3.0-flash:free": {
+          "name": "inclusionai/ling-3.0-flash:free",
+          "id": "inclusionai/ling-3.0-flash:free",
+          "reasoning": true,
+          "tool_call": true,
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 262144,
+            "output": 32768
           }
         }
       }

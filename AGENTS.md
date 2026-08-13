@@ -4,11 +4,14 @@
 **Commit:** 641d45c
 **Branch:** main
 
+## Language and writing style
+
+Use ISO 24495-1 writing style
 ## OVERVIEW
 
 Overlord has one documented launcher path for running OpenCode containers: the bind-mounted local `overlord` workflow. It also has a native host installer for users who do not want OpenCode containerized. The repo has four authored control surfaces: root image/docs, runtime-injected config under `config/`, default skills under `skills/`, and launcher/lifecycle logic under `scripts/`.
 
-RTK is pinned in `config/tool-versions.env`, version-checked in both full-install workflows, and initialized for OpenCode as the runtime user. The container also installs pinned Playwright with bundled Chromium for its target architecture.
+Prime Agent is installed in the container from its versioned, checksum-verified release installer. Its pin is in `config/tool-versions.env`, and its complete runtime root is persisted per workspace. RTK is pinned in `config/tool-versions.env`, version-checked in both full-install workflows, and initialized for OpenCode as the runtime user. The container also installs pinned Playwright with bundled Chromium for its target architecture.
 
 ## STRUCTURE
 
@@ -37,6 +40,7 @@ overlord/
 | Change workspace RTK history forwarding | `scripts/overlord_py/env_builder.py`, `scripts/overlord_py/web_restart.py` | The only launcher RTK setting is fixed `RTK_DB_PATH=/workspace/.overlord/rtk/history.db` forwarding |
 | Change native host install behavior | `scripts/install` | Installs checked-in OpenCode/oh-my-openagent/zellij config and Bun-managed packages directly on the host |
 | Change RTK image install | `Dockerfile` | Selects the pinned Linux asset by `TARGETARCH`, verifies its version, and initializes the plugin as `overlord` |
+| Change Prime Agent image install or persistence | `Dockerfile`, `scripts/overlord_py/paths.py`, `scripts/overlord_py/container_run_args.py`, `scripts/overlord_py/persisted_state_mounts.py` | Pin the release in `config/tool-versions.env`; persist `/home/overlord/.prime/agent` at `.overlord/prime-agent-data` |
 | Change Playwright image install | `Dockerfile` | Install browser dependencies as root and bundled Chromium as `overlord` |
 | Change RTK native install | `scripts/install` | Full install selects by host architecture and initializes the plugin; skip mode installs neither |
 | Change OpenCode provider/model catalog | `config/opencode.json` | Single checked-in provider catalog copied into runtime config path |

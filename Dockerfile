@@ -76,6 +76,16 @@ RUN apt-get update && apt-get install -y \
   python3-venv \
   && rm -rf /var/lib/apt/lists/*
 
+COPY config/tool-versions.env /tmp/tool-versions.env
+
+# Prime Agent release installer downloads a versioned tarball and verifies its SHA-256 checksum.
+RUN . /tmp/tool-versions.env \
+  && installer="$(mktemp)" \
+  && curl -fsSL https://app.primeintellect.ai/prime-agent/install.sh -o "${installer}" \
+  && PRIME_AGENT_INSTALLER_PLAIN=1 PRIME_AGENT_BOOTSTRAP_KERNEL_ON_INSTALL=0 sh "${installer}" "${PRIME_AGENT_VERSION}" \
+  && rm -f "${installer}" \
+  && prime-agent --version 2>&1 | grep -Fx "${PRIME_AGENT_VERSION}"
+
 # ast-grep ships an `sg` bin that conflicts with Ubuntu's setgroups tool.
 ARG AST_GREP_VERSION=0.43.0
 RUN npm install --prefix /opt/ast-grep "@ast-grep/cli@${AST_GREP_VERSION}" \
@@ -147,8 +157,6 @@ RUN install_log="$(mktemp)" \
 
 COPY --chown=overlord:overlord skills/setup-devcontainer/SKILL.md /home/overlord/.agents/skills/setup-devcontainer/SKILL.md
 RUN test -s /home/overlord/.agents/skills/setup-devcontainer/SKILL.md
-
-COPY --chown=overlord:overlord config/tool-versions.env /tmp/tool-versions.env
 
 RUN . /tmp/tool-versions.env \
   && install_log="$(mktemp)" \

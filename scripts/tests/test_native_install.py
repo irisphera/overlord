@@ -230,7 +230,7 @@ class NativeInstallStageTests(unittest.TestCase):
                 with self.subTest(section=section):
                     self.assertEqual(
                         {route["model"] for route in installed_routing[section].values()},
-                        {"google/gemini-3.6-flash"},
+                        {"google/gemini-3.7-flash"},
                     )
             self.assertIn("export GOOGLE_CLOUD_LOCATION=global", installed_env)
             self.assertNotIn("export AWS_", installed_env)

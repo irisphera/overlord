@@ -14,6 +14,7 @@ VERSION_VARIABLES: Final = (
     "CODEGRAPH_VERSION",
     "RTK_VERSION",
     "PLAYWRIGHT_VERSION",
+    "PRIME_AGENT_VERSION",
 )
 REQUIRED_VARIABLES: Final = VERSION_VARIABLES
 ASSIGNMENT: Final = re.compile(r"(?P<name>[A-Z][A-Z0-9_]*)=(?P<value>[A-Za-z0-9.]+)")
@@ -36,6 +37,7 @@ class ToolVersions:
     codegraph_version: str
     rtk_version: str
     playwright_version: str
+    prime_agent_version: str
 
     @property
     def opencode_package(self) -> str:
@@ -81,4 +83,5 @@ def load_tool_versions(manifest_path: Path = DEFAULT_TOOL_VERSIONS_PATH) -> Tool
         codegraph_version=values["CODEGRAPH_VERSION"],
         rtk_version=values["RTK_VERSION"],
         playwright_version=values["PLAYWRIGHT_VERSION"],
+        prime_agent_version=values["PRIME_AGENT_VERSION"],
     )

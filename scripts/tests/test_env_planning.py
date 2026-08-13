@@ -68,6 +68,7 @@ class PathEngineStateTests(unittest.TestCase):
         self.assertEqual(paths.repo_root, REPO_ROOT)
         self.assertEqual(paths.state.opencode_data.name, "opencode-data")
         self.assertEqual(paths.state.zsh_data.name, "zsh-data")
+        self.assertEqual(paths.state.prime_agent_data.name, "prime-agent-data")
 
     def test_engine_detection_prefers_podman_falls_back_to_docker_and_errors_when_missing(self) -> None:
         with TempLauncherWorkspace() as both_workspace:
@@ -124,9 +125,12 @@ class PathEngineStateTests(unittest.TestCase):
             gitignore_content = gitignore.read_text(encoding="utf-8")
             sentinel_survived = sentinel.exists()
             pid_exists = (paths.state.opencode_data / "overlord-serve.pid").exists()
+            prime_agent_data_exists = paths.state.prime_agent_data.is_dir()
 
         self.assertTrue(ensure_result.opencode_data_created)
         self.assertTrue(ensure_result.zsh_data_created)
+        self.assertTrue(ensure_result.prime_agent_data_created)
+        self.assertTrue(prime_agent_data_exists)
         self.assertEqual(gitignore_content, "keep-me\n.overlord/\n.omo\n.codegraph\n")
         self.assertTrue(sentinel_survived)
         self.assertFalse(pid_exists)

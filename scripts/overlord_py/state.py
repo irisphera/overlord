@@ -67,6 +67,7 @@ class ManagedStateError(RuntimeError):
 class StateEnsureResult:
     opencode_data_created: bool
     zsh_data_created: bool
+    prime_agent_data_created: bool
     gitignore_created: bool
     gitignore_appended: bool
 
@@ -92,15 +93,18 @@ def ensure_state_dir(paths: StatePaths) -> StateEnsureResult:
 
     opencode_preexisting = paths.opencode_data.is_dir()
     zsh_preexisting = paths.zsh_data.is_dir()
+    prime_agent_preexisting = paths.prime_agent_data.is_dir()
     gitignore_created = gitignore_snapshot.kind is NodeKind.MISSING
     gitignore_appended = append_state_gitignore(gitignore, gitignore_snapshot)
     create_directory(paths.opencode_data, parents=True, exist_ok=True)
     create_directory(paths.zsh_data, parents=True, exist_ok=True)
+    create_directory(paths.prime_agent_data, parents=True, exist_ok=True)
     for plan in pair_plans:
         apply_pair_plan(plan)
     return StateEnsureResult(
         opencode_data_created=not opencode_preexisting,
         zsh_data_created=not zsh_preexisting,
+        prime_agent_data_created=not prime_agent_preexisting,
         gitignore_created=gitignore_created,
         gitignore_appended=gitignore_appended,
     )

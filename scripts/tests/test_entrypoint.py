@@ -19,23 +19,21 @@ class EntrypointTests(unittest.TestCase):
     def test_dockerfile_derives_package_versions_from_manifest(self) -> None:
         dockerfile = DOCKERFILE.read_text(encoding="utf-8")
         versions = dict(line.split("=", maxsplit=1) for line in TOOL_VERSIONS.read_text(encoding="utf-8").splitlines())
-        manifest_copy = "COPY --chown=overlord:overlord config/tool-versions.env /tmp/tool-versions.env"
+        manifest_copy = "COPY config/tool-versions.env /tmp/tool-versions.env"
         default_skills_install = "Installing default OpenCode skills (mattpocock/skills)..."
         setup_devcontainer_verification = "RUN test -s /home/overlord/.agents/skills/setup-devcontainer/SKILL.md"
 
         self.assertIn(manifest_copy, dockerfile)
         sourced_runs = tuple(run for run in dockerfile.split("\nRUN ") if run.startswith(". /tmp/tool-versions.env"))
-        self.assertEqual(len(sourced_runs), 5)
-        self.assertLess(dockerfile.index(default_skills_install), dockerfile.index(manifest_copy))
-        self.assertLess(dockerfile.index(setup_devcontainer_verification), dockerfile.index(manifest_copy))
+        self.assertEqual(len(sourced_runs), 6)
+        self.assertLess(dockerfile.index(manifest_copy), dockerfile.index(default_skills_install))
+        self.assertLess(dockerfile.index(manifest_copy), dockerfile.index(setup_devcontainer_verification))
         manifest_instructions = tuple(
             line
             for line in dockerfile[dockerfile.index(manifest_copy) :].splitlines()
             if line.startswith(("COPY ", "RUN "))
         )
         self.assertEqual(manifest_instructions[0], manifest_copy)
-        self.assertEqual(len(manifest_instructions[:6]), 6)
-        self.assertTrue(all(line.startswith("RUN . /tmp/tool-versions.env") for line in manifest_instructions[1:6]))
         version_source = dockerfile.replace(f"ARG AST_GREP_VERSION={versions['RTK_VERSION']}", "")
         for version in versions.values():
             self.assertNotIn(version, version_source)
@@ -50,6 +48,19 @@ class EntrypointTests(unittest.TestCase):
             'bun add -g "playwright@${PLAYWRIGHT_VERSION}"',
         ):
             self.assertTrue(any(package_install in sourced_run for sourced_run in sourced_runs))
+
+    def test_dockerfile_installs_pinned_prime_agent_without_baking_runtime_state(self) -> None:
+        dockerfile = DOCKERFILE.read_text(encoding="utf-8")
+        sourced_runs = tuple(run for run in dockerfile.split("\nRUN ") if run.startswith(". /tmp/tool-versions.env"))
+        prime_runs = tuple(run for run in sourced_runs if "app.primeintellect.ai/prime-agent/install.sh" in run)
+
+        self.assertEqual(len(prime_runs), 1)
+        prime_run = prime_runs[0]
+        self.assertIn('sh "${installer}" "${PRIME_AGENT_VERSION}"', prime_run)
+        self.assertIn("PRIME_AGENT_BOOTSTRAP_KERNEL_ON_INSTALL=0", prime_run)
+        self.assertIn('prime-agent --version 2>&1 | grep -Fx "${PRIME_AGENT_VERSION}"', prime_run)
+        self.assertNotIn("/home/overlord/.prime", prime_run)
+        self.assertLess(dockerfile.index(prime_run), dockerfile.index("USER overlord"))
 
     def test_dockerfile_installs_version_checked_rtk_assets_and_activates_opencode_plugin_as_overlord(self) -> None:
         dockerfile = DOCKERFILE.read_text(encoding="utf-8")

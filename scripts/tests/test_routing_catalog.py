@@ -9,7 +9,7 @@ from typing import Final, TypeAlias
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[2]
 CONFIG_DIR: Final = REPO_ROOT / "config"
-GEMINI_MODEL: Final = "google/gemini-3.6-flash"
+GEMINI_MODEL: Final = "google/gemini-3.7-flash"
 OPENROUTER_MODEL: Final = "openrouter/inclusionai/ling-3.0-flash:free"
 OPENCODE_DS_MODEL: Final = "opencode-go/deepseek-v4-flash"
 JSON_VALUE: TypeAlias = None | bool | int | float | str | list["JSON_VALUE"] | dict[str, "JSON_VALUE"]
@@ -62,7 +62,7 @@ class RoutingCatalogTests(unittest.TestCase):
         catalog = load_json(CONFIG_DIR / "opencode.json")
         providers = require_object(catalog["provider"])
 
-        self.assertEqual(set(providers), {"azure", "google", "openrouter"})
+        self.assertEqual(set(providers), {"azure", "google", "opencode-go", "openrouter"})
 
         google = require_object(providers["google"])
         self.assertEqual(google["npm"], "@ai-sdk/google-vertex")
@@ -71,11 +71,23 @@ class RoutingCatalogTests(unittest.TestCase):
             {"project": "{env:GOOGLE_CLOUD_PROJECT}", "location": "{env:GOOGLE_CLOUD_LOCATION}"},
         )
         google_models = require_object(google["models"])
-        self.assertEqual(set(google_models), {"gemini-3.6-flash"})
-        gemini = require_object(google_models["gemini-3.6-flash"])
-        self.assertEqual(gemini["id"], "gemini-3.6-flash")
+        self.assertEqual(set(google_models), {"gemini-3.7-flash"})
+        gemini = require_object(google_models["gemini-3.7-flash"])
+        self.assertEqual(gemini["id"], "gemini-3.7-flash")
         self.assertEqual(gemini["limit"], {"context": 128000, "output": 65536})
         self.assertEqual(gemini["tool_call"], True)
+
+        opencode_go = require_object(providers["opencode-go"])
+        opencode_go_models = require_object(opencode_go["models"])
+        self.assertEqual(set(opencode_go_models), {"deepseek-v4-flash", "deepseek-v4-pro"})
+        self.assertEqual(
+            require_object(opencode_go_models["deepseek-v4-flash"])["limit"],
+            {"context": 200000, "output": 32768},
+        )
+        self.assertEqual(
+            require_object(opencode_go_models["deepseek-v4-pro"])["limit"],
+            {"context": 250000, "output": 32768},
+        )
 
         azure = require_object(providers["azure"])
         azure_models = require_object(azure["models"])
@@ -88,9 +100,9 @@ class RoutingCatalogTests(unittest.TestCase):
 
         openrouter = require_object(providers["openrouter"])
         openrouter_models = require_object(openrouter["models"])
-        self.assertEqual(set(openrouter_models), {"poolside/laguna-s-2.1:free"})
-        laguna = require_object(openrouter_models["poolside/laguna-s-2.1:free"])
-        self.assertEqual(laguna["limit"], {"context": 262144, "output": 32768})
+        self.assertEqual(set(openrouter_models), {"inclusionai/ling-3.0-flash:free"})
+        ling = require_object(openrouter_models["inclusionai/ling-3.0-flash:free"])
+        self.assertEqual(ling["limit"], {"context": 262144, "output": 32768})
 
     def test_default_preset_matches_opencode_ds_routing(self) -> None:
         default = load_jsonc(CONFIG_DIR / "oh-my-openagent.jsonc")
@@ -159,8 +171,8 @@ class RoutingCatalogTests(unittest.TestCase):
                 "ultrabrain": "azure/gpt-5.6-sol",
                 "unspecified-high": "azure/gpt-5.6-sol",
                 "visual-engineering": "azure/gpt-5.6-sol",
-                "artistry": "azure/gpt-5.6-sol",
-                "writing": "azure/gpt-5.6-sol",
+                "artistry": "azure/gpt-5.6-luna",
+                "writing": "azure/gpt-5.6-luna",
                 "quick": "azure/gpt-5.6-luna",
                 "unspecified-low": "azure/gpt-5.6-luna",
             },
@@ -171,13 +183,13 @@ class RoutingCatalogTests(unittest.TestCase):
         self.assertEqual(
             reasoning_efforts(azure, "categories"),
             {
-                "ultrabrain": "xhigh",
+                "ultrabrain": "high",
                 "unspecified-high": "high",
                 "visual-engineering": "medium",
-                "artistry": "medium",
-                "writing": "medium",
-                "quick": "high",
-                "unspecified-low": "high",
+                "artistry": "max",
+                "writing": "max",
+                "quick": "medium",
+                "unspecified-low": "medium",
             },
         )
         self.assertEqual(
@@ -195,8 +207,8 @@ class RoutingCatalogTests(unittest.TestCase):
                 "metis": "xhigh",
                 "momus": "xhigh",
                 "multimodal-looker": "medium",
-                "explore": "high",
-                "librarian": "high",
+                "explore": "max",
+                "librarian": "max",
             },
         )
 

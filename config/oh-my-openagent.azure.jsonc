@@ -16,7 +16,7 @@
     // HIGH reasoning — deep logical work, complex problem-solving
     "ultrabrain": {
       "model": "azure/gpt-5.6-sol",
-      "reasoningEffort": "xhigh"
+      "reasoningEffort": "high"
     },
     "unspecified-high": {
       "model": "azure/gpt-5.6-sol",
@@ -28,21 +28,21 @@
       "reasoningEffort": "medium"
     },
     "artistry": {
-      "model": "azure/gpt-5.6-sol",
-      "reasoningEffort": "medium"
+      "model": "azure/gpt-5.6-luna",
+      "reasoningEffort": "max"
     },
     "writing": {
-      "model": "azure/gpt-5.6-sol",
-      "reasoningEffort": "medium"
+      "model": "azure/gpt-5.6-luna",
+      "reasoningEffort": "max"
     },
     // LOW reasoning — trivial, fast tasks
     "quick": {
       "model": "azure/gpt-5.6-luna",
-      "reasoningEffort": "max"
+      "reasoningEffort": "medium"
     },
     "unspecified-low": {
       "model": "azure/gpt-5.6-luna",
-      "reasoningEffort": "max"
+      "reasoningEffort": "medium"
     }
   },
   "agents": {
@@ -111,13 +111,11 @@
     // LOW reasoning — search, lookup, exploration (speed over depth)
     "explore": {
       "model": "azure/gpt-5.6-luna",
-      "reasoningEffort": "max",
-      "category": "unspecified-low"
+      "reasoningEffort": "max"
     },
     "librarian": {
       "model": "azure/gpt-5.6-luna",
-      "reasoningEffort": "max",
-      "category": "unspecified-low"
+      "reasoningEffort": "max"
     }
   }
 }

@@ -110,11 +110,11 @@ The checked-in presets are:
 
 - `default` (`oh-my-openagent.jsonc`) is the same routing as `opencode-ds`: every category and agent routes to DeepSeek-V4-Flash-0731 through the built-in `opencode-go/deepseek-v4-flash` model.
 - `azure` (`oh-my-openagent.azure.jsonc`) preserves the GPT-5.6 Sol/Luna split and role-specific reasoning effort.
-- `gemini` (`oh-my-openagent.gemini.jsonc`) routes every category and agent to Gemini 3.6 Flash through Google Vertex AI.
+- `gemini` (`oh-my-openagent.gemini.jsonc`) routes every category and agent to Gemini 3.7 Flash through Google Vertex AI.
 - `opencode-ds` (`oh-my-openagent.opencode-ds.jsonc`) routes every category and agent to DeepSeek-V4-Flash-0731 through the built-in `opencode-go/deepseek-v4-flash` model. Heavy categories and agents select reasoning effort `max` — categories via the canonical `reasoning` field and agents via the OpenCode-native `variant` key, which is the per-agent selector that survives the full request path for this model (it declares reasoning effort variants `high` and `max`). Light routes (`quick`, `unspecified-low`, `multimodal-looker`, `explore`, `librarian`) keep provider defaults.
 - `openrouter` (`oh-my-openagent.openrouter.jsonc`) preserves the existing OpenRouter Ling routing and concurrency limits.
 
-The single catalog contains Vertex Gemini 3.6 Flash under the intentional `google` provider selector, Azure GPT-5.6 Sol and Luna, and the existing OpenRouter Laguna model entry. OpenCode Go is built into OpenCode, so the `opencode-ds` preset does not add a custom provider or model entry to `config/opencode.json`. The Azure deployment IDs must remain `gpt-5.6-sol` and `gpt-5.6-luna` unless their `id` values in `config/opencode.json` are changed to match the deployments.
+The single catalog contains Vertex Gemini 3.7 Flash under the intentional `google` provider selector, Azure GPT-5.6 Sol and Luna, the existing OpenRouter Ling model entry, and limit declarations for the built-in OpenCode Go DeepSeek models (`deepseek-v4-flash` and `deepseek-v4-pro`). The Azure deployment IDs must remain `gpt-5.6-sol` and `gpt-5.6-luna` unless their `id` values in `config/opencode.json` are changed to match the deployments.
 
 Managed container files are `/home/overlord/.config/opencode/opencode.json`, `oh-my-openagent.jsonc`, and `oh-my-opencode.jsonc`, plus `/home/overlord/.config/zellij/config.kdl`.
 
@@ -151,7 +151,7 @@ export OPENCODE_SERVER_PASSWORD="replace-with-a-password"
 overlord
 ```
 
-OpenCode Go is the default routing provider: the `default` preset routes every category and agent through `opencode-go/deepseek-v4-flash` and reads the `OPENCODE_API_KEY` credential from the launching environment. The checked-in provider catalog does not declare OpenCode Go because it is built into OpenCode.
+OpenCode Go is the default routing provider: the `default` preset routes every category and agent through `opencode-go/deepseek-v4-flash` and reads the `OPENCODE_API_KEY` credential from the launching environment. OpenCode Go is built into OpenCode; the catalog only declares its model limits (`deepseek-v4-flash` and `deepseek-v4-pro`).
 
 Google Vertex AI uses `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION`. `GCP_PROJECT` and `GCLOUD_PROJECT` remain project aliases, and `VERTEX_LOCATION` remains the location alias. When no location or alias is supplied, Overlord sets `GOOGLE_CLOUD_LOCATION=global` because the catalog consumes that environment value.
 
@@ -189,6 +189,7 @@ The workspace keeps managed tool state at these paths:
 | `.overlord/.omo/` | Workspace oh-my-openagent state |
 | `.overlord/.codegraph/` | Workspace CodeGraph index and state |
 | `.overlord/rtk/history.db` | Workspace RTK history, exposed in the container as `/workspace/.overlord/rtk/history.db` |
+| `.overlord/prime-agent-data/` | Prime Agent credentials, settings, sessions, artifacts, kernel runtime, and continual-harness self-improvements |
 
 The workspace root contains literal relative links `.omo -> .overlord/.omo` and `.codegraph -> .overlord/.codegraph`. These links keep the tools' expected workspace entry points while storing their data under `.overlord/`.
 
@@ -196,7 +197,7 @@ Normal launch commands preflight this layout after the workspace Git topology ch
 
 If a root directory and its managed directory both exist independently, launch refuses and preserves both. Overlord does not copy, merge, or delete either entry. Reconcile the contents manually, leaving the managed directory and expected relative link, then launch again. Unsafe files, unexpected links, broken managed links, and other ambiguous layouts also fail closed. `fresh`, `purge`, `help`, and config listing remain available while normal launch is blocked.
 
-OpenCode data and zsh data are direct writable bind mounts from `.overlord/`. The managed `.omo`, `.codegraph`, and RTK paths live inside the workspace mount. Together, these paths keep conversations, memory, shell history, workspace indexes, and workspace RTK history across both `fresh` and `purge`.
+OpenCode, Prime Agent, and zsh data are direct writable bind mounts from `.overlord/`. Prime Agent uses its declared data root at `/home/overlord/.prime/agent`; persisting the whole root keeps global and session-local harness refinements together with transcripts, child-agent artifacts, schedules, goals, and authentication. Project-local `.prime/agent` and `.agents` resources remain in the workspace mount. The managed `.omo`, `.codegraph`, and RTK paths live inside the workspace mount. Together, these paths keep conversations, memory, shell history, workspace indexes, and workspace RTK history across both `fresh` and `purge`.
 
 Overlord does not migrate RTK history from an older global location. Container RTK history written through `RTK_DB_PATH=/workspace/.overlord/rtk/history.db` uses the managed path.
 
@@ -206,7 +207,7 @@ Packages installed into a container outside persisted mounts disappear with `fre
 
 Workspace `.codegraph` is state, not the CodeGraph package installation. The container installs that package under `/home/overlord/.omo/codegraph`; it can be recreated with the container and must not be confused with `/workspace/.codegraph`, which links to persistent `.overlord/.codegraph` state.
 
-Before `fresh`, or before `purge` removes an existing container, Overlord verifies exactly one writable bind mount for `/workspace`, OpenCode data, and zsh data, each from the expected workspace source. If `purge` proves the container is already absent, it skips mount inspection and continues image cleanup.
+Before `fresh`, or before `purge` removes an existing container, Overlord verifies exactly one writable bind mount for `/workspace`, OpenCode data, Prime Agent data, and zsh data, each from the expected workspace source. If `purge` proves the container is already absent, it skips mount inspection and continues image cleanup.
 
 Missing, ambiguous, read-only, named-volume, or mismatched mounts fail closed without destructive lifecycle action.
 
@@ -214,9 +215,11 @@ For a refused legacy container, quiesce it first. Copy only unmounted state to a
 
 Never copy live state back onto bind sources as an automatic recovery step.
 
+Containers created before Prime Agent persistence was added do not have the required Prime Agent bind. `fresh` directs these containers to `overlord purge`, because retaining their old image would not install Prime Agent. `purge` proceeds automatically only when it can prove that `/home/overlord/.prime/agent` is absent or empty. If unpersisted Prime Agent data exists or cannot be inspected, removal still fails closed; quiesce the container, preserve that data to verified staging, remove the exact legacy container manually, and relaunch through `overlord`.
+
 ## Workspace setup and mounts
 
-The current directory is mounted read-write at `/workspace`. When present, `~/.gitconfig` and `~/.ssh` are mounted read-only. OpenCode and zsh state mount from the workspace as follows:
+The current directory is mounted read-write at `/workspace`. When present, `~/.gitconfig` and `~/.ssh` are mounted read-only. OpenCode, Prime Agent, and zsh state mount from the workspace as follows:
 
 | Host source | Container destination | Mode |
 | --- | --- | --- |
@@ -226,6 +229,7 @@ The current directory is mounted read-write at `/workspace`. When present, `~/.g
 | `/var/run/docker.sock` | `/var/run/docker.sock` | read-write |
 | `.overlord/opencode-data` | `/home/overlord/.local/share/opencode` | read-write |
 | `.overlord/zsh-data` | `/home/overlord/.zsh_data` | read-write |
+| `.overlord/prime-agent-data` | `/home/overlord/.prime/agent` | read-write |
 
 Non-Git directories are valid workspaces. For launch commands, Overlord also checks a `.git` file before starting image or container lifecycle. If its `gitdir` resolves outside the selected workspace, the isolated bind mount cannot preserve that submodule or linked-worktree topology, so Overlord reports the resolved workspace and Git metadata paths instead of starting a container that cannot use the repository. Run Overlord from the containing repository or use a standalone clone. Overlord does not silently mount the parent directory; `fresh`, `purge`, `help`, and config listing remain available for recovery and inspection.
 
@@ -243,9 +247,11 @@ Review setup scripts before launching untrusted workspaces. Reattaching to an al
 
 ## Included tooling and zellij
 
-The container image includes OpenCode, oh-my-openagent, CodeGraph, RTK, Playwright with bundled Chromium, Node.js 22, Bun, Python 3, uv, Docker CLI with Compose, and Google Cloud CLI. Chromium's Linux dependencies are installed in the image, and Playwright selects the browser binary for the image architecture. Playwright and Chromium are container-only and are not installed by `scripts/install`.
+The container image includes OpenCode, Prime Agent, oh-my-openagent, CodeGraph, RTK, Playwright with bundled Chromium, Node.js 22, Bun, Python 3, uv, Docker CLI with Compose, and Google Cloud CLI. Chromium's Linux dependencies are installed in the image, and Playwright selects the browser binary for the image architecture. Playwright and Chromium are container-only and are not installed by `scripts/install`.
 
 It also includes git, zsh, zellij, neovim, ripgrep, jq, ast-grep, ShellCheck, and shfmt.
+
+Run `prime-agent` from `overlord shell` or an Overlord zellij pane. The image installs the exact version pinned in `config/tool-versions.env`; its first-use runtime and later self-improvements are written to the persisted Prime Agent data bind.
 
 Project-specific language servers and stacks are intentionally not image defaults. Use `/setup-devcontainer` to maintain `setup-devcontainer.sh`; review the result because Overlord executes it as root from `/workspace`. The skill validates Bash syntax and uses ShellCheck and shfmt when available.
 

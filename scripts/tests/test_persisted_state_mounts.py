@@ -20,6 +20,7 @@ from scripts.overlord_py.persisted_state_mounts import (
 WORKSPACE: Final = "/workspace"
 OPENCODE_DATA: Final = "/home/overlord/.local/share/opencode"
 ZSH_DATA: Final = "/home/overlord/.zsh_data"
+PRIME_AGENT_DATA: Final = "/home/overlord/.prime/agent"
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,6 +36,7 @@ def valid_mounts(workspace_source: str = "/srv/project") -> tuple[MountFixture, 
         MountFixture("bind", workspace_source, WORKSPACE, True),
         MountFixture("bind", f"{workspace_source}/.overlord/opencode-data", OPENCODE_DATA, True),
         MountFixture("bind", f"{workspace_source}/.overlord/zsh-data", ZSH_DATA, True),
+        MountFixture("bind", f"{workspace_source}/.overlord/prime-agent-data", PRIME_AGENT_DATA, True),
     )
 
 
@@ -63,18 +65,25 @@ def expected_sources(workspace_source: str = "/srv/project") -> BindSourcePaths:
         workspace=workspace,
         opencode_data=workspace / ".overlord" / "opencode-data",
         zsh_data=workspace / ".overlord" / "zsh-data",
+        prime_agent_data=workspace / ".overlord" / "prime-agent-data",
         gitconfig=Path("/home/launcher/.gitconfig"),
         ssh_dir=Path("/home/launcher/.ssh"),
     )
 
 
-def verify(engine: RecordingEngine, expected: BindSourcePaths | None = None) -> PersistedStateMounts:
+def verify(
+    engine: RecordingEngine,
+    expected: BindSourcePaths | None = None,
+    *,
+    allow_empty_legacy_prime_agent_data: bool = False,
+) -> PersistedStateMounts:
     return verify_persisted_state_mounts(
         engine,
         "overlord-project",
         expected_sources=expected_sources() if expected is None else expected,
         cwd=Path("/launcher"),
         env={"PATH": "/usr/bin"},
+        allow_empty_legacy_prime_agent_data=allow_empty_legacy_prime_agent_data,
     )
 
 
@@ -106,6 +115,10 @@ class PersistedStateMountTests(unittest.TestCase):
                     source="/srv/project/.overlord/zsh-data",
                     destination="/home/overlord/.zsh_data",
                 ),
+                prime_agent_data=VerifiedMount(
+                    source="/srv/project/.overlord/prime-agent-data",
+                    destination="/home/overlord/.prime/agent",
+                ),
             ),
         )
         self.assertEqual(engine.runs[0].args, ["inspect", "overlord-project"])
@@ -121,6 +134,12 @@ class PersistedStateMountTests(unittest.TestCase):
                 True,
             ),
             MountFixture("bind", "/unresolved/project/.overlord/zsh-data/.", f"{ZSH_DATA}/.", True),
+            MountFixture(
+                "bind",
+                "/unresolved/project/.overlord/prime-agent-data/.",
+                f"{PRIME_AGENT_DATA}/.",
+                True,
+            ),
         )
         engine = RecordingEngine(
             name="podman",
@@ -134,10 +153,55 @@ class PersistedStateMountTests(unittest.TestCase):
         self.assertEqual(result.workspace.source, "/unresolved/project")
         self.assertEqual(result.opencode_data.source, "/unresolved/project/.overlord/opencode-data")
         self.assertEqual(result.zsh_data.source, "/unresolved/project/.overlord/zsh-data")
+        self.assertEqual(result.prime_agent_data.source, "/unresolved/project/.overlord/prime-agent-data")
         self.assertEqual(engine.runs[0].args, ["inspect", "overlord-project"])
 
+    def test_empty_legacy_prime_agent_state_requires_purge_for_image_upgrade(self) -> None:
+        # Given
+        mounts = tuple(mount for mount in valid_mounts() if mount.destination != PRIME_AGENT_DATA)
+        engine = RecordingEngine(
+            responses=[
+                ("inspect overlord-project", FakeResponse(stdout=inspect_output(mounts))),
+                ("exec overlord-project", FakeResponse(stdout="absent\n")),
+            ]
+        )
+
+        # When / Then
+        with self.assertRaisesRegex(MountSafetyFailure, "Run 'overlord purge'"):
+            _ = verify(engine)
+
+    def test_purge_mode_accepts_empty_legacy_prime_agent_state(self) -> None:
+        # Given
+        mounts = tuple(mount for mount in valid_mounts() if mount.destination != PRIME_AGENT_DATA)
+        engine = RecordingEngine(
+            responses=[
+                ("inspect overlord-project", FakeResponse(stdout=inspect_output(mounts))),
+                ("exec overlord-project", FakeResponse(stdout="empty\n")),
+            ]
+        )
+
+        # When
+        result = verify(engine, allow_empty_legacy_prime_agent_data=True)
+
+        # Then
+        self.assertIsNone(result.prime_agent_data)
+
+    def test_purge_mode_refuses_nonempty_unmounted_legacy_prime_agent_state(self) -> None:
+        # Given
+        mounts = tuple(mount for mount in valid_mounts() if mount.destination != PRIME_AGENT_DATA)
+        engine = RecordingEngine(
+            responses=[
+                ("inspect overlord-project", FakeResponse(stdout=inspect_output(mounts))),
+                ("exec overlord-project", FakeResponse(stdout="nonempty\n")),
+            ]
+        )
+
+        # When / Then
+        with self.assertRaisesRegex(MountSafetyFailure, "Preserve that data"):
+            _ = verify(engine, allow_empty_legacy_prime_agent_data=True)
+
     def test_missing_required_mount_fails_closed(self) -> None:
-        for missing_destination in (WORKSPACE, OPENCODE_DATA, ZSH_DATA):
+        for missing_destination in (WORKSPACE, OPENCODE_DATA, ZSH_DATA, PRIME_AGENT_DATA):
             with self.subTest(missing_destination=missing_destination):
                 # Given
                 mounts = tuple(mount for mount in valid_mounts() if mount.destination != missing_destination)
@@ -202,6 +266,25 @@ class PersistedStateMountTests(unittest.TestCase):
 
         # When / Then
         with self.assertRaisesRegex(MountSafetyFailure, "must use source /srv/project/.overlord/opencode-data"):
+            _ = verify(engine)
+
+    def test_prime_agent_source_not_derived_from_workspace_fails_closed(self) -> None:
+        # Given
+        mounts = tuple(
+            replace(mount, source="/other/project/.overlord/prime-agent-data")
+            if mount.destination == PRIME_AGENT_DATA
+            else mount
+            for mount in valid_mounts()
+        )
+        engine = RecordingEngine(
+            responses=[("inspect overlord-project", FakeResponse(stdout=inspect_output(mounts)))]
+        )
+
+        # When / Then
+        with self.assertRaisesRegex(
+            MountSafetyFailure,
+            "must use source /srv/project/.overlord/prime-agent-data",
+        ):
             _ = verify(engine)
 
     def test_malformed_json_fails_closed(self) -> None:

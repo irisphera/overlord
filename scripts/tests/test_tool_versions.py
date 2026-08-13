@@ -27,6 +27,7 @@ LOADER_DRIVER = "\n".join(
         "    versions.codegraph_version,",
         "    versions.rtk_version,",
         "    versions.playwright_version,",
+        "    versions.prime_agent_version,",
         "    versions.opencode_package,",
         "    versions.oh_my_openagent_package,",
         "    versions.codegraph_package,",
@@ -45,7 +46,7 @@ class ToolVersionManifestTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         output_lines = result.stdout.splitlines()
-        self.assertEqual(len(output_lines), 9)
+        self.assertEqual(len(output_lines), 10)
         (
             manifest_path,
             opencode_version,
@@ -53,6 +54,7 @@ class ToolVersionManifestTests(unittest.TestCase):
             codegraph_version,
             rtk_version,
             playwright_version,
+            prime_agent_version,
             opencode_package,
             oh_my_openagent_package,
             codegraph_package,
@@ -67,6 +69,7 @@ class ToolVersionManifestTests(unittest.TestCase):
                 "CODEGRAPH_VERSION",
                 "RTK_VERSION",
                 "PLAYWRIGHT_VERSION",
+                "PRIME_AGENT_VERSION",
             },
         )
         self.assertEqual(opencode_version, manifest_values["OPENCODE_VERSION"])
@@ -74,6 +77,7 @@ class ToolVersionManifestTests(unittest.TestCase):
         self.assertEqual(codegraph_version, manifest_values["CODEGRAPH_VERSION"])
         self.assertEqual(rtk_version, manifest_values["RTK_VERSION"])
         self.assertEqual(playwright_version, manifest_values["PLAYWRIGHT_VERSION"])
+        self.assertEqual(prime_agent_version, manifest_values["PRIME_AGENT_VERSION"])
         self.assertEqual(opencode_package, f"opencode-ai@{opencode_version}")
         self.assertEqual(oh_my_openagent_package, f"oh-my-openagent@{oh_my_openagent_version}")
         self.assertEqual(codegraph_package, f"@colbymchenry/codegraph@{codegraph_version}")
@@ -85,6 +89,7 @@ class ToolVersionManifestTests(unittest.TestCase):
             "CODEGRAPH_VERSION=8.9.10\n"
             "RTK_VERSION=11.12.13\n"
             "PLAYWRIGHT_VERSION=14.15.16\n"
+            "PRIME_AGENT_VERSION=17.18.19\n"
         )
         cases = (
             ("missing file", None, "cannot read manifest"),

@@ -48,6 +48,7 @@ class StatePaths:
     root: Path
     opencode_data: Path
     zsh_data: Path
+    prime_agent_data: Path
     omo: ManagedStatePaths
     codegraph: ManagedStatePaths
     host_proxy_script: Path
@@ -96,6 +97,7 @@ def state_paths(workspace: Path) -> StatePaths:
         root=root,
         opencode_data=root / "opencode-data",
         zsh_data=root / "zsh-data",
+        prime_agent_data=root / "prime-agent-data",
         omo=managed_state_paths(workspace, root, ".omo"),
         codegraph=managed_state_paths(workspace, root, ".codegraph"),
         host_proxy_script=root / "opencode-web-proxy.cjs",

@@ -263,6 +263,12 @@ def valid_mount_inspect(workspace: Path) -> str:
                         "Destination": "/home/overlord/.zsh_data",
                         "RW": True,
                     },
+                    {
+                        "Type": "bind",
+                        "Source": str(workspace / ".overlord" / "prime-agent-data"),
+                        "Destination": "/home/overlord/.prime/agent",
+                        "RW": True,
+                    },
                 ]
             }
         ]

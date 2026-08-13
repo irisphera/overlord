@@ -193,7 +193,14 @@ def purge(
     if container_exists:
         home = Path(env.get("HOME", str(Path.home())))
         expected_sources = resolve_bind_source_paths(engine, paths, env=env, home=home)
-        _ = verify_persisted_state_mounts(engine, container_name, expected_sources=expected_sources, cwd=paths.workspace, env=env)
+        _ = verify_persisted_state_mounts(
+            engine,
+            container_name,
+            expected_sources=expected_sources,
+            cwd=paths.workspace,
+            env=env,
+            allow_empty_legacy_prime_agent_data=True,
+        )
     after_verification()
     messages: list[str] = []
     if container_exists:

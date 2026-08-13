@@ -74,7 +74,7 @@ class RuntimeConfigTests(unittest.TestCase):
 
             self.assertIn(OH_MY_OPENAGENT_PACKAGE, opencode_text)
             self.assertEqual(oh_my_openagent, oh_my_opencode)
-            self.assertIn('"model": "google/gemini-3.6-flash"', oh_my_openagent)
+            self.assertIn('"model": "google/gemini-3.7-flash"', oh_my_openagent)
 
     def test_runtime_config_repair_sets_restart_when_bash_would_repair(self) -> None:
         engine = RecordingEngine(responses=[("grep -Fq", FakeResponse(returncode=1))])

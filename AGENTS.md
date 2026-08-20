@@ -1,99 +1,42 @@
 # PROJECT KNOWLEDGE BASE
 
-**Generated:** 2026-04-12 (UTC)
-**Commit:** 641d45c
-**Branch:** main
-
-## Language and writing style
-
-Use ISO 24495-1 writing style
 ## OVERVIEW
 
-Overlord has one documented launcher path for running OpenCode containers: the bind-mounted local `overlord` workflow. It also has a native host installer for users who do not want OpenCode containerized. The repo has four authored control surfaces: root image/docs, runtime-injected config under `config/`, default skills under `skills/`, and launcher/lifecycle logic under `scripts/`.
+Overlord is a minimal dev-container launcher + standalone VM setup. The repo has:
+- `setup.sh` : standalone non-interactive installer (lazyvim, zellij, zsh, oh-my-zsh, zsh-autosuggestions/syntax-highlighting/completions)
+- `Dockerfile` : builds a container by running `setup.sh`
+- `scripts/overlord` : creates/reuses a per-workspace container and runs setup.sh inside
+- `config/` : container bootstrap and zellij config
 
-Prime Agent is installed in the container from its versioned, checksum-verified release installer. Its pin is in `config/tool-versions.env`, and its complete runtime root is persisted per workspace. RTK is pinned in `config/tool-versions.env`, version-checked in both full-install workflows, and initialized for OpenCode as the runtime user. The container also installs pinned Playwright with bundled Chromium for its target architecture.
+Clean dev environment without extra agents remains. This is a pure dev environment.
 
 ## STRUCTURE
 
 ```
 overlord/
-├── Dockerfile      # Local bind-mounted image/toolchain source of truth
-├── config/         # Host-authored config copied into container at launch
-├── skills/         # Repository-owned default OpenCode skills
-├── scripts/        # Host-side launcher shim, Python launcher modules, tests, and native installer
-├── .overlord/      # Per-workspace runtime state, git-ignored
-├── .omo             # Relative runtime link to .overlord/.omo
-├── .codegraph       # Relative runtime link to .overlord/.codegraph
-├── README.md       # User-facing install and operations guide
-└── .claude/        # Local tool metadata
+├── Dockerfile      # builds image via setup.sh
+├── setup.sh        # standalone VM installer (also used in container)
+├── setup-devcontainer.sh # wrapper that calls setup.sh
+├── config/         # entrypoint, zellij config, tool-versions
+├── scripts/        # overlord launcher (python)
+├── .overlord/      # per-workspace runtime state (git-ignored)
+└── README.md
 ```
 
-## WHERE TO LOOK
-
-| Task | Location | Notes |
-|------|----------|-------|
-| Change local image/toolchain contents | `Dockerfile` | Rebuild with `overlord purge && overlord` after image-level edits |
-| Change local launcher command surface | `scripts/overlord` | Minimal shim that resolves host `python3` and execs the Python launcher |
-| Change local launcher behavior or lifecycle | `scripts/overlord_py/` | Authoritative Python implementation for the bind-mounted workflow; Podman preferred if present |
-| Change workspace Git topology checks | `scripts/overlord_py/paths.py`, `scripts/overlord_py/main.py` | Non-Git workspaces are valid; launch modes reject only gitfiles whose resolved metadata lies outside the workspace bind mount |
-| Change managed workspace-state layout or migration | `scripts/overlord_py/paths.py`, `scripts/overlord_py/state.py`, `scripts/overlord_py/main.py` | Owns `.overlord/.omo`, `.overlord/.codegraph`, root relative links, and fail-closed launch preflight |
-| Change workspace RTK history forwarding | `scripts/overlord_py/env_builder.py`, `scripts/overlord_py/web_restart.py` | The only launcher RTK setting is fixed `RTK_DB_PATH=/workspace/.overlord/rtk/history.db` forwarding |
-| Change native host install behavior | `scripts/install` | Installs checked-in OpenCode/oh-my-openagent/zellij config and Bun-managed packages directly on the host |
-| Change RTK image install | `Dockerfile` | Selects the pinned Linux asset by `TARGETARCH`, verifies its version, and initializes the plugin as `overlord` |
-| Change Prime Agent image install or persistence | `Dockerfile`, `scripts/overlord_py/paths.py`, `scripts/overlord_py/container_run_args.py`, `scripts/overlord_py/persisted_state_mounts.py` | Pin the release in `config/tool-versions.env`; persist `/home/overlord/.prime/agent` at `.overlord/prime-agent-data` |
-| Change Playwright image install | `Dockerfile` | Install browser dependencies as root and bundled Chromium as `overlord` |
-| Change RTK native install | `scripts/install` | Full install selects by host architecture and initializes the plugin; skip mode installs neither |
-| Change OpenCode provider/model catalog | `config/opencode.json` | Single checked-in provider catalog copied into runtime config path |
-| Change agent/category routing | `config/oh-my-openagent*.jsonc` | Source-controlled routing presets copied into runtime config path |
-| Change repository-owned default skills | `skills/` | Wire authored skill changes into both `Dockerfile` and `scripts/install` |
-| Change local container bootstrap permissions | `config/entrypoint.sh` | Root bootstrap, UID/GID remap, ownership repair, `gosu` handoff |
-| Change zellij UX | `config/zellij-config.kdl` | Non-default `Ctrl+b` tab mode and `Ctrl+t` passthrough |
-| Inspect local persisted sessions/history | `.overlord/` | Includes `.omo/`, `.codegraph/`, and `rtk/history.db`; runtime state only, not authored source |
-
-## CONVENTIONS
-
-- Root is router-like: repo-wide guidance stays here; subtree-local deltas live in `config/AGENTS.md` and `scripts/AGENTS.md`.
-- Checked-in host files are authoritative. Runtime copies under `/home/overlord/.config/*` are generated and overwritten on launch.
-- One persistent local container is kept per workspace directory, with session/history state stored under `.overlord/`.
-- `scripts/overlord` is authoritative over `README.md` for the local command surface; launcher behavior lives under `scripts/overlord_py/`.
-- `Dockerfile` and root docs own image/toolchain guidance; child AGENTS files should not repeat that material.
-- `skills/setup-devcontainer/SKILL.md` is authoritative; container and native copies are generated distribution outputs and remain separate from pinned third-party skills.
-- Project-specific tooling belongs in workspace `setup-devcontainer.sh`, which runs as root from `/workspace` only on container create or restart.
-- Launch modes preflight `.git` gitfiles before image/container lifecycle. External gitdirs produce an actionable error rather than an incomplete isolated mount; recovery and inspection commands remain available.
-- After Git topology preflight, normal launch modes reconcile managed workspace state before image/container lifecycle. Lone root `.omo/` or `.codegraph/` directories are renamed under `.overlord/` and replaced with literal relative links; independent root and managed directories fail closed without copy, merge, or deletion.
-- Managed `.omo`, `.codegraph`, and RTK history survive `fresh` and `purge` through the workspace mount. Old global RTK history is not migrated.
-- Workspace `.codegraph` is persistent project state. `/home/overlord/.omo/codegraph` is the container package installation path and is not the workspace index.
-- The managed workspace-state behavior is container-only. Native `scripts/install` behavior remains separate and unchanged.
-- Shared tool version changes belong in `config/tool-versions.env`; Docker and native installs must consume the relevant pins from that manifest.
-
-## ANTI-PATTERNS (THIS PROJECT)
-
-- **NEVER** treat `.overlord/` or in-container `~/.config/*` as source-controlled inputs.
-- **NEVER** bake credentials into image layers or script defaults; credentials are runtime env vars.
-- **DO NOT** add GUI/VNC stack; this workspace is terminal-only by design.
-- **When adding providers/models, also update launcher env forwarding** in `scripts/overlord`.
-- **DO NOT** install RTK from an unpinned installer, Cargo, or a non-versioned release URL.
-- **DO NOT** patch `config/opencode.json` for RTK; its integration is the generated OpenCode plugin.
 ## COMMANDS
 
 ```bash
-overlord                # Start/reuse OpenCode web mode and print local/network URLs
-overlord web            # Explicit web-mode alias
-overlord opencode       # Alias for the web-mode launcher
-overlord zellij         # Open zellij explicitly in the persistent container
-overlord shell          # Open an interactive zsh shell in the container
-overlord --list-configs # List checked-in oh-my-openagent routing presets
-scripts/install         # Install OpenCode setup directly on the host
-scripts/install --list-configs
-overlord fresh          # Remove container only; keep image and .overlord state
-overlord purge          # Remove container + image; .overlord state remains
+overlord                # open shell in container (default)
+overlord shell          # shell
+overlord zellij         # open zellij
+overlord fresh          # remove container
+overlord purge          # remove container + image
+bash setup.sh           # direct VM setup (non-interactive, handles sudo NOPASSWD fix)
 ```
 
 ## NOTES
 
-- Launcher regression tests use `python3 -m unittest discover -s scripts/tests`.
-- Canonical manual checks are `overlord`, `overlord web`, `overlord opencode`, `overlord zellij`, `overlord shell`, `overlord --list-configs`, `scripts/install --list-configs`, isolated `scripts/install --skip-package-install`, `overlord fresh && overlord`, and `overlord purge && overlord` after image/runtime wiring changes.
-- RTK checks must cover amd64/arm64 asset selection, exact version output, runtime-user plugin initialization, and skip-mode absence.
-- Playwright checks must cover pinned package installation, root-owned dependency setup, runtime-user Chromium installation, and a browser launch smoke test after rebuilding the image.
-- The launcher supports Podman if available and falls back to Docker; README Docker wording is not the full runtime story.
-- `config/zellij-opencode.kdl` is checked in but is not part of the currently wired runtime config injection path.
+- setup.sh is idempotent and DEBIAN_FRONTEND=noninteractive.
+- It fixes AWS VM sudo password prompt by installing /etc/sudoers.d/99-nopasswd-* with NOPASSWD:ALL and extending timestamp_timeout.
+- Container launch runs setup.sh inside the container on create/start.
+- .overlord/ holds persisted zsh_data and survives fresh/purge.

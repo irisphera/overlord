@@ -1,4 +1,4 @@
-"""Persistent launcher state and generated runtime marker seam."""
+"""Persistent launcher state seam."""
 
 from __future__ import annotations
 
@@ -12,12 +12,9 @@ from typing import Final, assert_never, override
 
 from overlord_py.paths import ManagedStatePaths, StatePaths
 
-RESPONSIBILITY: Final = "create .overlord state and track generated runtime markers"
-OPENCODE_WEB_PID_BASENAME: Final = "overlord-serve.pid"
-OPENCODE_WEB_LOG_BASENAME: Final = "overlord-serve.log"
+RESPONSIBILITY: Final = "create .overlord state"
 MANAGED_GITIGNORE_ENTRIES: Final = (".overlord/", ".omo", ".codegraph")
 GITIGNORE_TEMP_PREFIX: Final = ".gitignore.overlord-"
-
 
 @unique
 class NodeKind(StrEnum):
@@ -27,14 +24,12 @@ class NodeKind(StrEnum):
     FILE = "file"
     OTHER = "other node"
 
-
 @unique
 class PairAction(StrEnum):
     CREATE = "create"
     LINK = "link"
     MIGRATE = "migrate"
     READY = "ready"
-
 
 @dataclass(frozen=True, slots=True)
 class NodeSnapshot:
@@ -43,18 +38,15 @@ class NodeSnapshot:
     link_target: str | None = None
     mode: int | None = None
 
-
 @dataclass(frozen=True, slots=True)
 class PairPlan:
     paths: ManagedStatePaths
     action: PairAction
 
-
 @dataclass(frozen=True, slots=True)
 class ManagedStateError(RuntimeError):
     path: Path
     reason: str
-
     @override
     def __str__(self) -> str:
         return (
@@ -62,19 +54,15 @@ class ManagedStateError(RuntimeError):
             "Existing data was preserved; no copy, merge, or delete was attempted."
         )
 
-
 @dataclass(frozen=True, slots=True)
 class StateEnsureResult:
-    opencode_data_created: bool
     zsh_data_created: bool
     prime_agent_data_created: bool
     gitignore_created: bool
     gitignore_appended: bool
 
-
 def describe() -> str:
     return RESPONSIBILITY
-
 
 def ensure_state_dir(paths: StatePaths) -> StateEnsureResult:
     root_snapshot = classify_node(paths.root)
@@ -91,24 +79,20 @@ def ensure_state_dir(paths: StatePaths) -> StateEnsureResult:
         raise ManagedStateError(gitignore, f"expected a regular file or no entry, found {gitignore_snapshot.kind}")
     pair_plans = tuple(plan_pair(*snapshot) for snapshot in pair_snapshots)
 
-    opencode_preexisting = paths.opencode_data.is_dir()
     zsh_preexisting = paths.zsh_data.is_dir()
-    prime_agent_preexisting = paths.prime_agent_data.is_dir()
+    prime_preexisting = paths.prime_agent_data.is_dir()
     gitignore_created = gitignore_snapshot.kind is NodeKind.MISSING
     gitignore_appended = append_state_gitignore(gitignore, gitignore_snapshot)
-    create_directory(paths.opencode_data, parents=True, exist_ok=True)
     create_directory(paths.zsh_data, parents=True, exist_ok=True)
     create_directory(paths.prime_agent_data, parents=True, exist_ok=True)
     for plan in pair_plans:
         apply_pair_plan(plan)
     return StateEnsureResult(
-        opencode_data_created=not opencode_preexisting,
         zsh_data_created=not zsh_preexisting,
-        prime_agent_data_created=not prime_agent_preexisting,
+        prime_agent_data_created=not prime_preexisting,
         gitignore_created=gitignore_created,
         gitignore_appended=gitignore_appended,
     )
-
 
 def classify_node(path: Path) -> NodeSnapshot:
     try:
@@ -117,7 +101,6 @@ def classify_node(path: Path) -> NodeSnapshot:
         return NodeSnapshot(path, NodeKind.MISSING)
     except OSError as error:
         raise ManagedStateError(path, f"could not inspect path: {error}") from error
-
     if stat.S_ISDIR(metadata.st_mode):
         return NodeSnapshot(path, NodeKind.DIRECTORY)
     if stat.S_ISLNK(metadata.st_mode):
@@ -130,11 +113,9 @@ def classify_node(path: Path) -> NodeSnapshot:
         return NodeSnapshot(path, NodeKind.FILE, mode=stat.S_IMODE(metadata.st_mode))
     return NodeSnapshot(path, NodeKind.OTHER)
 
-
 def plan_pair(paths: ManagedStatePaths, root: NodeSnapshot, target: NodeSnapshot) -> PairPlan:
     if target.kind not in {NodeKind.MISSING, NodeKind.DIRECTORY}:
         raise ManagedStateError(target.path, f"managed target must be a real directory, found {target.kind}")
-
     match root.kind:
         case NodeKind.MISSING:
             action = PairAction.CREATE if target.kind is NodeKind.MISSING else PairAction.LINK
@@ -155,7 +136,6 @@ def plan_pair(paths: ManagedStatePaths, root: NodeSnapshot, target: NodeSnapshot
             assert_never(unreachable)
     return PairPlan(paths, action)
 
-
 def apply_pair_plan(plan: PairPlan) -> None:
     match plan.action:
         case PairAction.CREATE:
@@ -164,19 +144,11 @@ def apply_pair_plan(plan: PairPlan) -> None:
         case PairAction.LINK:
             install_managed_link(plan.paths)
         case PairAction.MIGRATE:
-            try:
-                _ = plan.paths.workspace_entry.rename(plan.paths.managed_directory)
-            except OSError as error:
-                raise ManagedStateError(
-                    plan.paths.workspace_entry,
-                    f"could not rename directory to {plan.paths.managed_directory}: {error}",
-                ) from error
-            install_managed_link(plan.paths)
+            migrate_directory(plan.paths)
         case PairAction.READY:
-            return
+            pass
         case unreachable:
             assert_never(unreachable)
-
 
 def create_directory(path: Path, *, parents: bool = False, exist_ok: bool = False) -> None:
     try:
@@ -184,79 +156,55 @@ def create_directory(path: Path, *, parents: bool = False, exist_ok: bool = Fals
     except OSError as error:
         raise ManagedStateError(path, f"could not create directory: {error}") from error
 
-
 def install_managed_link(paths: ManagedStatePaths) -> None:
     try:
-        paths.workspace_entry.symlink_to(paths.relative_target, target_is_directory=True)
+        paths.workspace_entry.symlink_to(paths.relative_target)
     except OSError as error:
-        raise ManagedStateError(
-            paths.workspace_entry,
-            f"could not install relative link {os.fspath(paths.relative_target)!r}: {error}",
-        ) from error
+        raise ManagedStateError(paths.workspace_entry, f"could not create managed link: {error}") from error
 
+def migrate_directory(paths: ManagedStatePaths) -> None:
+    try:
+        paths.workspace_entry.rename(paths.managed_directory)
+    except OSError as error:
+        raise ManagedStateError(paths.workspace_entry, f"could not migrate directory: {error}") from error
+    install_managed_link(paths)
 
 def append_state_gitignore(gitignore: Path, snapshot: NodeSnapshot) -> bool:
-    if snapshot.kind is NodeKind.FILE:
+    if snapshot.kind is NodeKind.MISSING:
         try:
-            original = gitignore.read_bytes()
+            gitignore.write_text("\n".join(MANAGED_GITIGNORE_ENTRIES) + "\n", encoding="utf-8")
         except OSError as error:
-            raise ManagedStateError(gitignore, f"could not read regular file: {error}") from error
-    else:
-        original = b""
-    existing_lines = set(original.splitlines())
-    missing = tuple(entry.encode() for entry in MANAGED_GITIGNORE_ENTRIES if entry.encode() not in existing_lines)
+            raise ManagedStateError(gitignore, f"could not create .gitignore: {error}") from error
+        return True
+    # existing file - append missing entries
+    try:
+        content = gitignore.read_text(encoding="utf-8")
+    except OSError as error:
+        raise ManagedStateError(gitignore, f"could not read .gitignore: {error}") from error
+    lines = set(line.strip() for line in content.splitlines())
+    missing = [e for e in MANAGED_GITIGNORE_ENTRIES if e not in lines]
     if not missing:
         return False
-    separator = b"\n" if original and not original.endswith((b"\n", b"\r")) else b""
-    updated = original + separator + b"\n".join(missing) + b"\n"
-    mode = snapshot.mode
-    if mode is None:
-        current_umask = os.umask(0)
-        _ = os.umask(current_umask)
-        mode = 0o666 & ~current_umask
-    write_gitignore_atomically(gitignore, updated, mode)
+    try:
+        with gitignore.open("a", encoding="utf-8") as f:
+            if content and not content.endswith("\n"):
+                f.write("\n")
+            for entry in missing:
+                f.write(entry + "\n")
+    except OSError as error:
+        raise ManagedStateError(gitignore, f"could not update .gitignore: {error}") from error
     return True
 
+def clear_persisted_server_state(state: StatePaths) -> None:
+    # Legacy cleanup - remove old server pid/log if present
+    for name in ("overlord-serve.pid", "overlord-serve.log", "web-proxy.pid", "web-proxy.port", "web-proxy.log"):
+        try:
+            (state.root / name).unlink(missing_ok=True)
+        except OSError:
+            pass
 
-def write_gitignore_atomically(gitignore: Path, content: bytes, mode: int) -> None:
-    temporary: Path | None = None
+def chmod_workspace_for_rootless_podman(workspace: Path) -> None:
     try:
-        with tempfile.NamedTemporaryFile(
-            mode="wb",
-            prefix=GITIGNORE_TEMP_PREFIX,
-            dir=gitignore.parent,
-            delete=False,
-        ) as file:
-            temporary = Path(file.name)
-            os.fchmod(file.fileno(), mode)
-            _ = file.write(content)
-            file.flush()
-            os.fsync(file.fileno())
-        os.replace(temporary, gitignore)
-    except OSError as error:
-        cleanup_note = cleanup_gitignore_temporary(temporary)
-        raise ManagedStateError(
-            gitignore,
-            f"could not atomically publish managed entries: {error}{cleanup_note}",
-        ) from error
-
-
-def cleanup_gitignore_temporary(temporary: Path | None) -> str:
-    if temporary is None:
-        return ""
-    try:
-        temporary.unlink(missing_ok=True)
-    except OSError as error:
-        return f"; launcher temporary file cleanup also failed: {error}"
-    return ""
-
-
-def clear_persisted_opencode_server_state(paths: StatePaths) -> list[Path]:
-    paths.opencode_data.mkdir(parents=True, exist_ok=True)
-    targets = [
-        paths.opencode_data / OPENCODE_WEB_PID_BASENAME,
-        paths.opencode_data / OPENCODE_WEB_LOG_BASENAME,
-    ]
-    for target in targets:
-        target.unlink(missing_ok=True)
-    return targets
+        workspace.chmod(0o755)
+    except OSError:
+        pass

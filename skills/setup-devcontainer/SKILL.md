@@ -1,7 +1,7 @@
 ---
 name: setup-devcontainer
 description: Create or safely update setup-devcontainer.sh from explicit project evidence. Use when configuring project-specific runtimes, build tools, language servers, or development tooling for an Overlord workspace.
-compatibility: opencode
+compatibility: generic
 ---
 
 # Setup devcontainer
@@ -10,7 +10,7 @@ Create or update the active project's `setup-devcontainer.sh` so a fresh Overlor
 
 ## 1. Inspect before editing
 
-Resolve the active project root from the current OpenCode session before choosing any package or command. Do not assume the authoring workspace is `/workspace`: native OpenCode uses the host project path, while containerized OpenCode normally uses `/workspace`.
+Resolve the active project root from the current workspace session before choosing any package or command. Do not assume the authoring workspace is `/workspace`: native execution uses the host project path, while containerized execution normally uses `/workspace`.
 
 ```bash
 PROJECT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd -P)"
@@ -21,7 +21,7 @@ Inspect `$PROJECT_ROOT`:
 1. Read `AGENTS.md`, `README*`, contributor documentation, and any existing setup or bootstrap scripts.
 2. If `$PROJECT_ROOT/setup-devcontainer.sh` already exists, read it completely before changing it.
 3. Inspect root and workspace manifests, lockfiles, version files, and toolchain declarations.
-4. Inspect CI, devcontainer, editor, `.opencode`, formatter, linter, test, and language-server configuration.
+4. Inspect CI, devcontainer, editor, `.config`, formatter, linter, test, and language-server configuration.
 5. Check whether a monorepo declares additional manifests in its workspace configuration.
 
 Use explicit project evidence to identify the required language runtime, package manager, build tool, language server (LSP), formatter, linter, test runner, and system libraries. Examples of evidence include `pom.xml` or `mvnw` for Maven/Java, `build.gradle*` or `gradlew` for Gradle/Java, `Cargo.toml` and `rust-toolchain.toml` for Rust/Cargo, and package-manager lockfiles for JavaScript projects. Treat these as evidence to investigate, not permission to add every conventional ecosystem tool.

@@ -5,66 +5,37 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, override
 
-
 REPO_ROOT: Final = Path(__file__).resolve().parents[2]
 DEFAULT_TOOL_VERSIONS_PATH: Final = REPO_ROOT / "config" / "tool-versions.env"
-VERSION_VARIABLES: Final = (
-    "OPENCODE_VERSION",
-    "OH_MY_OPENAGENT_VERSION",
-    "CODEGRAPH_VERSION",
-    "RTK_VERSION",
-    "PLAYWRIGHT_VERSION",
-    "PRIME_AGENT_VERSION",
-)
-REQUIRED_VARIABLES: Final = VERSION_VARIABLES
 ASSIGNMENT: Final = re.compile(r"(?P<name>[A-Z][A-Z0-9_]*)=(?P<value>[A-Za-z0-9.]+)")
 SEMVER: Final = re.compile(r"(?:0|[1-9][0-9]*)(?:\.(?:0|[1-9][0-9]*)){2}")
-
 
 @dataclass(frozen=True, slots=True)
 class ToolVersionsError(Exception):
     message: str
-
     @override
     def __str__(self) -> str:
         return self.message
 
-
 @dataclass(frozen=True, slots=True)
 class ToolVersions:
-    opencode_version: str
-    oh_my_openagent_version: str
-    codegraph_version: str
-    rtk_version: str
-    playwright_version: str
-    prime_agent_version: str
-
-    @property
-    def opencode_package(self) -> str:
-        return f"opencode-ai@{self.opencode_version}"
-
-    @property
-    def oh_my_openagent_package(self) -> str:
-        return f"oh-my-openagent@{self.oh_my_openagent_version}"
-
-    @property
-    def codegraph_package(self) -> str:
-        return f"@colbymchenry/codegraph@{self.codegraph_version}"
-
+    zellij_version: str
+    prime_agent_version: str = "0.7.4"
 
 def load_tool_versions(manifest_path: Path = DEFAULT_TOOL_VERSIONS_PATH) -> ToolVersions:
     try:
         lines = manifest_path.read_text(encoding="utf-8").splitlines()
     except (OSError, UnicodeError) as error:
         raise ToolVersionsError(f"cannot read manifest: {manifest_path}") from error
-
     values: dict[str, str] = {}
     for line_number, line in enumerate(lines, start=1):
-        match = ASSIGNMENT.fullmatch(line)
+        if not line.strip() or line.strip().startswith("#"):
+            continue
+        match = ASSIGNMENT.fullmatch(line.strip())
         if match is None:
             raise ToolVersionsError(f"{manifest_path}:{line_number}: invalid assignment")
         name = match["name"]
-        if name not in REQUIRED_VARIABLES:
+        if name not in ("ZELLIJ_VERSION", "PRIME_AGENT_VERSION"):
             raise ToolVersionsError(f"{manifest_path}:{line_number}: unknown variable: {name}")
         if name in values:
             raise ToolVersionsError(f"{manifest_path}:{line_number}: duplicate variable: {name}")
@@ -72,16 +43,8 @@ def load_tool_versions(manifest_path: Path = DEFAULT_TOOL_VERSIONS_PATH) -> Tool
         if SEMVER.fullmatch(value) is None:
             raise ToolVersionsError(f"{manifest_path}:{line_number}: invalid assignment")
         values[name] = value
-
-    for name in REQUIRED_VARIABLES:
-        if name not in values:
-            raise ToolVersionsError(f"{manifest_path}: missing required variable: {name}")
-
-    return ToolVersions(
-        opencode_version=values["OPENCODE_VERSION"],
-        oh_my_openagent_version=values["OH_MY_OPENAGENT_VERSION"],
-        codegraph_version=values["CODEGRAPH_VERSION"],
-        rtk_version=values["RTK_VERSION"],
-        playwright_version=values["PLAYWRIGHT_VERSION"],
-        prime_agent_version=values["PRIME_AGENT_VERSION"],
-    )
+    if "ZELLIJ_VERSION" not in values:
+        raise ToolVersionsError(f"{manifest_path}: missing required variable: ZELLIJ_VERSION")
+    if "PRIME_AGENT_VERSION" not in values:
+        raise ToolVersionsError(f"{manifest_path}: missing required variable: PRIME_AGENT_VERSION")
+    return ToolVersions(zellij_version=values["ZELLIJ_VERSION"], prime_agent_version=values["PRIME_AGENT_VERSION"])

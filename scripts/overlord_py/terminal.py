@@ -14,14 +14,11 @@ RESPONSIBILITY: Final = "enter shell or zellij with the existing container exec 
 EXEC_USER: Final = "overlord"
 TerminalCommand = Literal["shell", "zellij"]
 
-
 def describe() -> str:
     return RESPONSIBILITY
 
-
 def terminal_title(workspace_name: str) -> str:
     return f"\033]0;{workspace_name}\007"
-
 
 def terminal_exec_args(paths: WorkspacePaths, exec_env_flags: Sequence[str], command: TerminalCommand) -> list[str]:
     match command:
@@ -34,8 +31,6 @@ def terminal_exec_args(paths: WorkspacePaths, exec_env_flags: Sequence[str], com
                 "-u",
                 EXEC_USER,
                 *exec_env_flags,
-                "-e",
-                "OPENCODE_SERVER_PASSWORD=",
                 paths.identity.container_name,
                 "zsh",
                 "-il",
@@ -47,8 +42,6 @@ def terminal_exec_args(paths: WorkspacePaths, exec_env_flags: Sequence[str], com
                 "-u",
                 EXEC_USER,
                 *exec_env_flags,
-                "-e",
-                "OPENCODE_SERVER_PASSWORD=",
                 paths.identity.container_name,
                 "zellij",
                 "attach",
@@ -57,7 +50,6 @@ def terminal_exec_args(paths: WorkspacePaths, exec_env_flags: Sequence[str], com
             ]
         case unreachable:
             assert_never(unreachable)
-
 
 def run_terminal_command(
     engine: ContainerEngine,

@@ -1,20 +1,15 @@
 # Overlord
 
-Overlord provides a persistent, web-first OpenCode environment per workspace. Use its container launcher for an isolated toolchain, or install the same OpenCode configuration directly on the host.
+Minimal per-workspace dev container launcher + standalone VM setup.
 
-## Choose container or native
+- **Container**: `overlord` creates a persistent container per workspace and runs `setup.sh` inside.
+- **VM direct**: `bash setup.sh` sets up the current machine (AWS-friendly, non-interactive, fixes sudo password prompts).
 
-Choose **container** when you want the image-provided toolchain, workspace isolation, persistent OpenCode and zsh state, or the `overlord` web, shell, and zellij commands.
+Clean dev environment without extra agents. Just a clean dev environment with **zsh + oh-my-zsh + autosuggestions + syntax-highlighting + completions + zellij + lazyvim**.
 
-Container isolation separates the workspace filesystem and toolchain; it is not a security boundary. The container receives writable `/var/run/docker.sock` access and can control the host container daemon.
+## Quick start (container)
 
-Choose **native** when OpenCode must run directly on the host. `scripts/install` configures and optionally installs host packages; it does not launch web mode, create containers or `.overlord`, or install zellij.
-
-The managed workspace-state layout described below belongs only to the container launcher. `scripts/install` remains unchanged and does not create, migrate, or manage workspace `.omo`, `.codegraph`, or RTK history.
-
-## Container quick start
-
-The launcher requires host Python 3 and either Podman or Docker. It selects Podman when available and otherwise uses Docker.
+Requires host Python 3 and Podman or Docker (Podman preferred).
 
 ```bash
 git clone https://github.com/irisphera/overlord.git
@@ -24,315 +19,67 @@ ln -s "$(pwd)/scripts/overlord" "$HOME/.local/bin/overlord"
 export PATH="$HOME/.local/bin:$PATH"
 
 cd /path/to/project
-export OPENCODE_SERVER_PASSWORD="replace-with-a-strong-password"
-overlord
+overlord          # creates container, runs setup.sh, opens shell
 ```
 
-On the first launch in a workspace, Overlord builds the image if needed, creates and starts that workspace's container, initializes runtime configuration, and starts OpenCode web mode.
-
-Later launches reuse the persistent container and web server when possible. Web mode publishes a random host port on `0.0.0.0` (all host interfaces); it is unauthenticated when `OPENCODE_SERVER_PASSWORD` is empty.
-
-The launcher prints a local URL and, when it can determine one, a network URL. Do not assume the network URL is reachable from every LAN.
-
-## Everyday container commands
-
-Run these commands from the workspace directory. `overlord`, `overlord web`, and `overlord opencode` are the same web-mode launch path.
+## Everyday commands
 
 ```bash
-overlord                         # start or reuse web mode (default)
-overlord web                     # explicit web-mode alias
-overlord opencode                # web-mode alias
-overlord shell                   # open zsh in the workspace container
-overlord zellij                  # open the configured zellij session
-overlord --list-configs          # list checked-in routing presets
-overlord --config default        # select the default routing preset
-overlord --config azure          # use Azure GPT-5.6 Sol/Luna routing
-overlord --config gemini         # route every agent/category through Vertex AI
-overlord --config opencode-ds    # route every agent/category through OpenCode Go
-overlord --config openrouter     # route every agent/category through OpenRouter
-overlord fresh                   # request container removal; retain image and .overlord state
-overlord purge                   # remove the container and image; retain .overlord state
-overlord help                    # show launcher usage
-```
-
-To recreate a workspace container, run `overlord fresh`, then run `overlord` separately. Confirm the next launch reports `Creating container...`; `fresh` currently does not surface engine stop or removal failures.
-
-Use `overlord purge && overlord` after changing the Dockerfile, image-provided tooling, or image bootstrap files.
-
-To change `--config` for an existing workspace, run `overlord fresh`, then relaunch with the desired preset. Catalog and routing injection occurs when the container is created or restarted.
-
-## Native host install
-
-Run the installer from this repository. It installs the checked-in provider catalog, selected routing preset, zellij configuration, environment file, and repository-owned `setup-devcontainer` skill.
-
-```bash
-scripts/install
-scripts/install --list-configs
-scripts/install --config default
-scripts/install --config azure
-scripts/install --config gemini
-scripts/install --config opencode-ds
-scripts/install --config openrouter
-```
-
-A full install requires Bun in `PATH`. It installs OpenCode, oh-my-openagent, and CodeGraph with Bun, installs the pinned RTK Linux release for amd64 or arm64, then creates command shims in `~/.local/bin` when their installed targets are available.
-
-Pinned tool versions are maintained in `config/tool-versions.env`; changing that one file updates the relevant container image and native installation paths. RTK must report the exact pinned version and is initialized with `rtk init --global --opencode` as the runtime user.
-
-Use `--skip-package-install` to write static configuration, environment, and skill files only. This mode does not require Bun and does not install OpenCode, oh-my-openagent, CodeGraph, RTK, or the RTK OpenCode plugin.
-
-```bash
-scripts/install --skip-package-install
-```
-
-The installer writes `opencode.json`, `oh-my-openagent.jsonc`, `oh-my-opencode.jsonc`, and `overlord-env` to `${XDG_CONFIG_HOME:-$HOME/.config}/opencode/`. A full install also requires RTK initialization to create a non-empty `plugins/rtk.ts` in that directory.
-
-It writes zellij configuration to `${XDG_CONFIG_HOME:-$HOME/.config}/zellij/config.kdl`.
-
-It installs the `setup-devcontainer` skill to `$HOME/.agents/skills/setup-devcontainer/SKILL.md`, including in `--skip-package-install` mode.
-
-Existing files or links at those destinations are timestamp-backed up before replacement. `overlord-env` is written with mode `600`; source it before host `opencode` if the shell does not already provide the required settings.
-
-```bash
-. "${XDG_CONFIG_HOME:-$HOME/.config}/opencode/overlord-env"
-opencode
-```
-
-The installer configures zellij but does not install it. Install zellij separately if you want the native zellij escape hatch.
-
-Checked-in `config/` is authoritative for both workflows. The native installer replaces managed copies on rerun and backs them up first. The launcher replaces container copies during create or restart injection; normal reuse only repairs missing or invalid runtime config.
-
-## Routing presets and cloud providers
-
-`config/opencode.json` is the sole checked-in OpenCode provider and model catalog. Checked-in `config/oh-my-openagent*.jsonc` files are routing presets.
-
-The checked-in presets are:
-
-- `default` (`oh-my-openagent.jsonc`) is the same routing as `opencode-ds`: every category and agent routes to DeepSeek-V4-Flash-0731 through the built-in `opencode-go/deepseek-v4-flash` model.
-- `azure` (`oh-my-openagent.azure.jsonc`) preserves the GPT-5.6 Sol/Luna split and role-specific reasoning effort.
-- `gemini` (`oh-my-openagent.gemini.jsonc`) routes every category and agent to Gemini 3.7 Flash through Google Vertex AI.
-- `opencode-ds` (`oh-my-openagent.opencode-ds.jsonc`) routes every category and agent to DeepSeek-V4-Flash-0731 through the built-in `opencode-go/deepseek-v4-flash` model. Heavy categories and agents select reasoning effort `max` — categories via the canonical `reasoning` field and agents via the OpenCode-native `variant` key, which is the per-agent selector that survives the full request path for this model (it declares reasoning effort variants `high` and `max`). Light routes (`quick`, `unspecified-low`, `multimodal-looker`, `explore`, `librarian`) keep provider defaults.
-- `openrouter` (`oh-my-openagent.openrouter.jsonc`) preserves the existing OpenRouter Ling routing and concurrency limits.
-
-The single catalog contains Vertex Gemini 3.7 Flash under the intentional `google` provider selector, Azure GPT-5.6 Sol and Luna, the existing OpenRouter Ling model entry, and limit declarations for the built-in OpenCode Go DeepSeek models (`deepseek-v4-flash` and `deepseek-v4-pro`). The Azure deployment IDs must remain `gpt-5.6-sol` and `gpt-5.6-luna` unless their `id` values in `config/opencode.json` are changed to match the deployments.
-
-Managed container files are `/home/overlord/.config/opencode/opencode.json`, `oh-my-openagent.jsonc`, and `oh-my-opencode.jsonc`, plus `/home/overlord/.config/zellij/config.kdl`.
-
-They are generated copies of checked-in `config/` and are replaced when the launcher injects configuration. Do not treat in-container copies as authoritative inputs.
-
-```bash
-overlord --list-configs
-overlord --config default
-overlord --config azure
-overlord --config gemini
-overlord --config opencode-ds
-overlord --config openrouter
-scripts/install --list-configs
-scripts/install --config default
-scripts/install --config azure
-scripts/install --config gemini
-scripts/install --config opencode-ds
-scripts/install --config openrouter
-```
-
-`--config` selects one checked-in routing preset. The provider catalog is not selectable and is always sourced from `config/opencode.json`.
-
-## Credentials and environment
-
-Supply credentials through the launching shell; do not put real credentials in checked-in files or image layers. The container forwards configured provider, MCP, and web-password environment variables at runtime.
-
-```bash
-export AZURE_API_KEY="replace-with-your-key"
-export AZURE_RESOURCE_NAME="replace-with-your-resource"
-export GOOGLE_CLOUD_PROJECT="replace-with-your-project"
-export OPENCODE_API_KEY="replace-with-your-opencode-go-key"
-export OPENROUTER_API_KEY="replace-with-your-key"
-export OPENCODE_SERVER_PASSWORD="replace-with-a-password"
-overlord
-```
-
-OpenCode Go is the default routing provider: the `default` preset routes every category and agent through `opencode-go/deepseek-v4-flash` and reads the `OPENCODE_API_KEY` credential from the launching environment. OpenCode Go is built into OpenCode; the catalog only declares its model limits (`deepseek-v4-flash` and `deepseek-v4-pro`).
-
-Google Vertex AI uses `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION`. `GCP_PROJECT` and `GCLOUD_PROJECT` remain project aliases, and `VERTEX_LOCATION` remains the location alias. When no location or alias is supplied, Overlord sets `GOOGLE_CLOUD_LOCATION=global` because the catalog consumes that environment value.
-
-Azure uses `AZURE_API_KEY` and `AZURE_RESOURCE_NAME`. OpenCode Go uses `OPENCODE_API_KEY`. OpenRouter uses `OPENROUTER_API_KEY`.
-
-For persistent host setup, put the `OPENCODE_API_KEY` export in your personal shell configuration outside the repository: `~/.zshrc` for zsh, `~/.bashrc` for Bash, or use `set -Ux OPENCODE_API_KEY "replace-with-your-opencode-go-key"` for fish. Do not put the key in this repository or another tracked project file. Start a new shell, or source the updated zsh/Bash file, before running Overlord.
-
-For containers, Overlord forwards `OPENCODE_API_KEY` to container creation, web mode, shell, and zellij through the shared provider environment. After changing or removing the host key, run `overlord fresh`, then relaunch with `overlord` (the default preset) so the recreated container receives the new value.
-
-For native installs, `scripts/install` writes a non-empty `OPENCODE_API_KEY` to the mode-`600` `overlord-env` file. Rerun `scripts/install` after changing the key if native OpenCode sources that file. The installer does not print the key.
-
-For containers, `OPENROUTER_API_KEY` is forwarded from the host when a new container is created and included in its rendered runtime environment. Recreate the container after changing the key. The native installer can select the `openrouter` preset but does not persist this credential; export it in the shell that launches native OpenCode.
-
-`EXA_API_KEY`, `TAVILY_API_KEY`, and `CONTEXT7_API_KEY` are forwarded for configured MCP use. `OPENCODE_SERVER_PASSWORD` protects the web server and is also used for launcher health checks.
-
-If present, host Google Application Default Credentials are made available from `$GOOGLE_APPLICATION_CREDENTIALS` or `~/.config/gcloud/application_default_credentials.json`. Credentials created inside a container are removed by `fresh` or `purge`.
-
-To create Google ADC inside the container, use the image-provided Google Cloud CLI. Container-created ADC survives container reuse, but not `fresh` or `purge`.
-
-```bash
-overlord shell
-gcloud auth application-default login --no-launch-browser
-```
-
-Rerun `overlord` after changing or removing `EXA_API_KEY` or `OPENCODE_SERVER_PASSWORD`. It reconciles those values for a reused web server.
-
-## Persistence and lifecycle
-
-Each workspace receives one persistent container and a git-ignored `.overlord/` directory.
-
-The workspace keeps managed tool state at these paths:
-
-| Managed path | Purpose |
-| --- | --- |
-| `.overlord/.omo/` | Workspace oh-my-openagent state |
-| `.overlord/.codegraph/` | Workspace CodeGraph index and state |
-| `.overlord/rtk/history.db` | Workspace RTK history, exposed in the container as `/workspace/.overlord/rtk/history.db` |
-| `.overlord/prime-agent-data/` | Prime Agent credentials, settings, sessions, artifacts, kernel runtime, and continual-harness self-improvements |
-
-The workspace root contains literal relative links `.omo -> .overlord/.omo` and `.codegraph -> .overlord/.codegraph`. These links keep the tools' expected workspace entry points while storing their data under `.overlord/`.
-
-Normal launch commands preflight this layout after the workspace Git topology check and before any image or container lifecycle work. If a lone root `.omo/` or `.codegraph/` directory exists and its managed counterpart does not, Overlord moves that directory to `.overlord/.omo/` or `.overlord/.codegraph/`, then installs the relative link. This is a rename, not a copy or merge.
-
-If a root directory and its managed directory both exist independently, launch refuses and preserves both. Overlord does not copy, merge, or delete either entry. Reconcile the contents manually, leaving the managed directory and expected relative link, then launch again. Unsafe files, unexpected links, broken managed links, and other ambiguous layouts also fail closed. `fresh`, `purge`, `help`, and config listing remain available while normal launch is blocked.
-
-OpenCode, Prime Agent, and zsh data are direct writable bind mounts from `.overlord/`. Prime Agent uses its declared data root at `/home/overlord/.prime/agent`; persisting the whole root keeps global and session-local harness refinements together with transcripts, child-agent artifacts, schedules, goals, and authentication. Project-local `.prime/agent` and `.agents` resources remain in the workspace mount. The managed `.omo`, `.codegraph`, and RTK paths live inside the workspace mount. Together, these paths keep conversations, memory, shell history, workspace indexes, and workspace RTK history across both `fresh` and `purge`.
-
-Overlord does not migrate RTK history from an older global location. Container RTK history written through `RTK_DB_PATH=/workspace/.overlord/rtk/history.db` uses the managed path.
-
-`fresh` requests removal of the workspace container but keeps its image and `.overlord/` state. `purge` removes the container and image; the next launch rebuilds them.
-
-Packages installed into a container outside persisted mounts disappear with `fresh`.
-
-Workspace `.codegraph` is state, not the CodeGraph package installation. The container installs that package under `/home/overlord/.omo/codegraph`; it can be recreated with the container and must not be confused with `/workspace/.codegraph`, which links to persistent `.overlord/.codegraph` state.
-
-Before `fresh`, or before `purge` removes an existing container, Overlord verifies exactly one writable bind mount for `/workspace`, OpenCode data, Prime Agent data, and zsh data, each from the expected workspace source. If `purge` proves the container is already absent, it skips mount inspection and continues image cleanup.
-
-Missing, ambiguous, read-only, named-volume, or mismatched mounts fail closed without destructive lifecycle action.
-
-For a refused legacy container, quiesce it first. Copy only unmounted state to a separate staging directory, verify that copy, then remove the exact incompatible container and relaunch with Overlord.
-
-Never copy live state back onto bind sources as an automatic recovery step.
-
-Containers created before Prime Agent persistence was added do not have the required Prime Agent bind. `fresh` directs these containers to `overlord purge`, because retaining their old image would not install Prime Agent. `purge` proceeds automatically only when it can prove that `/home/overlord/.prime/agent` is absent or empty. If unpersisted Prime Agent data exists or cannot be inspected, removal still fails closed; quiesce the container, preserve that data to verified staging, remove the exact legacy container manually, and relaunch through `overlord`.
-
-## Workspace setup and mounts
-
-The current directory is mounted read-write at `/workspace`. When present, `~/.gitconfig` and `~/.ssh` are mounted read-only. OpenCode, Prime Agent, and zsh state mount from the workspace as follows:
-
-| Host source | Container destination | Mode |
-| --- | --- | --- |
-| current workspace | `/workspace` | read-write |
-| `~/.gitconfig` | `/home/overlord/.gitconfig` | read-only |
-| `~/.ssh` | `/home/overlord/.ssh` | read-only |
-| `/var/run/docker.sock` | `/var/run/docker.sock` | read-write |
-| `.overlord/opencode-data` | `/home/overlord/.local/share/opencode` | read-write |
-| `.overlord/zsh-data` | `/home/overlord/.zsh_data` | read-write |
-| `.overlord/prime-agent-data` | `/home/overlord/.prime/agent` | read-write |
-
-Non-Git directories are valid workspaces. For launch commands, Overlord also checks a `.git` file before starting image or container lifecycle. If its `gitdir` resolves outside the selected workspace, the isolated bind mount cannot preserve that submodule or linked-worktree topology, so Overlord reports the resolved workspace and Git metadata paths instead of starting a container that cannot use the repository. Run Overlord from the containing repository or use a standalone clone. Overlord does not silently mount the parent directory; `fresh`, `purge`, `help`, and config listing remain available for recovery and inspection.
-
-The Docker socket mount lets container processes control the host container daemon. Treat any code run in the container as having that capability.
-
-Testcontainers defaults are `DOCKER_HOST=unix:///var/run/docker.sock`, `TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock`, and `TESTCONTAINERS_HOST_OVERRIDE=host.docker.internal`.
-
-Set `TESTCONTAINERS_RYUK_DISABLED=true` only when daemon policy blocks Ryuk.
-
-For repository-specific dependencies, run `/setup-devcontainer` in OpenCode. The repository-owned skill inspects explicit manifests and tool configuration, then creates an executable, idempotent `setup-devcontainer.sh` when absent or minimally updates it when present. It preserves unrelated setup behavior and reports unsupported or contradictory evidence instead of guessing install commands.
-
-During container creation or restart, Overlord runs `/workspace/setup-devcontainer.sh` as root, then repairs `/home/overlord` ownership.
-
-Review setup scripts before launching untrusted workspaces. Reattaching to an already-running container skips setup; use `overlord fresh` when setup must run again.
-
-## Included tooling and zellij
-
-The container image includes OpenCode, Prime Agent, oh-my-openagent, CodeGraph, RTK, Playwright with bundled Chromium, Node.js 22, Bun, Python 3, uv, Docker CLI with Compose, and Google Cloud CLI. Chromium's Linux dependencies are installed in the image, and Playwright selects the browser binary for the image architecture. Playwright and Chromium are container-only and are not installed by `scripts/install`.
-
-It also includes git, zsh, zellij, neovim, ripgrep, jq, ast-grep, ShellCheck, and shfmt.
-
-Run `prime-agent` from `overlord shell` or an Overlord zellij pane. The image installs the exact version pinned in `config/tool-versions.env`; its first-use runtime and later self-improvements are written to the persisted Prime Agent data bind.
-
-Project-specific language servers and stacks are intentionally not image defaults. Use `/setup-devcontainer` to maintain `setup-devcontainer.sh`; review the result because Overlord executes it as root from `/workspace`. The skill validates Bash syntax and uses ShellCheck and shfmt when available.
-
-The container includes the repository-owned `setup-devcontainer` skill at `/home/overlord/.agents/skills/setup-devcontainer/SKILL.md` and global skills from pinned `mattpocock/skills`. Run `/setup-matt-pocock-skills` inside OpenCode to create repo-specific skill setup; the native installer installs only the repository-owned skill.
-
-Open zellij with `overlord zellij`. Its checked-in configuration uses zsh, maps `Ctrl+b` to tab mode, and leaves `Ctrl+t` available for application passthrough.
-
-`Ctrl+q` quits the zellij session while the container remains available.
-
-`Alt+n` opens a pane, `Alt+f` toggles floating panes, and `Alt+Arrow` moves focus between panes or tabs.
-
-`config/zellij-config.kdl` is the active zellij configuration source. `config/zellij-opencode.kdl` is checked in but is not currently injected by the launcher.
-
-## RTK integration
-
-Both full-install workflows pin RTK through `config/tool-versions.env`. The Docker image selects the matching Linux release asset from `TARGETARCH`; the native installer selects it from `uname -m`. Both require the exact `rtk VERSION` output and initialize the OpenCode plugin as the user who runs OpenCode.
-
-RTK integration is provided by `${XDG_CONFIG_HOME:-$HOME/.config}/opencode/plugins/rtk.ts`; it does not add a provider or modify `config/opencode.json`.
-
-In the container workflow, the launcher fixes `RTK_DB_PATH` at `/workspace/.overlord/rtk/history.db` for container creation, terminal sessions, and web-server restarts. The image still owns RTK installation and plugin initialization. The native `scripts/install` workflow keeps its existing host behavior and does not use the managed workspace RTK path.
-
-## Troubleshooting
-
-**`python3` is missing:** install host Python 3, ensure it is in `PATH`, then rerun `overlord`.
-
-**No container engine is found:** install Podman or Docker and ensure it is in `PATH`. Podman has precedence when both are installed.
-
-**Permissions or a stale workspace container:** request recreation without discarding persisted state, then confirm the next launch reports `Creating container...`.
-
-```bash
-overlord fresh
-overlord
-```
-
-**The image or entrypoint changed:** rebuild the image.
-
-```bash
-overlord purge && overlord
-```
-
-**A lifecycle command refuses mounts:** treat this as a data-protection stop, not a warning. Follow the concise legacy recovery procedure in [Persistence and lifecycle](#persistence-and-lifecycle).
-
-**API calls fail:** export the appropriate placeholder-replaced credential values before launching. For the default preset, verify `OPENCODE_API_KEY` is set in the launching shell. For the Gemini preset, verify Vertex project, location, and ADC access.
-
-## Verification
-
-Run these checks after changing launcher, configuration, image, or documentation behavior. Use a disposable home for the native configuration-only check.
-
-```bash
-overlord
-overlord web
-overlord opencode
+overlord                 # open shell (default)
 overlord shell
 overlord zellij
-overlord --list-configs
-scripts/install --list-configs
-
-tmp_home=$(mktemp -d)
-HOME="$tmp_home" XDG_CONFIG_HOME="$tmp_home/.config" XDG_CACHE_HOME="$tmp_home/.cache" \
-  scripts/install --skip-package-install
-cmp skills/setup-devcontainer/SKILL.md \
-  "$tmp_home/.agents/skills/setup-devcontainer/SKILL.md"
-test ! -e "$tmp_home/.local/bin/rtk"
-test ! -e "$tmp_home/.config/opencode/plugins/rtk.ts"
-
-# Confirm the following launch reports "Creating container...".
-overlord fresh
-overlord
-overlord purge && overlord
-python3 -m unittest discover -s scripts/tests
+overlord fresh           # remove container (keep image + .overlord)
+overlord purge           # remove container + image
+overlord help
 ```
 
-Inside a rebuilt container, verify the bundled browser through the runtime user's normal shell:
+First run builds the image if needed, creates the container (`sleep infinity`), runs `setup.sh` inside, and opens a shell. Later runs reuse the container. `fresh`/`purge` keep `.overlord/` state.
+
+## Direct VM setup (AWS)
+
+`setup.sh` is fully non-interactive and idempotent. Run it directly on any Ubuntu/Debian VM:
 
 ```bash
-playwright --version
-playwright install --list
-playwright screenshot --browser chromium about:blank /tmp/overlord-chromium.png
-test -s /tmp/overlord-chromium.png
+git clone https://github.com/irisphera/overlord.git
+cd overlord
+bash setup.sh
+# or non-interactively over ssh:
+curl -fsSL https://raw.githubusercontent.com/irisphera/overlord/main/setup.sh | bash
 ```
 
-## License
+It installs (if missing): `zsh`, `oh-my-zsh` (unattended), `zsh-autosuggestions`, `zsh-syntax-highlighting`, `zsh-completions`, `zsh-autocomplete`, `zellij` (pinned via `config/tool-versions.env`), `neovim` + **LazyVim** starter, plus `ripgrep`, `fd`, `fzf`, etc.
 
-MIT
+### AWS sudo password fix
+
+On AWS VMs, `sudo` may ask for a password even though none is set (and empty password fails). `setup.sh` detects this at the start:
+
+- Tests `sudo -n true`
+- If it fails but `sudo true` succeeds (cached credentials), it writes `/etc/sudoers.d/99-nopasswd-<user>` with `user ALL=(ALL) NOPASSWD:ALL` and `/etc/sudoers.d/99-timestamp-timeout` with `Defaults timestamp_timeout=60`
+- Validates with `visudo -c` and refreshes with `sudo -v`
+
+This makes subsequent `sudo` non-interactive without a password. If `sudo` is not available or already passwordless, setup proceeds normally. All `apt-get` runs use `DEBIAN_FRONTEND=noninteractive` and `-y`.
+
+## What setup.sh does (idempotent)
+
+- Ensures passwordless sudo
+- `apt-get update` + installs base packages
+- Installs `zellij` v0.43.1 (arch-aware tarball)
+- Installs `oh-my-zsh` unattended
+- Clones `zsh-autosuggestions`, `zsh-syntax-highlighting`, `zsh-completions`, `zsh-autocomplete` and wires `~/.zshrc`
+- Clones `LazyVim/starter` to `~/.config/nvim` if not present and does a best-effort `nvim --headless "+Lazy! sync"`
+- Sets `zsh` as default shell via `chsh` (non-interactive)
+
+Rerunning `setup.sh` is safe.
+
+## Container details
+
+- Image: `localhost/overlord-<workspace-slug>:latest`
+- Container: `overlord-<workspace-slug>` (one per workspace directory name)
+- Binds: `workspace:/workspace`, `~/.gitconfig`/`~/.ssh` (ro), `.overlord/zsh-data:/home/overlord/.zsh_data`
+- `config/entrypoint.sh` handles UID/GID remap and `gosu overlord`
+- `setup.sh` runs as root inside the container on create/start, then ownership is repaired to `overlord`
+
+## Config
+
+- `config/zellij-config.kdl` -> `/home/overlord/.config/zellij/config.kdl`
+- `config/tool-versions.env` pins `ZELLIJ_VERSION`

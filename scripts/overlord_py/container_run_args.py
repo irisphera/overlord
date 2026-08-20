@@ -7,9 +7,6 @@ from typing import Final
 from overlord_py.docker_bind_sources import BindSourcePaths
 from overlord_py.paths import WorkspacePaths
 
-OPENCODE_WEB_PORT: Final = "4090"
-
-
 def build_container_run_args(
     paths: WorkspacePaths,
     exec_env_flags: Sequence[str],
@@ -20,7 +17,6 @@ def build_container_run_args(
     host_home = Path.home() if home is None else home
     sources = bind_sources or BindSourcePaths(
         workspace=paths.workspace,
-        opencode_data=paths.state.opencode_data,
         zsh_data=paths.state.zsh_data,
         prime_agent_data=paths.state.prime_agent_data,
         gitconfig=host_home / ".gitconfig",
@@ -40,13 +36,9 @@ def build_container_run_args(
         "-v",
         "/var/run/docker.sock:/var/run/docker.sock",
         "-v",
-        f"{sources.opencode_data}:/home/overlord/.local/share/opencode",
-        "-v",
         f"{sources.zsh_data}:/home/overlord/.zsh_data",
         "-v",
         f"{sources.prime_agent_data}:/home/overlord/.prime/agent",
-        "-p",
-        f"0.0.0.0::{OPENCODE_WEB_PORT}",
         *exec_env_flags,
     ]
     gitconfig = host_home / ".gitconfig"

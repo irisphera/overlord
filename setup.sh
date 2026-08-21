@@ -904,6 +904,172 @@ install_prime_agent_skills() {
   rm -f "$aws_setup_tmp"
 }
 
+configure_prime_agent_tools() {
+  info "enabling Prime Agent web search, Context7, and Runpod Docs tools..."
+  local settings_paths=()
+  settings_paths+=("$HOME/.prime/agent/settings.json")
+  if [ -d /home/overlord ]; then settings_paths+=("/home/overlord/.prime/agent/settings.json"); fi
+  if [ -d /root ]; then settings_paths+=("/root/.prime/agent/settings.json"); fi
+  if [ -d /workspace/.overlord/prime-agent-data ]; then
+    settings_paths+=("/workspace/.overlord/prime-agent-data/settings.json")
+  elif [ -d ./.overlord/prime-agent-data ]; then
+    settings_paths+=("./.overlord/prime-agent-data/settings.json")
+  fi
+  if [ -n "${PRIME_AGENT_CODING_AGENT_DIR:-}" ]; then
+    settings_paths+=("$PRIME_AGENT_CODING_AGENT_DIR/settings.json")
+  fi
+  if [ -n "${PI_CODING_AGENT_DIR:-}" ]; then
+    settings_paths+=("$PI_CODING_AGENT_DIR/settings.json")
+  fi
+
+  python3 - "${settings_paths[@]}" <<'PYEOF'
+import json
+import os
+from pathlib import Path
+import sys
+
+
+def parse_jsonc(text: str) -> dict:
+    """Parse Prime's JSON-with-comments/trailing-commas settings safely."""
+    cleaned = []
+    i = 0
+    in_string = False
+    escaped = False
+    while i < len(text):
+        ch = text[i]
+        if in_string:
+            cleaned.append(ch)
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            i += 1
+            continue
+        if ch == '"':
+            in_string = True
+            cleaned.append(ch)
+            i += 1
+            continue
+        if ch == "/" and i + 1 < len(text) and text[i + 1] == "/":
+            i += 2
+            while i < len(text) and text[i] not in "\r\n":
+                i += 1
+            continue
+        if ch == "/" and i + 1 < len(text) and text[i + 1] == "*":
+            i += 2
+            while i + 1 < len(text) and text[i : i + 2] != "*/":
+                i += 1
+            i += 2
+            continue
+        cleaned.append(ch)
+        i += 1
+
+    text = "".join(cleaned)
+    result = []
+    i = 0
+    in_string = False
+    escaped = False
+    while i < len(text):
+        ch = text[i]
+        if in_string:
+            result.append(ch)
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            i += 1
+            continue
+        if ch == '"':
+            in_string = True
+            result.append(ch)
+            i += 1
+            continue
+        if ch == ",":
+            j = i + 1
+            while j < len(text) and text[j].isspace():
+                j += 1
+            if j < len(text) and text[j] in "}]":
+                i += 1
+                continue
+        result.append(ch)
+        i += 1
+    parsed = json.loads("".join(result))
+    if not isinstance(parsed, dict):
+        raise ValueError("settings root must be an object")
+    return parsed
+
+
+seen = set()
+for raw_path in sys.argv[1:]:
+    path = Path(raw_path).expanduser()
+    key = str(path.resolve(strict=False))
+    if key in seen:
+        continue
+    seen.add(key)
+    try:
+        settings = parse_jsonc(path.read_text()) if path.is_file() else {}
+        settings["enableBuiltinSkills"] = True
+        bundled = settings.setdefault("bundledSkills", {})
+        bundled["websearch"] = True
+        servers = settings.setdefault("mcpServers", {})
+        servers["context7"] = {
+            "type": "http",
+            "url": "https://mcp.context7.com/mcp",
+            "enabled": True,
+        }
+        servers["runpod-docs"] = {
+            "type": "http",
+            "url": "https://docs.runpod.io/mcp",
+            "enabled": True,
+        }
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(settings, indent=2, sort_keys=True) + "\n")
+        path.chmod(0o644)
+        print(f"configured {path}")
+    except Exception as error:
+        print(f"could not update {path}: {error}", file=sys.stderr)
+        raise
+PYEOF
+
+  # Add routing instructions so Prime knows when to reach for the MCP tools.
+  local agent_dirs=("$HOME/.prime/agent")
+  if [ -d /home/overlord ]; then agent_dirs+=("/home/overlord/.prime/agent"); fi
+  if [ -d /root ]; then agent_dirs+=("/root/.prime/agent"); fi
+  local agent_dir
+  for agent_dir in "${agent_dirs[@]}"; do
+    mkdir -p "$agent_dir/skills/context7" "$agent_dir/skills/runpod-docs"
+    cat > "$agent_dir/skills/context7/SKILL.md" <<'SKILLEOF'
+---
+name: context7
+description: Look up current library and framework documentation through Context7 MCP. Use when API details, current examples, configuration, or version-specific behavior are needed.
+---
+
+# Context7
+
+Use the tools exposed by the `context7` MCP server to resolve a library and retrieve its current documentation. Prefer Context7 over memory when implementation depends on current APIs or version-specific behavior.
+SKILLEOF
+    cat > "$agent_dir/skills/runpod-docs/SKILL.md" <<'SKILLEOF'
+---
+name: runpod-docs
+description: Search official Runpod documentation through the public Runpod Docs MCP. Use for Runpod Pods, Serverless, endpoints, templates, storage, networking, GPUs, and platform configuration.
+---
+
+# Runpod Docs
+
+Use the tools exposed by the `runpod-docs` MCP server for current Runpod product documentation and examples. This documentation server does not require authentication.
+SKILLEOF
+  done
+  if [ -d /home/overlord ]; then
+    chown -R overlord:overlord /home/overlord/.prime 2>/dev/null || true
+  fi
+  info "websearch enabled (one-time Serper login: prime-agent /login -> MCP Connections -> Serper)"
+  info "Context7 and Runpod Docs MCP servers configured (no login required)"
+}
+
 configure_prime_agent_models() {
   info "configuring Prime Agent models.json with 272k contextWindow override..."
   # Determine agent dirs to configure
@@ -1104,6 +1270,7 @@ install_prime_agent
 sync_prime_agent_rc
 publish_tool_commands
 install_prime_agent_skills
+configure_prime_agent_tools
 configure_prime_agent_models
 make_zsh_default
 verify_login_shell_tools

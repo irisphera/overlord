@@ -3,7 +3,7 @@
 ## OVERVIEW
 
 Overlord is a minimal dev-container launcher + standalone VM setup. The repo has:
-- `setup.sh` : standalone non-interactive installer (lazyvim, zellij, zsh, oh-my-zsh, zsh-autosuggestions/syntax-highlighting/completions, codegraph, prime-agent 272k)
+- `setup.sh` : standalone non-interactive installer (shell/editor tools, Node 24, uv, AWS CLI, codegraph, prime-agent 272k, shared skills, Context7/Runpod Docs MCP, websearch enablement)
 - `Dockerfile` : builds a container by running `setup.sh`
 - `scripts/overlord` : creates/reuses a per-workspace container and runs setup.sh inside
 - `config/` : container bootstrap and zellij config

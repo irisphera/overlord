@@ -1,3 +1,7 @@
+import json
+import subprocess
+import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -28,6 +32,34 @@ class SetupPersistenceTests(unittest.TestCase):
         self.assertIn("aws-agent-toolkit-setup", SETUP)
         calls = SETUP.rsplit("install_prime_agent\n", 1)[1]
         self.assertIn("install_prime_agent_skills", calls)
+
+    def test_prime_agent_tools_are_configured(self):
+        self.assertIn('bundled["websearch"] = True', SETUP)
+        self.assertIn('"https://mcp.context7.com/mcp"', SETUP)
+        self.assertIn('"https://docs.runpod.io/mcp"', SETUP)
+        self.assertIn("configure_prime_agent_tools", SETUP)
+
+    def test_settings_merge_accepts_prime_jsonc_and_preserves_values(self):
+        section = SETUP.split("configure_prime_agent_tools() {", 1)[1]
+        script = section.split("<<'PYEOF'\n", 1)[1].split("\nPYEOF", 1)[0]
+        with tempfile.TemporaryDirectory() as tmp:
+            settings_path = Path(tmp) / "settings.json"
+            settings_path.write_text(
+                '{\n  // keep this value\n  "defaultModel": "example/model",\n  "recentModels": ["example/model",],\n}\n'
+            )
+            completed = subprocess.run(
+                [sys.executable, "-", str(settings_path)],
+                input=script,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            settings = json.loads(settings_path.read_text())
+            self.assertEqual(settings["defaultModel"], "example/model")
+            self.assertTrue(settings["bundledSkills"]["websearch"])
+            self.assertEqual(settings["mcpServers"]["context7"]["url"], "https://mcp.context7.com/mcp")
+            self.assertEqual(settings["mcpServers"]["runpod-docs"]["url"], "https://docs.runpod.io/mcp")
 
     def test_clean_zsh_login_is_verified(self):
         self.assertIn("verify_login_shell_tools", SETUP)

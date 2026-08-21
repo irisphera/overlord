@@ -216,6 +216,22 @@ install_nvm_node() {
   fi
 }
 
+# --- AWS CLI v2 ---
+install_aws_cli() {
+  if command -v aws >/dev/null 2>&1 && aws --version >/dev/null 2>&1; then
+    info "aws cli already installed ($(aws --version 2>&1 | awk '{print $2}'))"
+    return 0
+  fi
+  info "installing aws cli v2..."
+  curl -fsSL https://awscli.amazonaws.com/v2/install.sh | bash 2>&1 | sed 's/^/[aws] /' \
+    || warn "aws cli installer returned an error"
+  if command -v aws >/dev/null 2>&1; then
+    info "aws cli installed at $(command -v aws)"
+  else
+    warn "aws cli not available after install"
+  fi
+}
+
 # --- uv (python project manager used by workspace setups) ---
 install_uv() {
   if command -v uv >/dev/null 2>&1; then
@@ -362,6 +378,7 @@ install_nvm_node
 install_codegraph
 ensure_node_shell_rc
 install_uv
+install_aws_cli
 
 # --- oh-my-zsh (unattended, non-interactive) ---
 install_oh_my_zsh() {

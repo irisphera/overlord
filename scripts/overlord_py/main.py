@@ -13,7 +13,7 @@ from overlord_py.env_builder import build_environment_plan, normalized_host_env
 from overlord_py.paths import GitdirOutsideWorkspaceError, WorkspacePaths, build_workspace_paths, ensure_gitdir_within_workspace
 from overlord_py.persisted_state_mounts import MountSafetyFailure
 from overlord_py.prime_model_sync import sync_host_prime_models
-from overlord_py.progress import stdout_stage
+from overlord_py.progress import restore_sane_tty, stdout_stage
 from overlord_py.runtime_config import inject_initial_runtime_config
 from overlord_py.state import ensure_state_dir
 from overlord_py.terminal import run_terminal_command, terminal_title
@@ -25,6 +25,7 @@ MOUNT_SAFETY_FAILURE_MESSAGE: Final = (
 )
 
 def main(argv: Sequence[str] | None = None) -> int:
+    restore_sane_tty()
     args = tuple(sys.argv[1:] if argv is None else argv)
     host_env = dict(os.environ)
     paths = build_workspace_paths(Path.cwd(), script_path=Path(__file__).resolve().parents[1] / "overlord")

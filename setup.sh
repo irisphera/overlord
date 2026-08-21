@@ -184,6 +184,94 @@ install_zellij() {
 install_zellij
 
 # --- codegraph (pinned) ---
+# --- nvm + Node.js (npm tooling and prime-agent need node; install before both) ---
+NVM_VERSION="${NVM_VERSION:-0.40.3}"
+NODE_MAJOR="${NODE_MAJOR:-24}"
+install_nvm_node() {
+  local nvm_dir="${NVM_DIR:-${HOME}/.nvm}"
+  export NVM_DIR="$nvm_dir"
+  if [ ! -s "${nvm_dir}/nvm.sh" ]; then
+    info "installing nvm v${NVM_VERSION}..."
+    curl -fsSL "https://raw.githubusercontent.com/nvm-sh/nvm/v${NVM_VERSION}/install.sh" \
+      | bash -s -- --no-use 2>&1 | sed 's/^/[nvm] /' || warn "nvm install failed"
+  else
+    info "nvm already installed"
+  fi
+  # shellcheck disable=SC1091
+  . "${nvm_dir}/nvm.sh" --no-use >/dev/null 2>&1 || true
+  if ! type nvm >/dev/null 2>&1; then
+    warn "nvm not available; skipping Node.js install (npm-dependent steps may fail)"
+    return 0
+  fi
+  if ! command -v node >/dev/null 2>&1 || ! node --version 2>/dev/null | grep -q "^v${NODE_MAJOR}\."; then
+    info "installing Node.js ${NODE_MAJOR} via nvm..."
+    nvm install "${NODE_MAJOR}" 2>&1 | sed 's/^/[nvm] /' || warn "Node.js ${NODE_MAJOR} install failed"
+  fi
+  nvm alias default "${NODE_MAJOR}" >/dev/null 2>&1 || true
+  nvm use default --silent >/dev/null 2>&1 || true
+  if command -v node >/dev/null 2>&1; then
+    info "node $(node --version), npm $(npm --version)"
+  else
+    warn "node/npm not available on PATH after nvm install"
+  fi
+}
+
+# Make nvm/node visible to zsh too (root-only VMs and containers run zsh via
+# zellij, so .bashrc-only PATH setup from other installers is not enough).
+ensure_node_shell_rc() {
+  local marker="# --- Overlord: nvm/node ---"
+  local snippet='export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"'
+  local target_homes=()
+  target_homes+=("${HOME}")
+  if [ -d /home/overlord ]; then target_homes+=("/home/overlord"); fi
+  if [ -d /root ]; then target_homes+=("/root"); fi
+  local uniq=()
+  local seen=""
+  for target_home in "${target_homes[@]}"; do
+    case " $seen " in
+      *" $target_home "*) continue ;;
+      *) uniq+=("$target_home"); seen="$seen $target_home" ;;
+    esac
+  done
+  for target_home in "${uniq[@]}"; do
+    if [ ! -d "$target_home" ]; then continue; fi
+    for rc in "$target_home/.zshrc" "$target_home/.bashrc"; do
+      touch "$rc"
+      if grep -q "Overlord: nvm/node" "$rc" 2>/dev/null; then
+        continue
+      fi
+      { echo ""; echo "$marker"; echo "$snippet"; } >> "$rc"
+      info "added nvm/node setup to $rc"
+      local owner
+      owner="$(stat -c '%U' "$target_home" 2>/dev/null || echo "")"
+      if [ -n "$owner" ] && [ "$owner" != "$(whoami)" ]; then
+        chown "$owner":"$owner" "$rc" 2>/dev/null || run_sudo chown "$owner":"$owner" "$rc" 2>/dev/null || true
+      fi
+    done
+  done
+}
+
+# The prime-agent installer appends its PATH setup to ~/.bashrc only. Mirror
+# those lines into ~/.zshrc so prime-agent works in the zsh/zellij default shell.
+sync_prime_agent_rc() {
+  local bashrc="${HOME}/.bashrc"
+  [ -f "$bashrc" ] || return 0
+  touch "${HOME}/.zshrc"
+  local line
+  while IFS= read -r line; do
+    case "$line" in ""|"#"*) continue ;; esac
+    case "$line" in
+      *prime-agent*|*prime_agent*|*NVM_DIR*|*nvm.sh*) ;;
+      *) continue ;;
+    esac
+    if ! grep -qxF "$line" "${HOME}/.zshrc"; then
+      printf '%s\n' "$line" >> "${HOME}/.zshrc"
+      info "copied to ~/.zshrc: $line"
+    fi
+  done < "$bashrc"
+}
+
 install_codegraph() {
   local want="${CODEGRAPH_VERSION:-1.5.0}"
   if [ -f "$(dirname "$0")/config/tool-versions.env" ]; then
@@ -247,7 +335,9 @@ install_codegraph() {
   fi
 }
 
+install_nvm_node
 install_codegraph
+ensure_node_shell_rc
 
 # --- oh-my-zsh (unattended, non-interactive) ---
 install_oh_my_zsh() {
@@ -824,6 +914,7 @@ make_zsh_default() {
   done
 }
 install_prime_agent
+sync_prime_agent_rc
 configure_prime_agent_models
 make_zsh_default
 

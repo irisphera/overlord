@@ -47,7 +47,7 @@ bash setup.sh
 curl -fsSL https://raw.githubusercontent.com/irisphera/overlord/main/setup.sh | bash
 ```
 
-It installs (if missing): `zsh`, `oh-my-zsh` and plugins, `zellij`, `neovim` + **LazyVim**, nvm + **Node.js 24**, `uv`, AWS CLI v2, **codegraph** `1.5.0`, and **prime-agent** `0.7.4` with a `272k` context override. It also installs shared Pi/Prime skills and configures Prime Agent's bundled web search plus the public Context7 and Runpod Docs MCP servers. Web search needs a one-time Serper credential through `/login`; Context7 and Runpod Docs need no login.
+It installs (if missing): `zsh`, `oh-my-zsh` and plugins, `zellij`, `neovim` + **LazyVim**, nvm + **Node.js 24**, `uv`, AWS CLI v2, **codegraph** `1.5.0`, and **prime-agent** `0.7.4` with a `272k` context override. It also installs shared Pi/Prime skills and configures Prime Agent's bundled web search plus the public Context7 MCP server. Web search needs a one-time Serper credential through `/login`; Context7 needs no login.
 
 ### AWS sudo password fix
 
@@ -65,7 +65,7 @@ This makes subsequent `sudo` non-interactive without a password. If `sudo` is no
 - `apt-get update` + installs base packages
 - Installs `zellij` v0.43.1 (arch-aware tarball)
 - Installs nvm + Node.js 24, `uv`, and AWS CLI v2
-- Installs `prime-agent`, shared Pi/Prime skills, and Context7/Runpod Docs MCP configuration
+- Installs `prime-agent`, shared Pi/Prime skills, and Context7 MCP configuration
 - Enables bundled web search (Serper login remains a one-time user step)
 - Installs `oh-my-zsh` unattended
 - Clones `zsh-autosuggestions`, `zsh-syntax-highlighting`, `zsh-completions`, `zsh-autocomplete` and wires `~/.zshrc`

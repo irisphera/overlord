@@ -36,7 +36,8 @@ class SetupPersistenceTests(unittest.TestCase):
     def test_prime_agent_tools_are_configured(self):
         self.assertIn('bundled["websearch"] = True', SETUP)
         self.assertIn('"https://mcp.context7.com/mcp"', SETUP)
-        self.assertIn('"https://docs.runpod.io/mcp"', SETUP)
+        self.assertIn('servers.pop("runpod-docs", None)', SETUP)
+        self.assertNotIn('"https://docs.runpod.io/mcp"', SETUP)
         self.assertIn("configure_prime_agent_tools", SETUP)
 
     def test_settings_merge_accepts_prime_jsonc_and_preserves_values(self):
@@ -45,7 +46,7 @@ class SetupPersistenceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             settings_path = Path(tmp) / "settings.json"
             settings_path.write_text(
-                '{\n  // keep this value\n  "defaultModel": "example/model",\n  "recentModels": ["example/model",],\n}\n'
+                '{\n  // keep this value\n  "defaultModel": "example/model",\n  "recentModels": ["example/model",],\n  "mcpServers": {"runpod-docs": {"type": "http", "url": "old"},},\n}\n'
             )
             completed = subprocess.run(
                 [sys.executable, "-", str(settings_path)],
@@ -59,7 +60,7 @@ class SetupPersistenceTests(unittest.TestCase):
             self.assertEqual(settings["defaultModel"], "example/model")
             self.assertTrue(settings["bundledSkills"]["websearch"])
             self.assertEqual(settings["mcpServers"]["context7"]["url"], "https://mcp.context7.com/mcp")
-            self.assertEqual(settings["mcpServers"]["runpod-docs"]["url"], "https://docs.runpod.io/mcp")
+            self.assertNotIn("runpod-docs", settings["mcpServers"])
 
     def test_clean_zsh_login_is_verified(self):
         self.assertIn("verify_login_shell_tools", SETUP)

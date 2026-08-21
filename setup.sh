@@ -905,7 +905,7 @@ install_prime_agent_skills() {
 }
 
 configure_prime_agent_tools() {
-  info "enabling Prime Agent web search, Context7, and Runpod Docs tools..."
+  info "enabling Prime Agent web search and Context7 tools..."
   local settings_paths=()
   settings_paths+=("$HOME/.prime/agent/settings.json")
   if [ -d /home/overlord ]; then settings_paths+=("/home/overlord/.prime/agent/settings.json"); fi
@@ -1021,11 +1021,8 @@ for raw_path in sys.argv[1:]:
             "url": "https://mcp.context7.com/mcp",
             "enabled": True,
         }
-        servers["runpod-docs"] = {
-            "type": "http",
-            "url": "https://docs.runpod.io/mcp",
-            "enabled": True,
-        }
+        # Remove the formerly managed Runpod Docs server on upgrade.
+        servers.pop("runpod-docs", None)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(settings, indent=2, sort_keys=True) + "\n")
         path.chmod(0o644)
@@ -1041,7 +1038,8 @@ PYEOF
   if [ -d /root ]; then agent_dirs+=("/root/.prime/agent"); fi
   local agent_dir
   for agent_dir in "${agent_dirs[@]}"; do
-    mkdir -p "$agent_dir/skills/context7" "$agent_dir/skills/runpod-docs"
+    mkdir -p "$agent_dir/skills/context7"
+    rm -rf "$agent_dir/skills/runpod-docs"
     cat > "$agent_dir/skills/context7/SKILL.md" <<'SKILLEOF'
 ---
 name: context7
@@ -1052,22 +1050,12 @@ description: Look up current library and framework documentation through Context
 
 Use the tools exposed by the `context7` MCP server to resolve a library and retrieve its current documentation. Prefer Context7 over memory when implementation depends on current APIs or version-specific behavior.
 SKILLEOF
-    cat > "$agent_dir/skills/runpod-docs/SKILL.md" <<'SKILLEOF'
----
-name: runpod-docs
-description: Search official Runpod documentation through the public Runpod Docs MCP. Use for Runpod Pods, Serverless, endpoints, templates, storage, networking, GPUs, and platform configuration.
----
-
-# Runpod Docs
-
-Use the tools exposed by the `runpod-docs` MCP server for current Runpod product documentation and examples. This documentation server does not require authentication.
-SKILLEOF
   done
   if [ -d /home/overlord ]; then
     chown -R overlord:overlord /home/overlord/.prime 2>/dev/null || true
   fi
   info "websearch enabled (one-time Serper login: prime-agent /login -> MCP Connections -> Serper)"
-  info "Context7 and Runpod Docs MCP servers configured (no login required)"
+  info "Context7 MCP server configured (no login required)"
 }
 
 configure_prime_agent_models() {

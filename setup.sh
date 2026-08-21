@@ -255,11 +255,12 @@ install_uv() {
   fi
 }
 
-# Make nvm/node visible to zsh too (root-only VMs and containers run zsh via
-# zellij, so .bashrc-only PATH setup from other installers is not enough).
+# Make user and nvm tools visible in every shell startup path. SSH login bash
+# reads .bash_profile/.profile, while zellij zsh reads .zprofile/.zshrc.
 ensure_node_shell_rc() {
-  local marker="# --- Overlord: nvm/node ---"
-  local snippet='export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+  local marker="# --- Overlord: persistent tool PATH v2 ---"
+  local snippet='export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"
+export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
 [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"'
   local target_homes=()
   target_homes+=("${HOME}")
@@ -275,9 +276,14 @@ ensure_node_shell_rc() {
   done
   for target_home in "${uniq[@]}"; do
     if [ ! -d "$target_home" ]; then continue; fi
-    for rc in "$target_home/.zshrc" "$target_home/.bashrc"; do
+    for rc in \
+      "$target_home/.zshrc" \
+      "$target_home/.zprofile" \
+      "$target_home/.bashrc" \
+      "$target_home/.bash_profile" \
+      "$target_home/.profile"; do
       touch "$rc"
-      if grep -q "Overlord: nvm/node" "$rc" 2>/dev/null; then
+      if grep -q "Overlord: persistent tool PATH v2" "$rc" 2>/dev/null; then
         continue
       fi
       { echo ""; echo "$marker"; echo "$snippet"; } >> "$rc"
@@ -311,6 +317,69 @@ sync_prime_agent_rc() {
   done < "$bashrc"
 }
 
+# Publish user/nvm-installed commands at a stable system path. This makes
+# commands work inside zellij zsh even if a login shell did not source nvm.
+find_tool_command() {
+  local command_name="$1"
+  local found
+  found="$(command -v "$command_name" 2>/dev/null || true)"
+  if [ -n "$found" ] && [ -x "$found" ]; then
+    printf '%s\n' "$found"
+    return 0
+  fi
+  local candidate
+  for candidate in \
+    "$HOME/.local/bin/$command_name" \
+    "$HOME/.prime/bin/$command_name" \
+    "$HOME/.prime/agent/bin/$command_name" \
+    "${NVM_DIR:-$HOME/.nvm}"/versions/node/*/bin/"$command_name"; do
+    if [ -x "$candidate" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+publish_tool_commands() {
+  local command_name source destination
+  for command_name in node npm npx corepack prime-agent codegraph uv aws; do
+    source="$(find_tool_command "$command_name" || true)"
+    if [ -z "$source" ]; then
+      continue
+    fi
+    destination="/usr/local/bin/$command_name"
+    if [ "$source" = "$destination" ]; then
+      continue
+    fi
+    if [ "$(id -u)" -eq 0 ]; then
+      ln -sf "$source" "$destination"
+    else
+      run_sudo ln -sf "$source" "$destination" 2>/dev/null || true
+    fi
+    if [ -x "$destination" ]; then
+      info "published $command_name at $destination"
+    fi
+  done
+  hash -r 2>/dev/null || true
+}
+
+verify_login_shell_tools() {
+  if ! command -v zsh >/dev/null 2>&1; then
+    return 0
+  fi
+  local command_name
+  for command_name in node npm prime-agent; do
+    if env -i HOME="$HOME" USER="$(id -un)" TERM="${TERM:-xterm}" \
+      PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+      zsh -lic "command -v $command_name" >/dev/null 2>&1; then
+      info "$command_name available in a clean zsh login"
+    else
+      warn "$command_name is not available in a clean zsh login"
+    fi
+  done
+}
+
 install_codegraph() {
   local want="${CODEGRAPH_VERSION:-1.5.0}"
   if [ -f "$(dirname "$0")/config/tool-versions.env" ]; then
@@ -331,7 +400,7 @@ install_codegraph() {
   else
     info "installing codegraph v$want..."
   fi
-  # Prefer npm (available with Node 22), fall back to bun
+  # Prefer npm (installed with Node 24 above), fall back to bun
   if command -v npm >/dev/null 2>&1; then
     if run_sudo npm install -g "@colbymchenry/codegraph@$want" 2>&1 | sed 's/^/[codegraph] /'; then
       info "codegraph installed via npm"
@@ -444,18 +513,25 @@ source $ZSH/oh-my-zsh.sh
 EOS
     info "created ${zshrc}"
   else
-    # Update plugins line if it still is default `plugins=(git)`
-    if grep -q '^plugins=(git)' "${zshrc}"; then
+    # ensure_node_shell_rc creates .zshrc before oh-my-zsh on fresh VMs.
+    # KEEP_ZSHRC preserves it, so add the missing oh-my-zsh bootstrap here.
+    if ! grep -q 'oh-my-zsh.sh' "${zshrc}"; then
+      cat >>"${zshrc}" <<'EOS'
+
+# --- Overlord: oh-my-zsh ---
+export ZSH="$HOME/.oh-my-zsh"
+ZSH_THEME="robbyrussell"
+plugins=(git zsh-autosuggestions zsh-syntax-highlighting zsh-completions zsh-autocomplete)
+source $ZSH/oh-my-zsh.sh
+EOS
+      info "added oh-my-zsh bootstrap to ${zshrc}"
+    elif grep -q '^plugins=(git)' "${zshrc}"; then
       info "updating plugins in ${zshrc}..."
       sed -i 's/^plugins=(git)/plugins=(git zsh-autosuggestions zsh-syntax-highlighting zsh-completions zsh-autocomplete)/' "${zshrc}"
     elif ! grep -q 'zsh-autosuggestions' "${zshrc}"; then
       warn "${zshrc} exists but doesn't contain zsh plugins; please add: plugins=(git zsh-autosuggestions zsh-syntax-highlighting zsh-completions zsh-autocomplete)"
     else
       info "zsh plugins already configured in ${zshrc}"
-    fi
-    # Ensure fpath for completions is set before compinit (oh-my-zsh does it, but add explicitly)
-    if ! grep -q 'zsh-completions' "${zshrc}"; then
-      :
     fi
   fi
 }
@@ -956,8 +1032,10 @@ make_zsh_default() {
 }
 install_prime_agent
 sync_prime_agent_rc
+publish_tool_commands
 configure_prime_agent_models
 make_zsh_default
+verify_login_shell_tools
 
 info "setup complete. Restart shell or run 'zsh' to use new config."
 info "Tools: zsh $(zsh --version 2>/dev/null), nvim $(nvim --version 2>/dev/null | head -n1), zellij $(zellij --version 2>/dev/null), fzf $(fzf --version 2>/dev/null)"

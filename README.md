@@ -47,7 +47,7 @@ bash setup.sh
 curl -fsSL https://raw.githubusercontent.com/irisphera/overlord/main/setup.sh | bash
 ```
 
-It installs (if missing): `zsh`, `oh-my-zsh` (unattended), `zsh-autosuggestions`, `zsh-syntax-highlighting`, `zsh-completions`, `zsh-autocomplete`, `zellij` (pinned via `config/tool-versions.env`), `neovim` + **LazyVim** starter, plus `ripgrep`, `fd`, `fzf`, etc.
+It installs (if missing): `zsh`, `oh-my-zsh` (unattended), `zsh-autosuggestions`, `zsh-syntax-highlighting`, `zsh-completions`, `zsh-autocomplete`, `zellij` (pinned), `neovim` + **LazyVim** starter, **codegraph** `1.5.0` (pinned, local graph index), **prime-agent** `0.7.4` with `272k` context override, plus `ripgrep`, `fd`, `fzf`, etc. Many repos already have `.codegraph` — prime-agent will use `codegraph query/explore/node` when present, fallback to `grep`.
 
 ### AWS sudo password fix
 

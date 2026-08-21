@@ -4,11 +4,13 @@ export DEBIAN_FRONTEND=noninteractive
 
 # setup.sh - Standalone VM + container initializer
 # Idempotent, non-interactive. Installs: zsh, oh-my-zsh, zsh-autosuggestions,
-# zsh-syntax-highlighting, zsh-completions, zellij, lazyvim (neovim + LazyVim starter).
+# zsh-syntax-highlighting, zsh-completions, zellij, lazyvim (neovim + LazyVim starter),
+# codegraph (local code intelligence), prime-agent (272k contextWindow override).
 # Safe to run repeatedly via: bash setup.sh  or  ./setup.sh
 # Also used by the overlord container (as /workspace/setup-devcontainer.sh).
 
 ZELLIJ_VERSION="${ZELLIJ_VERSION:-0.43.1}"
+CODEGRAPH_VERSION="${CODEGRAPH_VERSION:-1.5.0}"
 LAZYVIM_REPO="${LAZYVIM_REPO:-https://github.com/LazyVim/starter}"
 LOG_PREFIX="[setup]"
 
@@ -181,6 +183,72 @@ install_zellij() {
 }
 install_zellij
 
+# --- codegraph (pinned) ---
+install_codegraph() {
+  local want="${CODEGRAPH_VERSION:-1.5.0}"
+  if [ -f "$(dirname "$0")/config/tool-versions.env" ]; then
+    want="$(grep CODEGRAPH_VERSION "$(dirname "$0")/config/tool-versions.env" | cut -d= -f2 | tr -d ' ' || echo "$want")"
+  elif [ -f "/workspace/config/tool-versions.env" ]; then
+    want="$(grep CODEGRAPH_VERSION /workspace/config/tool-versions.env | cut -d= -f2 | tr -d ' ' || echo "$want")"
+  elif [ -f "/usr/local/share/overlord/config/tool-versions.env" ]; then
+    want="$(grep CODEGRAPH_VERSION /usr/local/share/overlord/config/tool-versions.env | cut -d= -f2 | tr -d ' ' || echo "$want")"
+  fi
+  if command -v codegraph >/dev/null 2>&1; then
+    local cur
+    cur="$(codegraph --version 2>&1 | grep -oE "[0-9]+\.[0-9]+\.[0-9]+" | head -n1 || true)"
+    if [ "$cur" = "$want" ]; then
+      info "codegraph $want already installed ($cur)"
+      return 0
+    fi
+    info "codegraph version mismatch (have: $cur, want: $want), reinstalling..."
+  else
+    info "installing codegraph v$want..."
+  fi
+  # Prefer npm (available with Node 22), fall back to bun
+  if command -v npm >/dev/null 2>&1; then
+    if run_sudo npm install -g "@colbymchenry/codegraph@$want" 2>&1 | sed 's/^/[codegraph] /'; then
+      info "codegraph installed via npm"
+    else
+      warn "npm install failed for codegraph"
+    fi
+  elif command -v bun >/dev/null 2>&1; then
+    if bun add -g "@colbymchenry/codegraph@$want" 2>&1 | sed 's/^/[codegraph] /'; then
+      info "codegraph installed via bun"
+    else
+      warn "bun add failed for codegraph"
+    fi
+  else
+    warn "npm and bun not found, skipping codegraph install (install Node.js first)"
+    return 0
+  fi
+  # Ensure binary is in PATH for all users (npm global may be /usr/local/bin or /usr/bin)
+  if ! command -v codegraph >/dev/null 2>&1; then
+    # Try common npm global bin locations
+    for d in /usr/local/bin /usr/bin /opt/node/bin; do
+      if [ -x "$d/codegraph" ]; then
+        info "codegraph found at $d/codegraph"
+        break
+      fi
+    done
+    # Check bun location for current user and overlord
+    for d in "$HOME/.bun/bin" "/home/overlord/.bun/bin" "/root/.bun/bin"; do
+      if [ -x "$d/codegraph" ]; then
+        info "codegraph found at $d/codegraph"
+        # Ensure symlink in /usr/local/bin for all users
+        run_sudo ln -sf "$d/codegraph" /usr/local/bin/codegraph 2>/dev/null || true
+        break
+      fi
+    done
+  fi
+  codegraph --version 2>&1 | sed 's/^/[codegraph] /' || true
+  # Warm index status (non-blocking, don't fail setup)
+  if command -v codegraph >/dev/null 2>&1; then
+    codegraph status 2>&1 | head -n 30 | sed 's/^/[codegraph] /' || true
+  fi
+}
+
+install_codegraph
+
 # --- oh-my-zsh (unattended, non-interactive) ---
 install_oh_my_zsh() {
   local omz_dir="${HOME}/.oh-my-zsh"
@@ -202,6 +270,10 @@ install_oh_my_zsh
 install_zsh_plugins() {
   local custom="${ZSH_CUSTOM:-${HOME}/.oh-my-zsh/custom}"
   mkdir -p "${custom}/plugins"
+  # zsh-autocomplete stores recent dirs in ~/.local/share/zsh/chpwd-recent-dirs
+  # but never creates the parent dir; without it every cd/completion prints
+  # "chpwd_recent_filehandler: no such file or directory"
+  mkdir -p "${HOME}/.local/share/zsh"
   # zsh-autosuggestions
   if [ ! -d "${custom}/plugins/zsh-autosuggestions" ]; then
     info "cloning zsh-autosuggestions..."
@@ -383,6 +455,77 @@ install_zsh_plugins
 ensure_zellij_config
 ensure_zellij_autostart
 
+# --- codegraph skill for prime-agent ---
+ensure_codegraph_skill() {
+  local src_skill=""
+  if [ -f "$(dirname "$0")/.prime/agent/skills/codegraph/SKILL.md" ]; then
+    src_skill="$(dirname "$0")/.prime/agent/skills/codegraph/SKILL.md"
+    src_skill="$(dirname "$src_skill")"
+  elif [ -f "/workspace/.prime/agent/skills/codegraph/SKILL.md" ]; then
+    src_skill="/workspace/.prime/agent/skills/codegraph"
+  elif [ -f "$(dirname "$0")/skills/codegraph/SKILL.md" ]; then
+    src_skill="$(dirname "$0")/skills/codegraph"
+  elif [ -f "/workspace/skills/codegraph/SKILL.md" ]; then
+    src_skill="/workspace/skills/codegraph"
+  elif [ -f "/usr/local/share/overlord/skills/codegraph/SKILL.md" ]; then
+    src_skill="/usr/local/share/overlord/skills/codegraph"
+  fi
+  if [ -z "$src_skill" ] || [ ! -d "$src_skill" ]; then
+    return 0
+  fi
+  local target_homes=()
+  target_homes+=("$HOME")
+  if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ] && [ -d "/home/${SUDO_USER}" ]; then
+    target_homes+=("/home/${SUDO_USER}")
+  fi
+  if [ -d "/home/overlord" ]; then
+    target_homes+=("/home/overlord")
+  fi
+  if [ -d "/root" ]; then
+    target_homes+=("/root")
+  fi
+  local uniq=()
+  local seen=""
+  local h
+  for h in "${target_homes[@]}"; do
+    case " $seen " in
+      *" $h "*) continue ;;
+      *) uniq+=("$h"); seen="$seen $h" ;;
+    esac
+  done
+  for h in "${uniq[@]}"; do
+    if [ ! -d "$h" ]; then
+      continue
+    fi
+    local dest="$h/.prime/agent/skills/codegraph"
+    mkdir -p "$dest"
+    if [ ! -f "$dest/SKILL.md" ] || ! cmp -s "$src_skill/SKILL.md" "$dest/SKILL.md" 2>/dev/null; then
+      cp -r "$src_skill/." "$dest/"
+      info "installed codegraph skill to $dest"
+    fi
+    # Also copy to .agents/skills for backward compat
+    local dest2="$h/.agents/skills/codegraph"
+    mkdir -p "$dest2"
+    if [ ! -f "$dest2/SKILL.md" ] || ! cmp -s "$src_skill/SKILL.md" "$dest2/SKILL.md" 2>/dev/null; then
+      cp -r "$src_skill/." "$dest2/"
+      info "installed codegraph skill to $dest2"
+    fi
+    # Fix ownership
+    local owner
+    owner="$(stat -c '%U' "$h" 2>/dev/null || echo "")"
+    if [ -n "$owner" ] && [ "$owner" != "$(whoami)" ]; then
+      chown -R "$owner":"$owner" "$h/.prime/agent/skills/codegraph" "$h/.agents/skills/codegraph" 2>/dev/null || run_sudo chown -R "$owner":"$owner" "$h/.prime/agent/skills/codegraph" "$h/.agents/skills/codegraph" 2>/dev/null || true
+    fi
+  done
+  # Also ensure workspace copy exists for container persistence
+  if [ -d "/workspace/.prime/agent/skills" ] && [ ! -f "/workspace/.prime/agent/skills/codegraph/SKILL.md" ]; then
+    mkdir -p "/workspace/.prime/agent/skills/codegraph"
+    cp -r "$src_skill/." "/workspace/.prime/agent/skills/codegraph/"
+  fi
+}
+
+ensure_codegraph_skill
+
 # --- lazyvim ---
 install_lazyvim() {
   local nvim_config="${HOME}/.config/nvim"
@@ -523,9 +666,27 @@ configure_prime_agent_models() {
     esac
   done
 
-  # Generate models.json via python using prime-agent model list if available
+  # Reuse an existing models.json if present (e.g. synced from the host by the
+  # overlord launcher); only generate a fresh one when no candidate exists.
+  local existing_models_json=""
+  local candidate
+  for candidate in \
+    "/workspace/.overlord/prime-agent-data/models.json" \
+    "./.overlord/prime-agent-data/models.json"; do
+    if [ -f "$candidate" ]; then existing_models_json="$candidate"; break; fi
+  done
+  if [ -z "$existing_models_json" ]; then
+    for d in "${uniq_dirs[@]}"; do
+      if [ -f "$d/models.json" ]; then existing_models_json="$d/models.json"; break; fi
+    done
+  fi
+  if [ -n "$existing_models_json" ]; then
+    info "reusing existing models.json: $existing_models_json"
+  fi
   local tmp_json
   tmp_json="$(mktemp)"
+  if [ -z "$existing_models_json" ]; then
+  # Generate models.json via python using prime-agent model list if available
   python3 - "$tmp_json" <<'PYEOF'
 import subprocess, json, re, sys, os
 
@@ -590,11 +751,15 @@ with open(tmp_path, "w") as f:
     f.write("\n")
 print(f"Generated {len(models)} model overrides across {len(providers)} providers", file=sys.stderr)
 PYEOF
-  # Copy to each agent dir
+  fi
+  # Copy to each agent dir (from the reused file, or the freshly generated one)
+  local models_source="${existing_models_json:-$tmp_json}"
   for d in "${uniq_dirs[@]}"; do
     mkdir -p "$d"
-    cp "$tmp_json" "$d/models.json"
-    chmod 644 "$d/models.json" 2>/dev/null || true
+    if [ "$d/models.json" != "$models_source" ]; then
+      cp "$models_source" "$d/models.json"
+      chmod 644 "$d/models.json" 2>/dev/null || true
+    fi
     info "wrote $d/models.json ($(wc -l < "$d/models.json" | tr -d ' ') lines)"
   done
   rm -f "$tmp_json"

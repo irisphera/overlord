@@ -56,7 +56,10 @@ COPY config/tool-versions.env /usr/local/share/overlord/config/tool-versions.env
 COPY setup.sh /usr/local/share/overlord/setup.sh
 COPY config/zellij-config.kdl /usr/local/share/overlord/zellij-config.kdl
 COPY config/entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod 755 /usr/local/bin/entrypoint.sh /usr/local/share/overlord/setup.sh && mkdir -p /usr/local/share/overlord/config && chmod 644 /usr/local/share/overlord/config/tool-versions.env 2>/dev/null || true
+# Bring codegraph skill for prime-agent (used by setup.sh to install)
+COPY skills/codegraph/SKILL.md /usr/local/share/overlord/skills/codegraph/SKILL.md
+COPY .prime/agent/skills/codegraph/SKILL.md /usr/local/share/overlord/.prime-skills/codegraph/SKILL.md
+RUN chmod 755 /usr/local/bin/entrypoint.sh /usr/local/share/overlord/setup.sh && mkdir -p /usr/local/share/overlord/config && chmod 644 /usr/local/share/overlord/config/tool-versions.env 2>/dev/null || true && mkdir -p /usr/local/share/overlord/skills/codegraph /usr/local/share/overlord/.prime-skills/codegraph
 
 # Run setup as overlord (setup.sh handles sudo internally; run as root then chown is simpler)
 # We run as root so apt doesn't need sudo, then fix ownership

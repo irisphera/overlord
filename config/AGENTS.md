@@ -19,3 +19,4 @@
 
 - `entrypoint.sh` must preserve root bootstrap -> UID/GID remap -> ownership repair -> `exec gosu overlord "$@"`
 - `zellij-config.kdl` maps tab mode to Ctrl+b and leaves Ctrl+t for app passthrough
+- `zellij-config.kdl` keybinds must stay non-conflicting: no key may be bound twice within the same input mode (enforced by `scripts/tests/test_zellij_config.py`)

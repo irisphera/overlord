@@ -26,6 +26,9 @@ class SetupShTests(unittest.TestCase):
         self.assertIn("prime-agent", content.lower())
         self.assertIn("models.json", content)
         self.assertIn("272000", content)
+        # ensure codegraph is installed and skill is wired
+        self.assertIn("codegraph", content.lower())
+        self.assertIn("CODEGRAPH_VERSION", content)
 
     def test_setup_sh_executable(self):
         import os, stat
@@ -37,6 +40,12 @@ class SetupShTests(unittest.TestCase):
         self.assertNotIn("opencode-ai", content.lower())
         self.assertNotIn("oh-my-openagent@", content.lower())
         self.assertIn("setup.sh", content)
+        self.assertIn("codegraph", content.lower())
+
+    def test_codegraph_skill_exists(self):
+        self.assertTrue(Path("skills/codegraph/SKILL.md").exists())
+        self.assertTrue(Path(".prime/agent/skills/codegraph/SKILL.md").exists())
+        self.assertIn("codegraph", Path("skills/codegraph/SKILL.md").read_text().lower())
 
 if __name__ == "__main__":
     unittest.main()

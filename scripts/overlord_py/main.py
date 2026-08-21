@@ -12,6 +12,7 @@ from overlord_py.engine import ContainerEngine, EngineDetectionError, detect_eng
 from overlord_py.env_builder import build_environment_plan, normalized_host_env
 from overlord_py.paths import GitdirOutsideWorkspaceError, WorkspacePaths, build_workspace_paths, ensure_gitdir_within_workspace
 from overlord_py.persisted_state_mounts import MountSafetyFailure
+from overlord_py.prime_model_sync import sync_host_prime_models
 from overlord_py.progress import stdout_stage
 from overlord_py.runtime_config import inject_initial_runtime_config
 from overlord_py.state import ensure_state_dir
@@ -64,8 +65,11 @@ def run_launcher(engine: ContainerEngine, paths: WorkspacePaths, options, host_e
 def run_container_command(engine: ContainerEngine, paths: WorkspacePaths, options, host_env: Mapping[str, str]) -> int:
     ensure_gitdir_within_workspace(paths)
     _ = ensure_state_dir(paths.state)
-    write_messages(ensure_image(engine, paths, env=host_env, stage=stdout_stage))
     home = Path(host_env.get("HOME", str(Path.home())))
+    sync = sync_host_prime_models(home=home, prime_agent_data=paths.state.prime_agent_data)
+    if sync.copied:
+        stdout_stage(f"Syncing host models.json into {paths.state.prime_agent_data}...")
+    write_messages(ensure_image(engine, paths, env=host_env, stage=stdout_stage))
     environment = build_environment_plan(host_env, home=home, workspace_name=paths.identity.workspace_name)
     runner_env = normalized_host_env(host_env)
     running = ensure_running(engine, paths, environment.exec_env_flags, env=runner_env, home=home, stage=stdout_stage)
@@ -96,3 +100,6 @@ def write_messages(messages: Sequence[str]) -> None:
     for msg in messages:
         if msg:
             sys.stdout.write(msg if msg.endswith("\n") else msg + "\n")
+
+if __name__ == "__main__":
+    raise SystemExit(main())

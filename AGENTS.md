@@ -3,12 +3,13 @@
 ## OVERVIEW
 
 Overlord is a minimal dev-container launcher + standalone VM setup. The repo has:
-- `setup.sh` : standalone non-interactive installer (lazyvim, zellij, zsh, oh-my-zsh, zsh-autosuggestions/syntax-highlighting/completions)
+- `setup.sh` : standalone non-interactive installer (lazyvim, zellij, zsh, oh-my-zsh, zsh-autosuggestions/syntax-highlighting/completions, codegraph, prime-agent 272k)
 - `Dockerfile` : builds a container by running `setup.sh`
 - `scripts/overlord` : creates/reuses a per-workspace container and runs setup.sh inside
 - `config/` : container bootstrap and zellij config
+- `skills/codegraph` + `.prime/agent/skills/codegraph` : CodeGraph skill for prime-agent (local code intelligence, many repos already have `.codegraph`)
 
-Clean dev environment without extra agents remains. This is a pure dev environment.
+CodeGraph is local-first code intelligence (6MB index, daemon auto-syncs). Prime-agent uses it via `codegraph query/explore/node` CLI — faster and more accurate than grep, opt-in fallback to grep when `.codegraph` missing.
 
 ## STRUCTURE
 

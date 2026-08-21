@@ -7,6 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SETUP = (ROOT / "setup.sh").read_text(encoding="utf-8")
+DEV_SETUP = (ROOT / "setup-devcontainer.sh").read_text(encoding="utf-8")
 
 
 class SetupPersistenceTests(unittest.TestCase):
@@ -61,6 +62,38 @@ class SetupPersistenceTests(unittest.TestCase):
             self.assertTrue(settings["bundledSkills"]["websearch"])
             self.assertEqual(settings["mcpServers"]["context7"]["url"], "https://mcp.context7.com/mcp")
             self.assertNotIn("runpod-docs", settings["mcpServers"])
+
+    def test_launcher_prefers_devcontainer_setup(self):
+        lifecycle = (ROOT / "scripts/overlord_py/container_lifecycle.py").read_text()
+        self.assertLess(
+            lifecycle.index("/workspace/setup-devcontainer.sh"),
+            lifecycle.index("/workspace/setup.sh"),
+        )
+
+    def test_runpod_docs_mcp_is_devcontainer_only(self):
+        self.assertNotIn('"https://docs.runpod.io/mcp"', SETUP)
+        self.assertIn('"https://docs.runpod.io/mcp"', DEV_SETUP)
+        self.assertIn("runpod-docs", DEV_SETUP)
+
+    def test_devcontainer_merges_runpod_docs_settings(self):
+        script = DEV_SETUP.split("<<'PYEOF'\n", 1)[1].split("\nPYEOF", 1)[0]
+        with tempfile.TemporaryDirectory() as tmp:
+            settings_path = Path(tmp) / "settings.json"
+            settings_path.write_text('{"defaultModel": "example/model"}\n')
+            completed = subprocess.run(
+                [sys.executable, "-", str(settings_path)],
+                input=script,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            settings = json.loads(settings_path.read_text())
+            self.assertEqual(settings["defaultModel"], "example/model")
+            self.assertEqual(
+                settings["mcpServers"]["runpod-docs"]["url"],
+                "https://docs.runpod.io/mcp",
+            )
 
     def test_clean_zsh_login_is_verified(self):
         self.assertIn("verify_login_shell_tools", SETUP)

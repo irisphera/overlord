@@ -17,7 +17,7 @@ CodeGraph is local-first code intelligence (6MB index, daemon auto-syncs). Prime
 overlord/
 ├── Dockerfile      # builds image via setup.sh
 ├── setup.sh        # standalone VM installer (also used in container)
-├── setup-devcontainer.sh # wrapper that calls setup.sh
+├── setup-devcontainer.sh # container wrapper: runs setup.sh, then adds Runpod Docs MCP
 ├── config/         # entrypoint, zellij config, tool-versions
 ├── scripts/        # overlord launcher (python)
 ├── .overlord/      # per-workspace runtime state (git-ignored)

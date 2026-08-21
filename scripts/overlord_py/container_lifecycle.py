@@ -16,7 +16,7 @@ from overlord_py.progress import StageReporter, noop_stage, report_stage, stage_
 from overlord_py.state import clear_persisted_server_state
 
 RESPONSIBILITY: Final = "preserve image/container lifecycle, mounts, setup timing, and removal semantics"
-SETUP_SCRIPT_CANDIDATES: Final = ("/workspace/setup.sh", "/workspace/setup-devcontainer.sh")
+SETUP_SCRIPT_CANDIDATES: Final = ("/workspace/setup-devcontainer.sh", "/workspace/setup.sh")
 ROOT_SETUP_ENV: Final = (
     "HOME=/root",
     "USER=root",
@@ -180,7 +180,7 @@ def purge(
 
 def run_workspace_setup_script(engine: ContainerEngine, paths: WorkspacePaths, *, env: Mapping[str, str], stage: StageReporter = noop_stage) -> tuple[list[str], bool]:
     # Detect which setup script exists in workspace
-    check = engine.run(["exec", paths.identity.container_name, "sh", "-c", "for f in /workspace/setup.sh /workspace/setup-devcontainer.sh; do if [ -x \"$f\" ]; then echo \"$f\"; exit 0; fi; if [ -f \"$f\" ]; then echo \"$f\"; exit 0; fi; done; echo none"], cwd=paths.workspace, env=env)
+    check = engine.run(["exec", paths.identity.container_name, "sh", "-c", "for f in /workspace/setup-devcontainer.sh /workspace/setup.sh; do if [ -x \"$f\" ]; then echo \"$f\"; exit 0; fi; if [ -f \"$f\" ]; then echo \"$f\"; exit 0; fi; done; echo none"], cwd=paths.workspace, env=env)
     script_path = check.stdout.strip()
     if script_path == "none" or not script_path:
         return ([], False)

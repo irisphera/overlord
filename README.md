@@ -80,7 +80,8 @@ Rerunning `setup.sh` is safe.
 - Container: `overlord-<workspace-slug>` (one per workspace directory name)
 - Binds: `workspace:/workspace`, `~/.gitconfig`/`~/.ssh` (ro), `.overlord/zsh-data:/home/overlord/.zsh_data`
 - `config/entrypoint.sh` handles UID/GID remap and `gosu overlord`
-- `setup.sh` runs as root inside the container on create/start, then ownership is repaired to `overlord`
+- The launcher prefers `setup-devcontainer.sh` when present; it runs shared `setup.sh`, then adds the container-only Runpod Docs MCP
+- Setup runs as root inside the container on create/start, then ownership is repaired to `overlord`
 
 ## Config
 

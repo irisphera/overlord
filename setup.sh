@@ -834,6 +834,76 @@ install_prime_agent() {
   fi
 }
 
+install_prime_agent_skills() {
+  if ! command -v npx >/dev/null 2>&1; then
+    warn "npx unavailable; skipping Prime Agent skill installation"
+    return 0
+  fi
+  info "installing shared skills for the Pi-based Prime Agent..."
+  local skill_source
+  for skill_source in mattpocock/skills aws/agent-toolkit-for-aws; do
+    if npx --yes skills add "$skill_source" --global --agent pi --yes --copy --full-depth \
+      2>&1 | sed "s|^|[skills:$skill_source] |"; then
+      info "installed skills from $skill_source"
+    else
+      warn "failed to install skills from $skill_source"
+    fi
+  done
+
+  # The skills CLI knows Pi as ~/.pi/agent, while Prime Agent uses
+  # ~/.prime/agent. Copy the installed Pi skills into every Prime Agent home.
+  local pi_skills="$HOME/.pi/agent/skills"
+  local target_homes=("$HOME")
+  if [ -d /home/overlord ]; then target_homes+=("/home/overlord"); fi
+  if [ -d /root ]; then target_homes+=("/root"); fi
+  local target_home prime_skills owner
+  if [ -d "$pi_skills" ]; then
+    for target_home in "${target_homes[@]}"; do
+      prime_skills="$target_home/.prime/agent/skills"
+      mkdir -p "$prime_skills"
+      cp -a "$pi_skills/." "$prime_skills/"
+      owner="$(stat -c '%U' "$target_home" 2>/dev/null || true)"
+      if [ -n "$owner" ]; then
+        chown -R "$owner":"$owner" "$prime_skills" 2>/dev/null || true
+      fi
+      info "synced Pi skills to $prime_skills"
+    done
+  else
+    warn "Pi skills directory was not created: $pi_skills"
+  fi
+
+  # The AWS setup URL is an interactive workflow, not a skills CLI package.
+  # Install it as a local skill so Prime/Pi can guide login/profile setup later.
+  local aws_setup_url="https://raw.githubusercontent.com/aws/agent-toolkit-for-aws/refs/heads/main/setup-instructions/setup.md"
+  local aws_setup_tmp
+  aws_setup_tmp="$(mktemp)"
+  if curl -fsSL "$aws_setup_url" -o "$aws_setup_tmp"; then
+    local agent_skills skill_dir
+    for target_home in "${target_homes[@]}"; do
+      for agent_skills in "$target_home/.pi/agent/skills" "$target_home/.prime/agent/skills"; do
+        skill_dir="$agent_skills/aws-agent-toolkit-setup"
+        mkdir -p "$skill_dir"
+        {
+          printf '%s\n' '---'
+          printf '%s\n' 'name: aws-agent-toolkit-setup'
+          printf '%s\n' 'description: Guide interactive AWS login, profile, region, Agent Toolkit, MCP, and AWS skill setup.'
+          printf '%s\n' '---' ''
+          printf 'Upstream instructions: %s\n\n' "$aws_setup_url"
+          cat "$aws_setup_tmp"
+        } > "$skill_dir/SKILL.md"
+      done
+      owner="$(stat -c '%U' "$target_home" 2>/dev/null || true)"
+      if [ -n "$owner" ]; then
+        chown -R "$owner":"$owner" "$target_home/.pi" "$target_home/.prime" 2>/dev/null || true
+      fi
+    done
+    info "installed AWS Agent Toolkit setup skill"
+  else
+    warn "failed to download AWS Agent Toolkit setup instructions"
+  fi
+  rm -f "$aws_setup_tmp"
+}
+
 configure_prime_agent_models() {
   info "configuring Prime Agent models.json with 272k contextWindow override..."
   # Determine agent dirs to configure
@@ -1033,6 +1103,7 @@ make_zsh_default() {
 install_prime_agent
 sync_prime_agent_rc
 publish_tool_commands
+install_prime_agent_skills
 configure_prime_agent_models
 make_zsh_default
 verify_login_shell_tools

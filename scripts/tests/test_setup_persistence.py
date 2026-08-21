@@ -20,6 +20,15 @@ class SetupPersistenceTests(unittest.TestCase):
         self.assertIn("node npm npx corepack prime-agent codegraph uv aws", SETUP)
         self.assertIn('destination="/usr/local/bin/$command_name"', SETUP)
 
+    def test_prime_agent_skills_are_installed_after_prime_agent(self):
+        self.assertIn("install_prime_agent_skills", SETUP)
+        self.assertIn("mattpocock/skills", SETUP)
+        self.assertIn("aws/agent-toolkit-for-aws", SETUP)
+        self.assertIn("--global --agent pi --yes --copy --full-depth", SETUP)
+        self.assertIn("aws-agent-toolkit-setup", SETUP)
+        calls = SETUP.rsplit("install_prime_agent\n", 1)[1]
+        self.assertIn("install_prime_agent_skills", calls)
+
     def test_clean_zsh_login_is_verified(self):
         self.assertIn("verify_login_shell_tools", SETUP)
         self.assertIn('zsh -lic "command -v $command_name"', SETUP)

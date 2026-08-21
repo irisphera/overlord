@@ -216,6 +216,29 @@ install_nvm_node() {
   fi
 }
 
+# --- uv (python project manager used by workspace setups) ---
+install_uv() {
+  if command -v uv >/dev/null 2>&1; then
+    info "uv already installed ($(uv --version 2>/dev/null | awk '{print $2}'))"
+    return 0
+  fi
+  local uv_install_dir
+  if [ "$(id -u)" -eq 0 ]; then
+    uv_install_dir="/usr/local/bin"
+  else
+    uv_install_dir="${HOME}/.local/bin"
+  fi
+  info "installing uv to ${uv_install_dir}..."
+  curl -LsSf https://astral.sh/uv/install.sh \
+    | env UV_INSTALL_DIR="${uv_install_dir}" UV_UNMANAGED_INSTALL="1" sh -s -- -q 2>&1 | sed 's/^/[uv] /' \
+    || warn "uv install failed"
+  if command -v uv >/dev/null 2>&1; then
+    info "uv installed at $(command -v uv)"
+  else
+    warn "uv not on PATH after install"
+  fi
+}
+
 # Make nvm/node visible to zsh too (root-only VMs and containers run zsh via
 # zellij, so .bashrc-only PATH setup from other installers is not enough).
 ensure_node_shell_rc() {
@@ -338,6 +361,7 @@ install_codegraph() {
 install_nvm_node
 install_codegraph
 ensure_node_shell_rc
+install_uv
 
 # --- oh-my-zsh (unattended, non-interactive) ---
 install_oh_my_zsh() {

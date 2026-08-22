@@ -7,8 +7,9 @@ from typing import Final, override
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[2]
 DEFAULT_TOOL_VERSIONS_PATH: Final = REPO_ROOT / "config" / "tool-versions.env"
-ASSIGNMENT: Final = re.compile(r"(?P<name>[A-Z][A-Z0-9_]*)=(?P<value>[A-Za-z0-9.]+)")
-SEMVER: Final = re.compile(r"(?:0|[1-9][0-9]*)(?:\.(?:0|[1-9][0-9]*)){2}")
+ASSIGNMENT: Final = re.compile(r"(?P<name>[A-Z][A-Z0-9_]*)=(?P<value>[A-Za-z0-9.-]+)")
+# Semver with an optional prerelease tag (e.g. 0.1.1-rc.2 for dsh).
+SEMVER: Final = re.compile(r"(?:0|[1-9][0-9]*)(?:\.(?:0|[1-9][0-9]*)){2}(?:-[A-Za-z0-9.]+)?")
 
 @dataclass(frozen=True, slots=True)
 class ToolVersionsError(Exception):
@@ -20,8 +21,9 @@ class ToolVersionsError(Exception):
 @dataclass(frozen=True, slots=True)
 class ToolVersions:
     zellij_version: str
-    prime_agent_version: str = "0.7.4"
+    prime_agent_version: str = "0.8.0"
     codegraph_version: str = "1.5.0"
+    dsh_version: str = ""
 
 def load_tool_versions(manifest_path: Path = DEFAULT_TOOL_VERSIONS_PATH) -> ToolVersions:
     try:
@@ -36,7 +38,7 @@ def load_tool_versions(manifest_path: Path = DEFAULT_TOOL_VERSIONS_PATH) -> Tool
         if match is None:
             raise ToolVersionsError(f"{manifest_path}:{line_number}: invalid assignment")
         name = match["name"]
-        if name not in ("ZELLIJ_VERSION", "PRIME_AGENT_VERSION", "CODEGRAPH_VERSION"):
+        if name not in ("ZELLIJ_VERSION", "PRIME_AGENT_VERSION", "CODEGRAPH_VERSION", "DSH_VERSION"):
             raise ToolVersionsError(f"{manifest_path}:{line_number}: unknown variable: {name}")
         if name in values:
             raise ToolVersionsError(f"{manifest_path}:{line_number}: duplicate variable: {name}")
@@ -50,4 +52,9 @@ def load_tool_versions(manifest_path: Path = DEFAULT_TOOL_VERSIONS_PATH) -> Tool
         raise ToolVersionsError(f"{manifest_path}: missing required variable: PRIME_AGENT_VERSION")
     if "CODEGRAPH_VERSION" not in values:
         raise ToolVersionsError(f"{manifest_path}: missing required variable: CODEGRAPH_VERSION")
-    return ToolVersions(zellij_version=values["ZELLIJ_VERSION"], prime_agent_version=values["PRIME_AGENT_VERSION"], codegraph_version=values["CODEGRAPH_VERSION"])
+    return ToolVersions(
+        zellij_version=values["ZELLIJ_VERSION"],
+        prime_agent_version=values["PRIME_AGENT_VERSION"],
+        codegraph_version=values["CODEGRAPH_VERSION"],
+        dsh_version=values.get("DSH_VERSION", ""),
+    )

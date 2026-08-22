@@ -343,7 +343,7 @@ find_tool_command() {
 
 publish_tool_commands() {
   local command_name source destination
-  for command_name in node npm npx corepack prime-agent codegraph uv aws; do
+  for command_name in node npm npx corepack prime-agent codegraph uv aws dsh; do
     source="$(find_tool_command "$command_name" || true)"
     if [ -z "$source" ]; then
       continue
@@ -364,20 +364,38 @@ publish_tool_commands() {
   hash -r 2>/dev/null || true
 }
 
+# Interactive shells/zellij run as the 'overlord' user while this setup often
+# runs as root. Published /usr/local/bin symlinks resolve through $HOME/.nvm,
+# so /root must be traversable for overlord. Mode 711 allows traversal without
+# listing; files inside keep their own permissions.
+ensure_cross_user_tool_access() {
+  [ -d /home/overlord ] || return 0
+  if [ "$(stat -c '%a' /root 2>/dev/null || echo "")" = "711" ]; then
+    return 0
+  fi
+  if [ "$(id -u)" -eq 0 ]; then
+    chmod 711 /root && info "made /root traversable (711) so the overlord user can run published tools"
+  else
+    run_sudo chmod 711 /root 2>/dev/null || warn "could not make /root traversable; overlord may hit 'permission denied' on root-published tools"
+  fi
+}
+
 verify_login_shell_tools() {
   if ! command -v zsh >/dev/null 2>&1; then
     return 0
   fi
-  local command_name
-  for command_name in node npm prime-agent; do
-    if env -i HOME="$HOME" USER="$(id -un)" TERM="${TERM:-xterm}" \
-      PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
-      zsh -lic "command -v $command_name" >/dev/null 2>&1; then
-      info "$command_name available in a clean zsh login"
-    else
-      warn "$command_name is not available in a clean zsh login"
-    fi
-  done
+  local command_name target_home
+  while IFS= read -r target_home; do
+    for command_name in node npm prime-agent; do
+      if env -i HOME="$target_home" USER="$(stat -c '%U' "$target_home" 2>/dev/null || id -un)" TERM="${TERM:-xterm}" \
+        PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+        zsh -lic "command -v $command_name" >/dev/null 2>&1; then
+        info "$command_name available in a clean zsh login ($target_home)"
+      else
+        warn "$command_name is not available in a clean zsh login ($target_home)"
+      fi
+    done
+  done < <(omz_target_homes)
 }
 
 install_codegraph() {
@@ -450,30 +468,80 @@ install_uv
 install_aws_cli
 
 # --- oh-my-zsh (unattended, non-interactive) ---
-install_oh_my_zsh() {
-  local omz_dir="${HOME}/.oh-my-zsh"
-  if [ -d "${omz_dir}" ]; then
-    info "oh-my-zsh already installed"
+# Setup may run as root while interactive shells/zellij run as the 'overlord'
+# user. Provision oh-my-zsh in every target home so no shell misses plugins.
+omz_target_homes() {
+  printf '%s\n' "${HOME}"
+  if [ -d /home/overlord ] && [ "$(realpath /home/overlord 2>/dev/null)" != "$(realpath "${HOME}" 2>/dev/null)" ]; then
+    printf '%s\n' "/home/overlord"
+  fi
+}
+
+fix_home_ownership() {
+  local target owner
+  for target in "$@"; do
+    [ -e "$target" ] || continue
+    owner="$(stat -c '%U' "$target" 2>/dev/null || echo "")"
+    if [ -n "$owner" ] && [ "$owner" != "$(whoami)" ]; then
+      chown -R "$owner":"$owner" "$target" 2>/dev/null || run_sudo chown -R "$owner":"$owner" "$target" 2>/dev/null || true
+    elif [ "$target" = "/home/overlord" ] && [ "$(id -u)" -eq 0 ]; then
+      chown -R overlord:overlord "$target" 2>/dev/null || run_sudo chown -R overlord:overlord "$target" 2>/dev/null || true
+    fi
+  done
+}
+
+install_oh_my_zsh_for() {
+  local target_home="$1"
+  local omz_dir="${target_home}/.oh-my-zsh"
+  if [ -f "${omz_dir}/oh-my-zsh.sh" ]; then
+    info "oh-my-zsh already installed for ${target_home}"
     return 0
   fi
-  info "installing oh-my-zsh (unattended)..."
-  # Use official installer with --unattended; keep existing .zshrc if present
-  RUNZSH=no CHSH=no KEEP_ZSHRC=yes \
-    sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended --keep-zshrc 2>&1 | sed 's/^/[omz] /' || true
-  if [ ! -d "${omz_dir}" ]; then
-    warn "oh-my-zsh install may have failed"
+  if [ "$target_home" = "$HOME" ]; then
+    info "installing oh-my-zsh (unattended)..."
+    # Use official installer with --unattended; keep existing .zshrc if present
+    RUNZSH=no CHSH=no KEEP_ZSHRC=yes \
+      sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended --keep-zshrc 2>&1 | sed 's/^/[omz] /' || true
+    if [ ! -f "${omz_dir}/oh-my-zsh.sh" ]; then
+      warn "oh-my-zsh install may have failed"
+      return 0
+    fi
+  elif [ -f "${HOME}/.oh-my-zsh/oh-my-zsh.sh" ]; then
+    info "copying oh-my-zsh to ${target_home}..."
+    mkdir -p "$target_home"
+    cp -a "${HOME}/.oh-my-zsh/." "${omz_dir}/"
+  else
+    info "installing oh-my-zsh into ${target_home} (unattended)..."
+    HOME="$target_home" RUNZSH=no CHSH=no KEEP_ZSHRC=yes \
+      sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended --keep-zshrc 2>&1 | sed 's/^/[omz] /' || true
   fi
+  fix_home_ownership "$omz_dir"
+}
+
+install_oh_my_zsh() {
+  local target_home
+  while IFS= read -r target_home; do
+    install_oh_my_zsh_for "$target_home"
+  done < <(omz_target_homes)
 }
 install_oh_my_zsh
 
 # --- zsh plugins: autosuggestions, syntax-highlighting, completions, fzf-tab optional ---
 install_zsh_plugins() {
-  local custom="${ZSH_CUSTOM:-${HOME}/.oh-my-zsh/custom}"
+  local target_home custom
+  while IFS= read -r target_home; do
+    install_zsh_plugins_for "$target_home"
+  done < <(omz_target_homes)
+}
+
+install_zsh_plugins_for() {
+  local target_home="$1"
+  local custom="${ZSH_CUSTOM:-${target_home}/.oh-my-zsh/custom}"
   mkdir -p "${custom}/plugins"
   # zsh-autocomplete stores recent dirs in ~/.local/share/zsh/chpwd-recent-dirs
   # but never creates the parent dir; without it every cd/completion prints
   # "chpwd_recent_filehandler: no such file or directory"
-  mkdir -p "${HOME}/.local/share/zsh"
+  mkdir -p "${target_home}/.local/share/zsh"
   # zsh-autosuggestions
   if [ ! -d "${custom}/plugins/zsh-autosuggestions" ]; then
     info "cloning zsh-autosuggestions..."
@@ -502,7 +570,7 @@ install_zsh_plugins() {
   fi
 
   # Ensure .zshrc loads them (idempotent)
-  local zshrc="${HOME}/.zshrc"
+  local zshrc="${target_home}/.zshrc"
   if [ ! -f "${zshrc}" ]; then
     # oh-my-zsh should have created one; create minimal if missing
     cat >"${zshrc}" <<'EOS'
@@ -534,6 +602,7 @@ EOS
       info "zsh plugins already configured in ${zshrc}"
     fi
   fi
+  fix_home_ownership "${target_home}/.oh-my-zsh" "${target_home}/.local/share/zsh" "${zshrc}"
 }
 
 # --- zellij config + autostart on SSH (non-interactive, idempotent) ---
@@ -795,7 +864,7 @@ install_prime_agent() {
   if command -v prime-agent >/dev/null 2>&1; then
     local cur
     cur="$(prime-agent --version 2>&1 | grep -oE "[0-9]+\.[0-9]+\.[0-9]+" | head -n1 || true)"
-    local want="${PRIME_AGENT_VERSION:-0.7.4}"
+    local want="${PRIME_AGENT_VERSION:-0.8.0}"
     # try to read pinned version from tool-versions.env
     if [ -f "$(dirname "$0")/config/tool-versions.env" ]; then
       want="$(grep PRIME_AGENT_VERSION "$(dirname "$0")/config/tool-versions.env" | cut -d= -f2 | tr -d ' ' || echo "$want")"
@@ -812,7 +881,7 @@ install_prime_agent() {
   else
     info "installing prime-agent..."
   fi
-  local want="${PRIME_AGENT_VERSION:-0.7.4}"
+  local want="${PRIME_AGENT_VERSION:-0.8.0}"
   if [ -f "$(dirname "$0")/config/tool-versions.env" ]; then
     want="$(grep PRIME_AGENT_VERSION "$(dirname "$0")/config/tool-versions.env" | cut -d= -f2 | tr -d ' ' || echo "$want")"
   elif [ -f "/workspace/config/tool-versions.env" ]; then
@@ -831,6 +900,58 @@ install_prime_agent() {
   else
     warn "failed to download prime-agent installer"
     rm -f "$installer"
+  fi
+}
+
+# DeepSeek Harness (dsh) — alternative agent harness, installed from npm.
+# https://github.com/deepseek-ai/deepseek-harness
+DSH_NPM_PACKAGE="@deepseek-ai/dsh"
+# Native deps need postinstall scripts; npm's allow-scripts policy blocks them
+# by default and dsh breaks without them (node-pty/koffi bindings).
+DSH_ALLOWED_SCRIPTS="@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs"
+
+dsh_want_version() {
+  local want="${DSH_VERSION:-}"
+  if [ -f "$(dirname "$0")/config/tool-versions.env" ]; then
+    want="$(grep DSH_VERSION "$(dirname "$0")/config/tool-versions.env" | cut -d= -f2 | tr -d ' ' || echo "$want")"
+  elif [ -f "/workspace/config/tool-versions.env" ]; then
+    want="$(grep DSH_VERSION /workspace/config/tool-versions.env | cut -d= -f2 | tr -d ' ' || echo "$want")"
+  elif [ -f "/usr/local/share/overlord/config/tool-versions.env" ]; then
+    want="$(grep DSH_VERSION /usr/local/share/overlord/config/tool-versions.env | cut -d= -f2 | tr -d ' ' || echo "$want")"
+  fi
+  echo "$want"
+}
+
+install_dsh() {
+  if ! command -v node >/dev/null 2>&1; then
+    warn "node unavailable; skipping DeepSeek Harness install"
+    return 0
+  fi
+  local cur=""
+  if command -v dsh >/dev/null 2>&1; then
+    cur="$(dsh --version 2>/dev/null | grep -oE "[0-9]+\.[0-9]+\.[0-9]+[^ ]*" | head -n1 || true)"
+  fi
+  local want
+  want="$(dsh_want_version)"
+  if [ -n "$cur" ]; then
+    if [ -z "$want" ] || echo "$cur" | grep -q "^$want"; then
+      info "DeepSeek Harness already installed (dsh $cur)"
+      return 0
+    fi
+    info "DeepSeek Harness version mismatch (have: $cur, want: $want), reinstalling..."
+  else
+    info "installing DeepSeek Harness (dsh)..."
+  fi
+  local spec="${DSH_NPM_PACKAGE}"
+  [ -n "$want" ] && spec="@deepseek-ai/dsh@${want}"
+  if npm install -g "$spec" --allow-scripts="$DSH_ALLOWED_SCRIPTS" 2>&1 | sed 's/^/[dsh] /'; then
+    if command -v dsh >/dev/null 2>&1; then
+      info "dsh $(dsh --version 2>/dev/null | head -n1) installed"
+    else
+      warn "dsh not on PATH after install"
+    fi
+  else
+    warn "failed to install $spec via npm"
   fi
 }
 
@@ -1187,7 +1308,10 @@ PYEOF
   local models_source="${existing_models_json:-$tmp_json}"
   for d in "${uniq_dirs[@]}"; do
     mkdir -p "$d"
-    if [ "$d/models.json" != "$models_source" ]; then
+    # The workspace bind mount and the persisted Prime Agent bind mount can
+    # expose the same file through different path names. Compare file identity
+    # so cp is not asked to copy models.json onto itself.
+    if [ ! "$models_source" -ef "$d/models.json" ]; then
       cp "$models_source" "$d/models.json"
       chmod 644 "$d/models.json" 2>/dev/null || true
     fi
@@ -1255,8 +1379,10 @@ make_zsh_default() {
   done
 }
 install_prime_agent
+install_dsh
 sync_prime_agent_rc
 publish_tool_commands
+ensure_cross_user_tool_access
 install_prime_agent_skills
 configure_prime_agent_tools
 configure_prime_agent_models

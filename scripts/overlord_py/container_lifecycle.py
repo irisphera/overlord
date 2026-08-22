@@ -102,6 +102,15 @@ def ensure_running(
         case _:
             raise LifecycleError(f"Error: Container {paths.identity.container_name} is in unexpected state: {state}\nTry: overlord fresh")
     if not setup_allowed:
+        # Workspace setup and ad-hoc root commands can leave XDG state files
+        # (notably zsh-autocomplete logs) unwritable by the interactive user.
+        # The entrypoint repair only runs when the container starts, so repair
+        # again before attaching to a container that was already running.
+        engine.run(
+            ["exec", paths.identity.container_name, "sh", "-c", SETUP_OWNERSHIP_REPAIR_SCRIPT],
+            cwd=paths.workspace,
+            env=env,
+        )
         return EnsureRunningResult(state_before=state, setup_ran=False, messages=tuple(messages))
     stage(f"Repairing workspace traversal permissions for {paths.workspace}...")
     chmod_workspace_for_rootless_podman(paths.workspace)

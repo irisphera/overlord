@@ -26,6 +26,10 @@ class SetupShTests(unittest.TestCase):
         self.assertIn("prime-agent", content.lower())
         self.assertIn("models.json", content)
         self.assertIn("272000", content)
+        # Bind mounts can expose the persisted file through multiple path names.
+        # The copy guard must compare file identity, not path text, to avoid cp
+        # rejecting a copy of models.json onto itself.
+        self.assertIn('[ ! "$models_source" -ef "$d/models.json" ]', content)
         # ensure codegraph is installed and skill is wired
         self.assertIn("codegraph", content.lower())
         self.assertIn("CODEGRAPH_VERSION", content)

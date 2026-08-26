@@ -569,40 +569,140 @@ install_zsh_plugins_for() {
     git clone --depth=1 https://github.com/marlonrichert/zsh-autocomplete "${custom}/plugins/zsh-autocomplete" 2>&1 | sed 's/^/[zsh-autocomplete] /' || true
   fi
 
-  # Ensure .zshrc loads them (idempotent)
-  local zshrc="${target_home}/.zshrc"
-  if [ ! -f "${zshrc}" ]; then
-    # oh-my-zsh should have created one; create minimal if missing
-    cat >"${zshrc}" <<'EOS'
-export ZSH="$HOME/.oh-my-zsh"
-ZSH_THEME="robbyrussell"
-plugins=(git zsh-autosuggestions zsh-syntax-highlighting zsh-completions zsh-autocomplete)
-source $ZSH/oh-my-zsh.sh
-EOS
-    info "created ${zshrc}"
-  else
-    # ensure_node_shell_rc creates .zshrc before oh-my-zsh on fresh VMs.
-    # KEEP_ZSHRC preserves it, so add the missing oh-my-zsh bootstrap here.
-    if ! grep -q 'oh-my-zsh.sh' "${zshrc}"; then
-      cat >>"${zshrc}" <<'EOS'
+  # Ensure .zshrc / .zshenv load plugins correctly (idempotent).
+  configure_overlord_zsh_files "${target_home}"
+  fix_home_ownership "${target_home}/.oh-my-zsh" "${target_home}/.local/share/zsh" "${target_home}/.zshrc" "${target_home}/.zshenv"
+}
 
+# Replace one Overlord-managed shell block identified by its marker prefix.
+# Reads the replacement block from stdin so multiline content stays intact.
+upsert_overlord_shell_block() {
+  local rc="$1"
+  local marker_prefix="$2"
+  local blockfile
+  touch "$rc"
+  blockfile="$(mktemp)"
+  cat >"$blockfile"
+  python3 - "$rc" "$marker_prefix" "$blockfile" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+prefix = sys.argv[2]
+block_path = Path(sys.argv[3])
+block = block_path.read_text().replace("\r\n", "\n").strip("\n")
+block_path.unlink(missing_ok=True)
+raw = path.read_text() if path.exists() else ""
+lines = raw.splitlines(keepends=True)
+out: list[str] = []
+i = 0
+marker_start = f"# --- {prefix}"
+replaced = False
+while i < len(lines):
+    line = lines[i]
+    if line.startswith(marker_start):
+        i += 1
+        while i < len(lines) and not lines[i].startswith("# --- "):
+            i += 1
+        if i < len(lines) and lines[i].strip() == "":
+            i += 1
+        if block and not replaced:
+            if out and out[-1].strip() != "":
+                out.append("\n")
+            out.append(block + "\n")
+            replaced = True
+        continue
+    out.append(line)
+    i += 1
+text = "".join(out).rstrip()
+if block and not replaced:
+    text = (text + "\n\n" if text else "") + block
+if text:
+    text += "\n"
+path.write_text(text)
+PY
+}
+
+# Source zsh-autocomplete just before the first oh-my-zsh.sh line.
+insert_autocomplete_before_omz() {
+  local zshrc="$1"
+  python3 - "$zshrc" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text() if path.exists() else ""
+marker = "# --- Overlord: zsh-autocomplete before compinit ---"
+snippet = (
+    marker + "\n"
+    'if [ -f "${ZSH:-$HOME/.oh-my-zsh}/custom/plugins/zsh-autocomplete/zsh-autocomplete.plugin.zsh" ]; then\n'
+    '  source "${ZSH:-$HOME/.oh-my-zsh}/custom/plugins/zsh-autocomplete/zsh-autocomplete.plugin.zsh"\n'
+    "fi\n"
+)
+if "zsh-autocomplete.plugin.zsh" in text:
+    raise SystemExit(0)
+needle = "source $ZSH/oh-my-zsh.sh"
+alt = "source ${ZSH}/oh-my-zsh.sh"
+idx = text.find(needle)
+if idx < 0:
+    idx = text.find(alt)
+    needle = alt if idx >= 0 else ""
+if idx < 0:
+    text = text.rstrip() + "\n\n" + snippet
+else:
+    text = text[:idx] + snippet + text[idx:]
+path.write_text(text if text.endswith("\n") else text + "\n")
+PY
+}
+
+configure_overlord_zsh_files() {
+  local target_home="$1"
+  local zshrc="${target_home}/.zshrc"
+  local zshenv="${target_home}/.zshenv"
+  mkdir -p "${target_home}"
+  touch "${zshrc}" "${zshenv}"
+
+  upsert_overlord_shell_block "${zshenv}" "Overlord: skip Ubuntu global compinit" <<'EOS'
+# --- Overlord: skip Ubuntu global compinit ---
+# Ubuntu /etc/zsh/zshrc runs compinit before ~/.zshrc. That dump never includes
+# zsh-autocomplete helpers, so Tab later prints "_autocomplete__unambiguous not found".
+skip_global_compinit=1
+EOS
+
+  # Never keep zsh-autocomplete as an Oh My Zsh plugin; it must load before compinit.
+  if grep -qE '^plugins=\(.*zsh-autocomplete' "${zshrc}"; then
+    sed -i -E '/^plugins=\(/ s/[[:space:]]*zsh-autocomplete//g' "${zshrc}"
+  fi
+
+  if grep -q 'Overlord: oh-my-zsh' "${zshrc}" || ! grep -q 'oh-my-zsh.sh' "${zshrc}"; then
+    upsert_overlord_shell_block "${zshrc}" "Overlord: oh-my-zsh" <<'EOS'
 # --- Overlord: oh-my-zsh ---
 export ZSH="$HOME/.oh-my-zsh"
 ZSH_THEME="robbyrussell"
-plugins=(git zsh-autosuggestions zsh-syntax-highlighting zsh-completions zsh-autocomplete)
+plugins=(git zsh-autosuggestions zsh-syntax-highlighting zsh-completions)
+# Source autocomplete before omz so Completions are on fpath for compinit.
+# Loading it as an omz plugin runs after OMZ compinit and leaves helpers unloaded.
+if [ -f "${ZSH:-$HOME/.oh-my-zsh}/custom/plugins/zsh-autocomplete/zsh-autocomplete.plugin.zsh" ]; then
+  source "${ZSH:-$HOME/.oh-my-zsh}/custom/plugins/zsh-autocomplete/zsh-autocomplete.plugin.zsh"
+fi
 source $ZSH/oh-my-zsh.sh
 EOS
-      info "added oh-my-zsh bootstrap to ${zshrc}"
-    elif grep -q '^plugins=(git)' "${zshrc}"; then
+    info "ensured oh-my-zsh bootstrap in ${zshrc}"
+  else
+    if grep -qE '^plugins=\(git\)[[:space:]]*$' "${zshrc}"; then
       info "updating plugins in ${zshrc}..."
-      sed -i 's/^plugins=(git)/plugins=(git zsh-autosuggestions zsh-syntax-highlighting zsh-completions zsh-autocomplete)/' "${zshrc}"
+      sed -i 's/^plugins=(git)/plugins=(git zsh-autosuggestions zsh-syntax-highlighting zsh-completions)/' "${zshrc}"
     elif ! grep -q 'zsh-autosuggestions' "${zshrc}"; then
-      warn "${zshrc} exists but doesn't contain zsh plugins; please add: plugins=(git zsh-autosuggestions zsh-syntax-highlighting zsh-completions zsh-autocomplete)"
+      warn "${zshrc} exists but doesn't contain zsh plugins; please add: plugins=(git zsh-autosuggestions zsh-syntax-highlighting zsh-completions)"
     else
       info "zsh plugins already configured in ${zshrc}"
     fi
+    insert_autocomplete_before_omz "${zshrc}"
+    info "sourced zsh-autocomplete before oh-my-zsh in ${zshrc}"
   fi
-  fix_home_ownership "${target_home}/.oh-my-zsh" "${target_home}/.local/share/zsh" "${zshrc}"
+
+  # Stale dumps from Ubuntu global compinit / old plugin order omit autocomplete helpers.
+  rm -f "${target_home}/.zcompdump" "${target_home}/.zcompdump"-* "${target_home}/.cache/zsh/compdump" 2>/dev/null || true
 }
 
 # --- zellij config + autostart on SSH (non-interactive, idempotent) ---
@@ -688,36 +788,25 @@ ensure_zellij_autostart() {
       *) uniq+=("$target_home"); seen="$seen $target_home" ;;
     esac
   done
-  local marker="# --- Overlord: auto-start zellij on SSH ---"
-  local snippet='if [ -z "${ZELLIJ:-}" ] && [ -t 1 ] && command -v zellij >/dev/null 2>&1; then
-  case $- in
-    *i*)
-      # Interactive shell: auto-attach (SSH has SSH_TTY/SSH_CONNECTION, but case covers all interactive)
-      zellij attach --create 2>/dev/null || true
-      ;;
-  esac
-fi'
+  local marker_prefix="Overlord: auto-start zellij"
   for target_home in "${uniq[@]}"; do
     if [ ! -d "$target_home" ]; then
       continue
     fi
     for rc in "$target_home/.zshrc" "$target_home/.bashrc"; do
-      # Ensure file exists
-      if [ ! -f "$rc" ]; then
-        touch "$rc"
-      fi
-      if grep -q "Overlord: auto-start zellij" "$rc" 2>/dev/null; then
-        info "zellij autostart already in $rc"
-        continue
-      fi
-      # Append snippet
-      {
-        echo ""
-        echo "$marker"
-        echo "$snippet"
-      } >> "$rc"
-      info "added zellij autostart to $rc"
-      # Fix ownership
+      upsert_overlord_shell_block "$rc" "$marker_prefix" <<'EOS'
+# --- Overlord: auto-start zellij on SSH ---
+# exec replaces this shell so detach/quit actually closes the connection
+# instead of dropping you into a leftover parent shell.
+if [ -z "${ZELLIJ:-}" ] && [ -t 1 ] && command -v zellij >/dev/null 2>&1; then
+  case $- in
+    *i*)
+      exec zellij attach --create
+      ;;
+  esac
+fi
+EOS
+      info "ensured zellij autostart in $rc"
       local owner
       owner="$(stat -c '%U' "$target_home" 2>/dev/null || echo "")"
       if [ -n "$owner" ] && [ "$owner" != "$(whoami)" ]; then

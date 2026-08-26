@@ -104,5 +104,83 @@ class SetupPersistenceTests(unittest.TestCase):
         self.assertIn('source $ZSH/oh-my-zsh.sh', SETUP)
 
 
+    def test_zsh_autocomplete_is_sourced_before_oh_my_zsh(self):
+        self.assertIn("skip_global_compinit=1", SETUP)
+        self.assertIn("zsh-autocomplete.plugin.zsh", SETUP)
+        self.assertIn("configure_overlord_zsh_files", SETUP)
+        self.assertIn("upsert_overlord_shell_block", SETUP)
+        first = SETUP.split('export ZSH="$HOME/.oh-my-zsh"', 1)[1]
+        bootstrap = first.split("source $ZSH/oh-my-zsh.sh", 1)[0]
+        self.assertIn("zsh-autocomplete.plugin.zsh", bootstrap)
+        self.assertNotIn(
+            "plugins=(git zsh-autosuggestions zsh-syntax-highlighting zsh-completions zsh-autocomplete)",
+            SETUP,
+        )
+
+    def test_zellij_autostart_execs_so_detach_closes_shell(self):
+        self.assertIn("exec zellij attach --create", SETUP)
+        self.assertNotIn("zellij attach --create 2>/dev/null || true", SETUP)
+
+    def test_overlord_zsh_rc_helpers_rewrite_existing_files(self):
+        start = SETUP.index("# Replace one Overlord-managed shell block")
+        end = SETUP.index("\n# --- zellij config + autostart on SSH")
+        helpers = SETUP[start:end]
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "home"
+            home.mkdir()
+            zshrc = home / ".zshrc"
+            zshrc.write_text(
+                """# path setup
+export PATH="$HOME/.local/bin:$PATH"
+
+# --- Overlord: oh-my-zsh ---
+export ZSH="$HOME/.oh-my-zsh"
+ZSH_THEME="robbyrussell"
+plugins=(git zsh-autosuggestions zsh-syntax-highlighting zsh-completions zsh-autocomplete)
+source $ZSH/oh-my-zsh.sh
+
+# --- Overlord: auto-start zellij on SSH ---
+if [ -z "${ZELLIJ:-}" ] && [ -t 1 ] && command -v zellij >/dev/null 2>&1; then
+  case $- in
+    *i*)
+      zellij attach --create 2>/dev/null || true
+      ;;
+  esac
+fi
+"""
+            )
+            script = f"""
+set -euo pipefail
+info() {{ :; }}
+warn() {{ :; }}
+{helpers}
+configure_overlord_zsh_files '{home}'
+upsert_overlord_shell_block '{zshrc}' 'Overlord: auto-start zellij' <<'EOS'
+# --- Overlord: auto-start zellij on SSH ---
+if [ -z "${{ZELLIJ:-}}" ] && [ -t 1 ] && command -v zellij >/dev/null 2>&1; then
+  case $- in
+    *i*)
+      exec zellij attach --create
+      ;;
+  esac
+fi
+EOS
+"""
+            completed = subprocess.run(["bash", "-c", script], text=True, capture_output=True)
+            self.assertEqual(completed.returncode, 0, completed.stderr + "\n" + completed.stdout)
+            zshenv = (home / ".zshenv").read_text()
+            new_rc = zshrc.read_text()
+            self.assertIn("skip_global_compinit=1", zshenv)
+            self.assertIn("zsh-autocomplete.plugin.zsh", new_rc)
+            self.assertLess(
+                new_rc.index("zsh-autocomplete.plugin.zsh"),
+                new_rc.index("source $ZSH/oh-my-zsh.sh"),
+            )
+            self.assertNotRegex(new_rc, r"^plugins=\(.*zsh-autocomplete")
+            self.assertIn("exec zellij attach --create", new_rc)
+            self.assertNotIn("zellij attach --create 2>/dev/null || true", new_rc)
+            self.assertLess(new_rc.index("export PATH="), new_rc.index("Overlord: oh-my-zsh"))
+
+
 if __name__ == "__main__":
     unittest.main()

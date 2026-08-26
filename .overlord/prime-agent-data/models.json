@@ -23,6 +23,7 @@
       },
       "models": [
         {
+          "baseUrl": "https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1",
           "contextWindow": 256000,
           "id": "gpt-5.6-sol",
           "limitTokens": 256000,
@@ -32,6 +33,7 @@
           "reasoning": true
         },
         {
+          "baseUrl": "https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1",
           "contextWindow": 256000,
           "id": "grok-4.6",
           "limitTokens": 256000,

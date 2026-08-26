@@ -1245,6 +1245,7 @@ except Exception as e:
     print(f"could not patch {path}: {e}", file=sys.stderr)
     sys.exit(0)
 changed=False
+AZURE_BASEURL="https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1"
 defaults=data.setdefault("defaults",{})
 for k in ("contextWindow","maxInputTokens","limitTokens"):
     if defaults.get(k)!=256000:
@@ -1256,8 +1257,8 @@ if defaults.get("reasoning") is not True:
 providers=data.setdefault("providers",{})
 desired_explicit={
     "azure-openai-responses": [
-        {"id": "gpt-5.6-sol", "name": "GPT-5.6 Sol (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True},
-        {"id": "grok-4.6", "name": "Grok 4.6 (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True},
+        {"id": "gpt-5.6-sol", "name": "GPT-5.6 Sol (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "baseUrl": AZURE_BASEURL},
+        {"id": "grok-4.6", "name": "Grok 4.6 (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "baseUrl": AZURE_BASEURL},
     ],
     "google-vertex": [
         {"id": "gemini-3.7-flash", "name": "Gemini 3.7 Flash (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "input": ["text", "image"]},
@@ -1407,11 +1408,15 @@ if "opencode" in providers:
 for p in ["google-vertex", "opencode", "opencode-go", "openrouter", "azure-openai-responses"]:
     providers.setdefault(p, {})
 
+# Azure custom models need an explicit baseUrl: prime-agent silently drops custom models
+# whose baseUrl resolves falsy (built-in azure models have baseUrl ""). The env vars
+# AZURE_OPENAI_BASE_URL / AZURE_OPENAI_RESOURCE_NAME override this placeholder at request time.
+AZURE_BASEURL = "https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1"
 # Build final output with defaults 256k and explicit custom models (ensures Grok 4.6 is always present on Azure)
 custom_explicit = {
     "azure-openai-responses": [
-        {"id": "gpt-5.6-sol", "name": "GPT-5.6 Sol (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True},
-        {"id": "grok-4.6", "name": "Grok 4.6 (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True},
+        {"id": "gpt-5.6-sol", "name": "GPT-5.6 Sol (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "baseUrl": AZURE_BASEURL},
+        {"id": "grok-4.6", "name": "Grok 4.6 (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "baseUrl": AZURE_BASEURL},
     ],
     "google-vertex": [
         {"id": "gemini-3.7-flash", "name": "Gemini 3.7 Flash (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "input": ["text", "image"]},

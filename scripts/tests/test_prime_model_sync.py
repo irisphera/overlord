@@ -17,8 +17,8 @@ def _valid_models_json():
                 "modelOverrides": {"*": {"contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "reasoning": True},
                                    "grok-4.6": {"contextWindow": 256000}, "gpt-5.6-sol": {"contextWindow": 256000}},
                 "models": [
-                    {"id": "gpt-5.6-sol", "name": "GPT-5.6 Sol (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True},
-                    {"id": "grok-4.6", "name": "Grok 4.6 (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True},
+                    {"id": "gpt-5.6-sol", "name": "GPT-5.6 Sol (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "baseUrl": "https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1"},
+                    {"id": "grok-4.6", "name": "Grok 4.6 (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "baseUrl": "https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1"},
                 ]
             },
             "google-vertex": {
@@ -138,6 +138,9 @@ class PrimeModelSyncTests(unittest.TestCase):
             self.assertNotIn("x-preview-f-free", json.dumps(data))
             self.assertNotIn("gpt-5.6-luna", json.dumps(data))
             self.assertNotIn("muse-spark", json.dumps(data["providers"]["opencode"]))
+            # Custom azure models must carry a baseUrl (else prime-agent drops them)
+            for m in data["providers"]["azure-openai-responses"]["models"]:
+                self.assertTrue(m.get("baseUrl"))
 
 if __name__ == "__main__":
     unittest.main()

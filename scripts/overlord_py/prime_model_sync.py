@@ -44,10 +44,14 @@ def _ensure_correct_models(path: Path) -> bool:
     providers = data.setdefault("providers", {})
 
     # Desired explicit models (must be present)
+    # Azure custom models need an explicit baseUrl: prime-agent silently drops custom
+    # models whose baseUrl resolves falsy (built-in azure models have baseUrl "").
+    # AZURE_OPENAI_BASE_URL / AZURE_OPENAI_RESOURCE_NAME env vars override it at request time.
+    azure_baseurl = "https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1"
     desired_explicit = {
         "azure-openai-responses": [
-            {"id": "gpt-5.6-sol", "name": "GPT-5.6 Sol (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True},
-            {"id": "grok-4.6", "name": "Grok 4.6 (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True},
+            {"id": "gpt-5.6-sol", "name": "GPT-5.6 Sol (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "baseUrl": azure_baseurl},
+            {"id": "grok-4.6", "name": "Grok 4.6 (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "baseUrl": azure_baseurl},
         ],
         "google-vertex": [
             {"id": "gemini-3.7-flash", "name": "Gemini 3.7 Flash (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "input": ["text", "image"]},
@@ -104,6 +108,9 @@ def _ensure_correct_models(path: Path) -> bool:
                             changed = True
                         if em.get("reasoning") is not True:
                             em["reasoning"] = True
+                            changed = True
+                        if prov == "azure-openai-responses" and not em.get("baseUrl"):
+                            em["baseUrl"] = m["baseUrl"]
                             changed = True
         # Filter models to only allowed (remove x-preview-f-free, gpt-5.6-luna, etc.)
         filtered = [m for m in existing_models if m.get("id") in allowed_ids]

@@ -40,7 +40,7 @@
           "maxInputTokens": 256000,
           "maxTokens": 16384,
           "name": "Grok 4.6 (256k)",
-          "reasoning": true
+          "reasoning": false
         }
       ]
     },

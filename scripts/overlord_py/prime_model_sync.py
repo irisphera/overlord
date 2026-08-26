@@ -51,7 +51,7 @@ def _ensure_correct_models(path: Path) -> bool:
     desired_explicit = {
         "azure-openai-responses": [
             {"id": "gpt-5.6-sol", "name": "GPT-5.6 Sol (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "baseUrl": azure_baseurl},
-            {"id": "grok-4.6", "name": "Grok 4.6 (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "baseUrl": azure_baseurl},
+            {"id": "grok-4.6", "name": "Grok 4.6 (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": False, "baseUrl": azure_baseurl},
         ],
         "google-vertex": [
             {"id": "gemini-3.7-flash", "name": "Gemini 3.7 Flash (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "input": ["text", "image"]},
@@ -106,8 +106,10 @@ def _ensure_correct_models(path: Path) -> bool:
                         if "256k" not in em.get("name", ""):
                             em["name"] = m["name"]
                             changed = True
-                        if em.get("reasoning") is not True:
-                            em["reasoning"] = True
+                        if em.get("reasoning") is not m.get("reasoning", False):
+                            # Azure grok-4.6 must be non-reasoning (reasoning.effort rejected);
+                            # other models keep reasoning: True.
+                            em["reasoning"] = m["reasoning"]
                             changed = True
                         if prov == "azure-openai-responses" and not em.get("baseUrl"):
                             em["baseUrl"] = m["baseUrl"]

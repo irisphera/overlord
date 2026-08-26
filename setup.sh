@@ -5,7 +5,7 @@ export DEBIAN_FRONTEND=noninteractive
 # setup.sh - Standalone VM + container initializer
 # Idempotent, non-interactive. Installs: zsh, oh-my-zsh, zsh-autosuggestions,
 # zsh-syntax-highlighting, zsh-completions, zellij, lazyvim (neovim + LazyVim starter),
-# codegraph (local code intelligence), prime-agent (272k contextWindow override).
+# codegraph (local code intelligence), prime-agent (256k contextWindow override).
 # Safe to run repeatedly via: bash setup.sh  or  ./setup.sh
 # Also used by the overlord container (as /workspace/setup-devcontainer.sh).
 
@@ -859,7 +859,7 @@ install_lazyvim
 
 # --- make zsh default shell (non-interactive) ---
 
-# --- prime-agent + models.json (272k contextWindow override for every model) ---
+# --- prime-agent + models.json (256k contextWindow override for every model) ---
 install_prime_agent() {
   if command -v prime-agent >/dev/null 2>&1; then
     local cur
@@ -1180,7 +1180,7 @@ SKILLEOF
 }
 
 configure_prime_agent_models() {
-  info "configuring Prime Agent models.json with 272k contextWindow override..."
+  info "configuring Prime Agent models.json with 256k contextWindow override..."
   # Determine agent dirs to configure
   local agent_dirs=()
   agent_dirs+=("$HOME/.prime/agent")
@@ -1272,10 +1272,11 @@ except Exception as e:
 if len(models) < 10:
     # fallback: at least ensure these core providers are covered; also use static list to guarantee coverage
     fallback = [
-        ("google-vertex", "gemini-1.5-flash"), ("google-vertex", "gemini-1.5-flash-8b"), ("google-vertex", "gemini-1.5-pro"),
+        ("google-vertex", "gemini-3.7-flash"), ("google-vertex", "gemini-1.5-flash"), ("google-vertex", "gemini-1.5-flash-8b"), ("google-vertex", "gemini-1.5-pro"),
         ("google-vertex", "gemini-2.0-flash"), ("google-vertex", "gemini-2.0-flash-lite"), ("google-vertex", "gemini-2.5-flash"),
-        ("opencode", "claude-opus-4-5"), ("opencode", "claude-sonnet-4"), ("opencode", "gpt-5"), ("opencode", "deepseek-v4-pro"),
-        ("opencode-go", "deepseek-v4-flash"), ("opencode-go", "muse-spark-1.2-contributor"),
+        ("opencode", "gpt-5.6-sol"), ("opencode", "claude-opus-4-5"), ("opencode", "claude-sonnet-4"), ("opencode", "gpt-5"), ("opencode", "deepseek-v4-pro"),
+        ("opencode-go", "muse-spark-1.2-contributor"), ("opencode-go", "muse-spark-1.2-contributor-free"), ("opencode-go", "muse-spark-1.2-free"),
+        ("azure-openai-responses", "grok-4.6"), ("azure-openai-responses", "gpt-5.6-sol"),
         ("openrouter", "anthropic/claude-opus-4.5"), ("openrouter", "openrouter/auto"),
     ]
     # merge without duplicates
@@ -1285,18 +1286,93 @@ if len(models) < 10:
             models.append(p)
             seen.add(p)
 
-# Build providers dict with modelOverrides -> contextWindow 272000
+# Ensure critical custom models are present even when discovery succeeded (fresh install must have Grok 4.6 on Azure)
+for prov_model in [("azure-openai-responses", "grok-4.6"), ("azure-openai-responses", "gpt-5.6-sol"), ("google-vertex", "gemini-3.7-flash"), ("opencode-go", "muse-spark-1.2-contributor"), ("opencode-go", "muse-spark-1.2-contributor-free"), ("opencode-go", "muse-spark-1.2-free"), ("opencode", "gpt-5.6-sol")]:
+    if prov_model not in models:
+        models.append(prov_model)
+
+# Build providers dict with modelOverrides -> contextWindow 256000
 for provider, model in models:
     if provider not in providers:
         providers[provider] = {}
-    providers[provider][model] = {"contextWindow": 272000}
+    providers[provider][model] = {"contextWindow": 256000}
+
+# Route Muse Spark to opencode-go only (not opencode) - config must be applied there
+if "opencode" in providers:
+    for key in list(providers["opencode"].keys()):
+        if "muse-spark" in key:
+            del providers["opencode"][key]
 
 # Also ensure we have at least these provider keys even if no models discovered for them yet
-for p in ["google-vertex", "opencode", "opencode-go", "openrouter"]:
+for p in ["google-vertex", "opencode", "opencode-go", "openrouter", "azure-openai-responses"]:
     providers.setdefault(p, {})
 
-output = {"providers": {prov: {"modelOverrides": overrides} for prov, overrides in providers.items() if overrides}}
-# Also handle empty provider case: ensure each core provider has at least an empty dict if needed? Already done.
+# Build final output with defaults 256k and explicit custom models (ensures Grok 4.6 is always present on Azure)
+custom_explicit = {
+    "azure-openai-responses": [
+        {"id": "gpt-5.6-sol", "name": "GPT-5.6 Sol (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True},
+        {"id": "grok-4.6", "name": "Grok 4.6 (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True},
+    ],
+    "google-vertex": [
+        {"id": "gemini-3.7-flash", "name": "Gemini 3.7 Flash (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "input": ["text", "image"]},
+    ],
+    "opencode": [
+        {"id": "gpt-5.6-sol", "name": "GPT-5.6 Sol (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True},
+    ],
+    "opencode-go": [
+        {"id": "muse-spark-1.2-contributor", "name": "Muse Spark 1.2 Contributor (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True},
+        {"id": "muse-spark-1.2-contributor-free", "name": "Muse Spark 1.2 Contributor Free (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True},
+        {"id": "muse-spark-1.2-free", "name": "Muse Spark 1.2 Free (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True},
+    ],
+}
+
+# Ensure every provider has a wildcard 256k override and the custom models are present
+for prov in list(providers.keys()):
+    overrides = providers[prov]
+    # add wildcard
+    overrides["*"] = {"contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "reasoning": True}
+# Ensure providers for custom explicit exist even if not in discovered list
+for prov in custom_explicit:
+    providers.setdefault(prov, {})
+    providers[prov]["*"] = {"contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "reasoning": True}
+    for m in custom_explicit[prov]:
+        providers[prov].setdefault(m["id"], {"contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "reasoning": True})
+        # also ensure the explicit model override points to 256k (already)
+
+# Filter to only allowed models (user requested: keep only Muse Spark, Gemini 3.7 Flash, GPT-5.6 Sol, Grok 4.6 plus Free aliases)
+# This ensures fresh installs match the committed config
+allowed_ids = {"gpt-5.6-sol", "grok-4.6", "gemini-3.7-flash", "muse-spark-1.2-contributor", "muse-spark-1.2-contributor-free", "muse-spark-1.2-free"}
+for prov in list(providers.keys()):
+    # keep only wildcard and allowed ids
+    filtered = {}
+    for k, v in providers[prov].items():
+        if k == "*" or k in allowed_ids:
+            filtered[k] = v
+    providers[prov] = filtered
+# Remove providers that have no allowed models left (except wildcard is kept only if provider has allowed models)
+for prov in list(providers.keys()):
+    # if after filtering only wildcard remains but provider has no explicit custom models, keep wildcard if provider is in custom_explicit else drop
+    has_allowed = any(k in allowed_ids for k in providers[prov].keys())
+    if not has_allowed and prov not in custom_explicit:
+        del providers[prov]
+    # also prune wildcard if provider was kept but had no allowed - already handled
+
+output = {
+    "defaults": {"contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "reasoning": True},
+    "providers": {}
+}
+for prov, overrides in providers.items():
+    if not overrides:
+        continue
+    entry = {"modelOverrides": overrides}
+    if prov in custom_explicit:
+        # filter models to allowed - but custom_explicit already only contains allowed
+        entry["models"] = custom_explicit[prov]
+        # prune models list to only allowed (already)
+    # For providers without explicit custom list but with overrides, keep just overrides at 256k
+    output["providers"][prov] = entry
+
+# Ensure empty providers still have wildcard if needed (already handled)
 
 with open(tmp_path, "w") as f:
     json.dump(output, f, indent=2, sort_keys=True)

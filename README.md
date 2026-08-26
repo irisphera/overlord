@@ -47,7 +47,7 @@ bash setup.sh
 curl -fsSL https://raw.githubusercontent.com/irisphera/overlord/main/setup.sh | bash
 ```
 
-It installs (if missing): `zsh`, `oh-my-zsh` and plugins, `zellij`, `neovim` + **LazyVim**, nvm + **Node.js 24**, `uv`, AWS CLI v2, **codegraph** `1.5.0`, and **prime-agent** `0.8.0` with a `272k` context override. It also installs shared Pi/Prime skills and configures Prime Agent's bundled web search plus the public Context7 MCP server. Web search needs a one-time Serper credential through `/login`; Context7 needs no login.
+It installs (if missing): `zsh`, `oh-my-zsh` and plugins, `zellij`, `neovim` + **LazyVim**, nvm + **Node.js 24**, `uv`, AWS CLI v2, **codegraph** `1.5.0`, and **prime-agent** `0.8.0` with a `256k` context override. It also installs shared Pi/Prime skills and configures Prime Agent's bundled web search plus the public Context7 MCP server. Web search needs a one-time Serper credential through `/login`; Context7 needs no login.
 
 ### AWS sudo password fix
 

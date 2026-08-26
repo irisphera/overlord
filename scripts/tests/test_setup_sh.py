@@ -25,7 +25,7 @@ class SetupShTests(unittest.TestCase):
         # ensure prime-agent models.json generation is present
         self.assertIn("prime-agent", content.lower())
         self.assertIn("models.json", content)
-        self.assertIn("272000", content)
+        self.assertIn("256000", content)
         # Bind mounts can expose the persisted file through multiple path names.
         # The copy guard must compare file identity, not path text, to avoid cp
         # rejecting a copy of models.json onto itself.

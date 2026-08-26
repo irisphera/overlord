@@ -1,8 +1,8 @@
 {
   "defaults": {
     "contextWindow": 256000,
-    "maxInputTokens": 256000,
     "limitTokens": 256000,
+    "maxInputTokens": 256000,
     "reasoning": true
   },
   "providers": {
@@ -10,28 +10,34 @@
       "modelOverrides": {
         "*": {
           "contextWindow": 256000,
-          "maxInputTokens": 256000,
           "limitTokens": 256000,
+          "maxInputTokens": 256000,
           "reasoning": true
+        },
+        "gpt-5.6-sol": {
+          "contextWindow": 256000
+        },
+        "grok-4.6": {
+          "contextWindow": 256000
         }
       },
       "models": [
         {
-          "id": "gpt-5.6-sol",
-          "name": "GPT-5.6 Sol (256k)",
           "contextWindow": 256000,
-          "maxInputTokens": 256000,
+          "id": "gpt-5.6-sol",
           "limitTokens": 256000,
+          "maxInputTokens": 256000,
           "maxTokens": 16384,
+          "name": "GPT-5.6 Sol (256k)",
           "reasoning": true
         },
         {
-          "id": "grok-4.6",
-          "name": "Grok 4.6 (256k)",
           "contextWindow": 256000,
-          "maxInputTokens": 256000,
+          "id": "grok-4.6",
           "limitTokens": 256000,
+          "maxInputTokens": 256000,
           "maxTokens": 16384,
+          "name": "Grok 4.6 (256k)",
           "reasoning": true
         }
       ]
@@ -40,24 +46,27 @@
       "modelOverrides": {
         "*": {
           "contextWindow": 256000,
-          "maxInputTokens": 256000,
           "limitTokens": 256000,
+          "maxInputTokens": 256000,
           "reasoning": true
+        },
+        "gemini-3.7-flash": {
+          "contextWindow": 256000
         }
       },
       "models": [
         {
-          "id": "gemini-3.7-flash",
-          "name": "Gemini 3.7 Flash (256k)",
           "contextWindow": 256000,
-          "maxInputTokens": 256000,
-          "limitTokens": 256000,
-          "maxTokens": 16384,
-          "reasoning": true,
+          "id": "gemini-3.7-flash",
           "input": [
             "text",
             "image"
-          ]
+          ],
+          "limitTokens": 256000,
+          "maxInputTokens": 256000,
+          "maxTokens": 16384,
+          "name": "Gemini 3.7 Flash (256k)",
+          "reasoning": true
         }
       ]
     },
@@ -65,19 +74,22 @@
       "modelOverrides": {
         "*": {
           "contextWindow": 256000,
-          "maxInputTokens": 256000,
           "limitTokens": 256000,
+          "maxInputTokens": 256000,
           "reasoning": true
+        },
+        "gpt-5.6-sol": {
+          "contextWindow": 256000
         }
       },
       "models": [
         {
-          "id": "gpt-5.6-sol",
-          "name": "GPT-5.6 Sol (256k)",
           "contextWindow": 256000,
-          "maxInputTokens": 256000,
+          "id": "gpt-5.6-sol",
           "limitTokens": 256000,
+          "maxInputTokens": 256000,
           "maxTokens": 16384,
+          "name": "GPT-5.6 Sol (256k)",
           "reasoning": true
         }
       ]
@@ -86,37 +98,46 @@
       "modelOverrides": {
         "*": {
           "contextWindow": 256000,
-          "maxInputTokens": 256000,
           "limitTokens": 256000,
+          "maxInputTokens": 256000,
           "reasoning": true
+        },
+        "muse-spark-1.2-contributor": {
+          "contextWindow": 256000
+        },
+        "muse-spark-1.2-contributor-free": {
+          "contextWindow": 256000
+        },
+        "muse-spark-1.2-free": {
+          "contextWindow": 256000
         }
       },
       "models": [
         {
+          "contextWindow": 256000,
           "id": "muse-spark-1.2-contributor",
+          "limitTokens": 256000,
+          "maxInputTokens": 256000,
+          "maxTokens": 16384,
           "name": "Muse Spark 1.2 Contributor (256k)",
-          "contextWindow": 256000,
-          "maxInputTokens": 256000,
-          "limitTokens": 256000,
-          "maxTokens": 16384,
           "reasoning": true
         },
         {
+          "contextWindow": 256000,
           "id": "muse-spark-1.2-contributor-free",
-          "name": "Muse Spark 1.2 Contributor Free (256k)",
-          "contextWindow": 256000,
-          "maxInputTokens": 256000,
           "limitTokens": 256000,
+          "maxInputTokens": 256000,
           "maxTokens": 16384,
+          "name": "Muse Spark 1.2 Contributor Free (256k)",
           "reasoning": true
         },
         {
-          "id": "muse-spark-1.2-free",
-          "name": "Muse Spark 1.2 Free (256k)",
           "contextWindow": 256000,
-          "maxInputTokens": 256000,
+          "id": "muse-spark-1.2-free",
           "limitTokens": 256000,
+          "maxInputTokens": 256000,
           "maxTokens": 16384,
+          "name": "Muse Spark 1.2 Free (256k)",
           "reasoning": true
         }
       ]

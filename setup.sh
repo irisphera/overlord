@@ -1234,6 +1234,106 @@ configure_prime_agent_models() {
   fi
   if [ -n "$existing_models_json" ]; then
     info "reusing existing models.json: $existing_models_json"
+    # Patch existing file to ensure 256k and Grok 4.6 on Azure (handles old 272k workspaces)
+    python3 - "$existing_models_json" <<'PYEOF_PATCH'
+import json, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+try:
+    data = json.loads(path.read_text())
+except Exception as e:
+    print(f"could not patch {path}: {e}", file=sys.stderr)
+    sys.exit(0)
+changed=False
+defaults=data.setdefault("defaults",{})
+for k in ("contextWindow","maxInputTokens","limitTokens"):
+    if defaults.get(k)!=256000:
+        defaults[k]=256000
+        changed=True
+if defaults.get("reasoning") is not True:
+    defaults["reasoning"]=True
+    changed=True
+providers=data.setdefault("providers",{})
+desired_explicit={
+    "azure-openai-responses": [
+        {"id": "gpt-5.6-sol", "name": "GPT-5.6 Sol (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True},
+        {"id": "grok-4.6", "name": "Grok 4.6 (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True},
+    ],
+    "google-vertex": [
+        {"id": "gemini-3.7-flash", "name": "Gemini 3.7 Flash (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "input": ["text", "image"]},
+    ],
+    "opencode": [
+        {"id": "gpt-5.6-sol", "name": "GPT-5.6 Sol (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True},
+    ],
+    "opencode-go": [
+        {"id": "muse-spark-1.2-contributor", "name": "Muse Spark 1.2 Contributor (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True},
+        {"id": "muse-spark-1.2-contributor-free", "name": "Muse Spark 1.2 Contributor Free (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True},
+        {"id": "muse-spark-1.2-free", "name": "Muse Spark 1.2 Free (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True},
+    ],
+}
+allowed_ids={"gpt-5.6-sol","grok-4.6","gemini-3.7-flash","muse-spark-1.2-contributor","muse-spark-1.2-contributor-free","muse-spark-1.2-free"}
+for prov, explicit_models in desired_explicit.items():
+    prov_cfg=providers.setdefault(prov,{})
+    overrides=prov_cfg.setdefault("modelOverrides",{})
+    wildcard={"contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "reasoning": True}
+    if overrides.get("*")!=wildcard:
+        overrides["*"]=wildcard
+        changed=True
+    for m in explicit_models:
+        mid=m["id"]
+        if mid not in overrides or overrides[mid].get("contextWindow")!=256000:
+            overrides[mid]={"contextWindow": 256000}
+            changed=True
+    existing_models=prov_cfg.get("models",[])
+    existing_ids={mm.get("id") for mm in existing_models}
+    for m in explicit_models:
+        if m["id"] not in existing_ids:
+            existing_models.append(m)
+            changed=True
+        else:
+            for em in existing_models:
+                if em.get("id")==m["id"]:
+                    for kk in ("contextWindow","maxInputTokens","limitTokens"):
+                        if em.get(kk)!=256000:
+                            em[kk]=256000
+                            changed=True
+                    if "256k" not in em.get("name",""):
+                        em["name"]=m["name"]
+                        changed=True
+    prov_cfg["models"]=[mm for mm in existing_models if mm.get("id") in allowed_ids]
+    # filter overrides
+    prov_cfg["modelOverrides"]={k:v for k,v in overrides.items() if k=="*" or k in allowed_ids}
+    if len(prov_cfg["modelOverrides"])!=len(overrides):
+        changed=True
+# Remove x-preview, luna, etc. and providers without allowed
+for prov in list(providers.keys()):
+    if prov not in desired_explicit:
+        has_allowed=any(k in allowed_ids for k in providers[prov].get("modelOverrides",{}).keys())
+        if not has_allowed:
+            del providers[prov]
+            changed=True
+    if prov=="opencode":
+        for k in list(providers[prov].get("modelOverrides",{}).keys()):
+            if "muse-spark" in k:
+                del providers[prov]["modelOverrides"][k]
+                changed=True
+        for mm in list(providers[prov].get("models",[])):
+            if "muse-spark" in mm.get("id",""):
+                providers[prov]["models"].remove(mm)
+                changed=True
+# Clean empty providers
+for prov in list(providers.keys()):
+    if not providers[prov].get("modelOverrides") and not providers[prov].get("models"):
+        del providers[prov]
+        changed=True
+# Ensure defaults present
+if "defaults" not in data:
+    data["defaults"]={"contextWindow":256000,"maxInputTokens":256000,"limitTokens":256000,"reasoning":True}
+    changed=True
+if changed:
+    path.write_text(json.dumps(data, indent=2, sort_keys=True)+"\n")
+    print(f"patched {path} to 256k/Grok", file=sys.stderr)
+PYEOF_PATCH
   fi
   local tmp_json
   tmp_json="$(mktemp)"

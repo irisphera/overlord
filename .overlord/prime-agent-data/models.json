@@ -14,6 +14,12 @@
           "maxInputTokens": 256000,
           "reasoning": true
         },
+        "gpt-5.6-luna": {
+          "contextWindow": 256000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
+        },
         "gpt-5.6-sol": {
           "contextWindow": 256000
         },
@@ -31,6 +37,19 @@
           "maxTokens": 16384,
           "name": "GPT-5.6 Sol (256k)",
           "reasoning": true
+        },
+        {
+          "baseUrl": "https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1",
+          "contextWindow": 256000,
+          "id": "gpt-5.6-luna",
+          "limitTokens": 256000,
+          "maxInputTokens": 256000,
+          "maxTokens": 16384,
+          "name": "GPT-5.6 Luna (256k)",
+          "reasoning": true,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
         },
         {
           "baseUrl": "https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1",
@@ -80,6 +99,12 @@
           "maxInputTokens": 256000,
           "reasoning": true
         },
+        "gpt-5.6-luna": {
+          "contextWindow": 256000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
+        },
         "gpt-5.6-sol": {
           "contextWindow": 256000
         }
@@ -93,6 +118,18 @@
           "maxTokens": 16384,
           "name": "GPT-5.6 Sol (256k)",
           "reasoning": true
+        },
+        {
+          "contextWindow": 256000,
+          "id": "gpt-5.6-luna",
+          "limitTokens": 256000,
+          "maxInputTokens": 256000,
+          "maxTokens": 16384,
+          "name": "GPT-5.6 Luna (256k)",
+          "reasoning": true,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
         }
       ]
     },
@@ -103,6 +140,12 @@
           "limitTokens": 256000,
           "maxInputTokens": 256000,
           "reasoning": true
+        },
+        "gpt-5.6-luna": {
+          "contextWindow": 256000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
         },
         "muse-spark-1.2-contributor": {
           "contextWindow": 256000
@@ -115,6 +158,18 @@
         }
       },
       "models": [
+        {
+          "contextWindow": 256000,
+          "id": "gpt-5.6-luna",
+          "limitTokens": 256000,
+          "maxInputTokens": 256000,
+          "maxTokens": 16384,
+          "name": "GPT-5.6 Luna (256k)",
+          "reasoning": true,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
+        },
         {
           "contextWindow": 256000,
           "id": "muse-spark-1.2-contributor",

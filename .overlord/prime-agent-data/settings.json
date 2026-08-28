@@ -2,6 +2,9 @@
   "bundledSkills": {
     "websearch": true
   },
+  "defaultModel": "grok-4.6",
+  "defaultProvider": "azure-openai-responses",
+  "defaultThinkingLevel": "high",
   "enableBuiltinSkills": true,
   "mcpServers": {
     "context7": {
@@ -15,16 +18,15 @@
       "url": "https://docs.runpod.io/mcp"
     }
   },
+  "onboardingShown": true,
+  "recentModels": [
+    "azure-openai-responses/grok-4.6",
+    "opencode-go/glm-5.3",
+    "opencode/gpt-5.6-sol",
+    "opencode/muse-spark-1.2-contributor-free",
+    "opencode-go/muse-spark-1.2-contributor"
+  ],
   "telemetry": {
     "noticeShown": true
-  },
-  "onboardingShown": true,
-  "defaultProvider": "opencode-go",
-  "defaultModel": "muse-spark-1.2-contributor",
-  "recentModels": [
-    "opencode-go/muse-spark-1.2-contributor",
-    "opencode-go/muse-spark-1.2-contributor-free",
-    "opencode-go/muse-spark-1.2-free"
-  ],
-  "defaultThinkingLevel": "high"
+  }
 }

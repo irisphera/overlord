@@ -26,6 +26,10 @@ class SetupShTests(unittest.TestCase):
         self.assertIn("prime-agent", content.lower())
         self.assertIn("models.json", content)
         self.assertIn("256000", content)
+        self.assertIn('gpt-5.6-luna', content)
+        self.assertIn('GPT-5.6 Luna (256k)', content)
+        self.assertIn('thinkingLevelMap', content)
+        self.assertIn('"max": "max"', content)
         # Bind mounts can expose the persisted file through multiple path names.
         # The copy guard must compare file identity, not path text, to avoid cp
         # rejecting a copy of models.json onto itself.

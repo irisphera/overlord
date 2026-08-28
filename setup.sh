@@ -1105,7 +1105,7 @@ install_prime_agent_skills() {
   fi
   info "installing shared skills for the Pi-based Prime Agent..."
   local skill_source
-  for skill_source in mattpocock/skills aws/agent-toolkit-for-aws; do
+  for skill_source in mattpocock/skills aws/agent-toolkit-for-aws cursor/plugins; do
     if npx --yes skills add "$skill_source" --global --agent pi --yes --copy --full-depth \
       2>&1 | sed "s|^|[skills:$skill_source] |"; then
       info "installed skills from $skill_source"
@@ -1401,6 +1401,7 @@ providers=data.setdefault("providers",{})
 desired_explicit={
     "azure-openai-responses": [
         {"id": "gpt-5.6-sol", "name": "GPT-5.6 Sol (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "baseUrl": AZURE_BASEURL},
+        {"id": "gpt-5.6-luna", "name": "GPT-5.6 Luna (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "thinkingLevelMap": {"max": "max"}, "baseUrl": AZURE_BASEURL},
         {"id": "grok-4.6", "name": "Grok 4.6 (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": False, "baseUrl": AZURE_BASEURL},
     ],
     "google-vertex": [
@@ -1408,14 +1409,16 @@ desired_explicit={
     ],
     "opencode": [
         {"id": "gpt-5.6-sol", "name": "GPT-5.6 Sol (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True},
+        {"id": "gpt-5.6-luna", "name": "GPT-5.6 Luna (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "thinkingLevelMap": {"max": "max"}},
     ],
     "opencode-go": [
+        {"id": "gpt-5.6-luna", "name": "GPT-5.6 Luna (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "thinkingLevelMap": {"max": "max"}},
         {"id": "muse-spark-1.2-contributor", "name": "Muse Spark 1.2 Contributor (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True},
         {"id": "muse-spark-1.2-contributor-free", "name": "Muse Spark 1.2 Contributor Free (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True},
         {"id": "muse-spark-1.2-free", "name": "Muse Spark 1.2 Free (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True},
     ],
 }
-allowed_ids={"gpt-5.6-sol","grok-4.6","gemini-3.7-flash","muse-spark-1.2-contributor","muse-spark-1.2-contributor-free","muse-spark-1.2-free"}
+allowed_ids={"gpt-5.6-sol","gpt-5.6-luna","grok-4.6","gemini-3.7-flash","muse-spark-1.2-contributor","muse-spark-1.2-contributor-free","muse-spark-1.2-free"}
 for prov, explicit_models in desired_explicit.items():
     prov_cfg=providers.setdefault(prov,{})
     overrides=prov_cfg.setdefault("modelOverrides",{})
@@ -1425,8 +1428,15 @@ for prov, explicit_models in desired_explicit.items():
         changed=True
     for m in explicit_models:
         mid=m["id"]
-        if mid not in overrides or overrides[mid].get("contextWindow")!=256000:
-            overrides[mid]={"contextWindow": 256000}
+        current_override=overrides.get(mid) or {}
+        current_thinking_map=current_override.get("thinkingLevelMap") or {}
+        needs_luna_thinking_map = mid=="gpt-5.6-luna" and current_thinking_map.get("max") != "max"
+        if current_override.get("contextWindow")!=256000 or needs_luna_thinking_map:
+            updated_override=dict(current_override)
+            updated_override["contextWindow"]=256000
+            if mid=="gpt-5.6-luna":
+                updated_override["thinkingLevelMap"]={**current_thinking_map, "max": "max"}
+            overrides[mid]=updated_override
             changed=True
     existing_models=prov_cfg.get("models",[])
     existing_ids={mm.get("id") for mm in existing_models}
@@ -1444,12 +1454,24 @@ for prov, explicit_models in desired_explicit.items():
                     if "256k" not in em.get("name",""):
                         em["name"]=m["name"]
                         changed=True
+                    if em.get("reasoning") is not m.get("reasoning", False):
+                        em["reasoning"]=m.get("reasoning", False)
+                        changed=True
+                    if m.get("thinkingLevelMap"):
+                        thinking_level_map=dict(em.get("thinkingLevelMap") or {})
+                        thinking_level_map.update(m["thinkingLevelMap"])
+                        if em.get("thinkingLevelMap") != thinking_level_map:
+                            em["thinkingLevelMap"]=thinking_level_map
+                            changed=True
+                    if prov=="azure-openai-responses" and not em.get("baseUrl"):
+                        em["baseUrl"]=m["baseUrl"]
+                        changed=True
     prov_cfg["models"]=[mm for mm in existing_models if mm.get("id") in allowed_ids]
     # filter overrides
     prov_cfg["modelOverrides"]={k:v for k,v in overrides.items() if k=="*" or k in allowed_ids}
     if len(prov_cfg["modelOverrides"])!=len(overrides):
         changed=True
-# Remove x-preview, luna, etc. and providers without allowed
+# Remove x-preview and other unapproved models/providers
 for prov in list(providers.keys()):
     if prov not in desired_explicit:
         has_allowed=any(k in allowed_ids for k in providers[prov].get("modelOverrides",{}).keys())
@@ -1518,9 +1540,9 @@ if len(models) < 10:
     fallback = [
         ("google-vertex", "gemini-3.7-flash"), ("google-vertex", "gemini-1.5-flash"), ("google-vertex", "gemini-1.5-flash-8b"), ("google-vertex", "gemini-1.5-pro"),
         ("google-vertex", "gemini-2.0-flash"), ("google-vertex", "gemini-2.0-flash-lite"), ("google-vertex", "gemini-2.5-flash"),
-        ("opencode", "gpt-5.6-sol"), ("opencode", "claude-opus-4-5"), ("opencode", "claude-sonnet-4"), ("opencode", "gpt-5"), ("opencode", "deepseek-v4-pro"),
-        ("opencode-go", "muse-spark-1.2-contributor"), ("opencode-go", "muse-spark-1.2-contributor-free"), ("opencode-go", "muse-spark-1.2-free"),
-        ("azure-openai-responses", "grok-4.6"), ("azure-openai-responses", "gpt-5.6-sol"),
+        ("opencode", "gpt-5.6-sol"), ("opencode", "gpt-5.6-luna"), ("opencode", "claude-opus-4-5"), ("opencode", "claude-sonnet-4"), ("opencode", "gpt-5"), ("opencode", "deepseek-v4-pro"),
+        ("opencode-go", "gpt-5.6-luna"), ("opencode-go", "muse-spark-1.2-contributor"), ("opencode-go", "muse-spark-1.2-contributor-free"), ("opencode-go", "muse-spark-1.2-free"),
+        ("azure-openai-responses", "grok-4.6"), ("azure-openai-responses", "gpt-5.6-sol"), ("azure-openai-responses", "gpt-5.6-luna"),
         ("openrouter", "anthropic/claude-opus-4.5"), ("openrouter", "openrouter/auto"),
     ]
     # merge without duplicates
@@ -1530,8 +1552,8 @@ if len(models) < 10:
             models.append(p)
             seen.add(p)
 
-# Ensure critical custom models are present even when discovery succeeded (fresh install must have Grok 4.6 on Azure)
-for prov_model in [("azure-openai-responses", "grok-4.6"), ("azure-openai-responses", "gpt-5.6-sol"), ("google-vertex", "gemini-3.7-flash"), ("opencode-go", "muse-spark-1.2-contributor"), ("opencode-go", "muse-spark-1.2-contributor-free"), ("opencode-go", "muse-spark-1.2-free"), ("opencode", "gpt-5.6-sol")]:
+# Ensure critical custom models are present even when discovery succeeded (fresh install must have Grok 4.6 and GPT-5.6 Luna on the configured providers)
+for prov_model in [("azure-openai-responses", "grok-4.6"), ("azure-openai-responses", "gpt-5.6-sol"), ("azure-openai-responses", "gpt-5.6-luna"), ("google-vertex", "gemini-3.7-flash"), ("opencode-go", "gpt-5.6-luna"), ("opencode-go", "muse-spark-1.2-contributor"), ("opencode-go", "muse-spark-1.2-contributor-free"), ("opencode-go", "muse-spark-1.2-free"), ("opencode", "gpt-5.6-sol"), ("opencode", "gpt-5.6-luna")]:
     if prov_model not in models:
         models.append(prov_model)
 
@@ -1559,6 +1581,7 @@ AZURE_BASEURL = "https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1"
 custom_explicit = {
     "azure-openai-responses": [
         {"id": "gpt-5.6-sol", "name": "GPT-5.6 Sol (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "baseUrl": AZURE_BASEURL},
+        {"id": "gpt-5.6-luna", "name": "GPT-5.6 Luna (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "thinkingLevelMap": {"max": "max"}, "baseUrl": AZURE_BASEURL},
         {"id": "grok-4.6", "name": "Grok 4.6 (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": False, "baseUrl": AZURE_BASEURL},
     ],
     "google-vertex": [
@@ -1566,8 +1589,10 @@ custom_explicit = {
     ],
     "opencode": [
         {"id": "gpt-5.6-sol", "name": "GPT-5.6 Sol (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True},
+        {"id": "gpt-5.6-luna", "name": "GPT-5.6 Luna (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "thinkingLevelMap": {"max": "max"}},
     ],
     "opencode-go": [
+        {"id": "gpt-5.6-luna", "name": "GPT-5.6 Luna (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "thinkingLevelMap": {"max": "max"}},
         {"id": "muse-spark-1.2-contributor", "name": "Muse Spark 1.2 Contributor (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True},
         {"id": "muse-spark-1.2-contributor-free", "name": "Muse Spark 1.2 Contributor Free (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True},
         {"id": "muse-spark-1.2-free", "name": "Muse Spark 1.2 Free (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True},
@@ -1584,12 +1609,14 @@ for prov in custom_explicit:
     providers.setdefault(prov, {})
     providers[prov]["*"] = {"contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "reasoning": True}
     for m in custom_explicit[prov]:
-        providers[prov].setdefault(m["id"], {"contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "reasoning": True})
+        model_override = providers[prov].setdefault(m["id"], {"contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "reasoning": True})
+        if m["id"] == "gpt-5.6-luna":
+            model_override["thinkingLevelMap"] = {**(model_override.get("thinkingLevelMap") or {}), "max": "max"}
         # also ensure the explicit model override points to 256k (already)
 
-# Filter to only allowed models (user requested: keep only Muse Spark, Gemini 3.7 Flash, GPT-5.6 Sol, Grok 4.6 plus Free aliases)
+# Filter to only allowed models (Muse Spark aliases, Gemini 3.7 Flash, GPT-5.6 Sol/Luna, and Grok 4.6)
 # This ensures fresh installs match the committed config
-allowed_ids = {"gpt-5.6-sol", "grok-4.6", "gemini-3.7-flash", "muse-spark-1.2-contributor", "muse-spark-1.2-contributor-free", "muse-spark-1.2-free"}
+allowed_ids = {"gpt-5.6-sol", "gpt-5.6-luna", "grok-4.6", "gemini-3.7-flash", "muse-spark-1.2-contributor", "muse-spark-1.2-contributor-free", "muse-spark-1.2-free"}
 for prov in list(providers.keys()):
     # keep only wildcard and allowed ids
     filtered = {}

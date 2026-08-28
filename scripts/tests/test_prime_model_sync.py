@@ -15,9 +15,10 @@ def _valid_models_json():
         "providers": {
             "azure-openai-responses": {
                 "modelOverrides": {"*": {"contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "reasoning": True},
-                                   "grok-4.6": {"contextWindow": 256000}, "gpt-5.6-sol": {"contextWindow": 256000}},
+                                   "gpt-5.6-luna": {"contextWindow": 256000, "thinkingLevelMap": {"max": "max"}}, "gpt-5.6-sol": {"contextWindow": 256000}, "grok-4.6": {"contextWindow": 256000}},
                 "models": [
                     {"id": "gpt-5.6-sol", "name": "GPT-5.6 Sol (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "baseUrl": "https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1"},
+                    {"id": "gpt-5.6-luna", "name": "GPT-5.6 Luna (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "thinkingLevelMap": {"max": "max"}, "baseUrl": "https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1"},
                     {"id": "grok-4.6", "name": "Grok 4.6 (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": False, "baseUrl": "https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1"},
                 ]
             },
@@ -28,14 +29,16 @@ def _valid_models_json():
                 ]
             },
             "opencode": {
-                "modelOverrides": {"*": {"contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "reasoning": True}, "gpt-5.6-sol": {"contextWindow": 256000}},
+                "modelOverrides": {"*": {"contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "reasoning": True}, "gpt-5.6-luna": {"contextWindow": 256000, "thinkingLevelMap": {"max": "max"}}, "gpt-5.6-sol": {"contextWindow": 256000}},
                 "models": [
                     {"id": "gpt-5.6-sol", "name": "GPT-5.6 Sol (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True},
+                    {"id": "gpt-5.6-luna", "name": "GPT-5.6 Luna (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "thinkingLevelMap": {"max": "max"}},
                 ]
             },
             "opencode-go": {
-                "modelOverrides": {"*": {"contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "reasoning": True}, "muse-spark-1.2-contributor": {"contextWindow": 256000}, "muse-spark-1.2-contributor-free": {"contextWindow": 256000}, "muse-spark-1.2-free": {"contextWindow": 256000}},
+                "modelOverrides": {"*": {"contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "reasoning": True}, "gpt-5.6-luna": {"contextWindow": 256000, "thinkingLevelMap": {"max": "max"}}, "muse-spark-1.2-contributor": {"contextWindow": 256000}, "muse-spark-1.2-contributor-free": {"contextWindow": 256000}, "muse-spark-1.2-free": {"contextWindow": 256000}},
                 "models": [
+                    {"id": "gpt-5.6-luna", "name": "GPT-5.6 Luna (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "thinkingLevelMap": {"max": "max"}},
                     {"id": "muse-spark-1.2-contributor", "name": "Muse Spark 1.2 Contributor (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True},
                     {"id": "muse-spark-1.2-contributor-free", "name": "Muse Spark 1.2 Contributor Free (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True},
                     {"id": "muse-spark-1.2-free", "name": "Muse Spark 1.2 Free (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True},
@@ -92,7 +95,7 @@ class PrimeModelSyncTests(unittest.TestCase):
             self.assertTrue(result.copied)
             self.assertEqual((target / "models.json").read_text(), "new")
 
-    def test_patches_old_272k_file_to_256k_and_adds_grok(self):
+    def test_patches_old_272k_file_to_256k_and_adds_grok_and_luna(self):
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp) / "home"
             target = Path(tmp) / "state" / "prime-agent-data"
@@ -129,14 +132,31 @@ class PrimeModelSyncTests(unittest.TestCase):
             az_models = [m["id"] for m in data["providers"]["azure-openai-responses"].get("models", [])]
             self.assertIn("grok-4.6", az_models)
             self.assertIn("gpt-5.6-sol", az_models)
+            self.assertIn("gpt-5.6-luna", az_models)
             # Must be 256k
             self.assertEqual(data["defaults"]["contextWindow"], 256000)
             for prov in data["providers"].values():
                 for m in prov.get("models", []):
                     self.assertEqual(m["contextWindow"], 256000)
-            # Must not have x-preview or luna, and muse-spark not in opencode
+                    if m.get("id") == "gpt-5.6-luna":
+                        self.assertEqual(m.get("thinkingLevelMap", {}).get("max"), "max")
+            # Must remove x-preview, retain Luna at 256k/max thinking, and keep Muse Spark out of opencode
             self.assertNotIn("x-preview-f-free", json.dumps(data))
-            self.assertNotIn("gpt-5.6-luna", json.dumps(data))
+            self.assertIn("gpt-5.6-luna", json.dumps(data))
+            luna_overrides = [
+                provider["modelOverrides"]["gpt-5.6-luna"]["contextWindow"]
+                for provider in data["providers"].values()
+                if "gpt-5.6-luna" in provider.get("modelOverrides", {})
+            ]
+            self.assertTrue(luna_overrides)
+            self.assertTrue(all(context == 256000 for context in luna_overrides))
+            luna_thinking_maps = [
+                provider["modelOverrides"]["gpt-5.6-luna"]["thinkingLevelMap"]
+                for provider in data["providers"].values()
+                if "gpt-5.6-luna" in provider.get("modelOverrides", {})
+            ]
+            self.assertTrue(luna_thinking_maps)
+            self.assertTrue(all(mapping.get("max") == "max" for mapping in luna_thinking_maps))
             self.assertNotIn("muse-spark", json.dumps(data["providers"]["opencode"]))
             # Custom azure models must carry a baseUrl (else prime-agent drops them)
             for m in data["providers"]["azure-openai-responses"]["models"]:

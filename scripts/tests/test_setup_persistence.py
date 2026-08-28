@@ -40,6 +40,7 @@ class SetupPersistenceTests(unittest.TestCase):
         self.assertIn("install_prime_agent_skills", SETUP)
         self.assertIn("mattpocock/skills", SETUP)
         self.assertIn("aws/agent-toolkit-for-aws", SETUP)
+        self.assertIn("cursor/plugins", SETUP)
         self.assertIn("--global --agent pi --yes --copy --full-depth", SETUP)
         self.assertIn("aws-agent-toolkit-setup", SETUP)
         calls = SETUP.rsplit("install_prime_agent\n", 1)[1]

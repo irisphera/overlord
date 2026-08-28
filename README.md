@@ -5,7 +5,7 @@ Minimal per-workspace dev container launcher + standalone VM setup.
 - **Container**: `overlord` creates a persistent container per workspace and runs `setup.sh` inside.
 - **VM direct**: `bash setup.sh` sets up the current machine (AWS-friendly, non-interactive, fixes sudo password prompts).
 
-Clean dev environment without extra agents. Just a clean dev environment with **zsh + oh-my-zsh + autosuggestions + syntax-highlighting + completions + zellij + lazyvim**.
+A clean dev environment with **zsh + oh-my-zsh + autosuggestions + syntax-highlighting + completions + zellij + lazyvim**, plus Prime Agent, DeepSeek Harness, and Oh My Pi coding-agent harnesses.
 
 ## Quick start (container)
 
@@ -47,7 +47,7 @@ bash setup.sh
 curl -fsSL https://raw.githubusercontent.com/irisphera/overlord/main/setup.sh | bash
 ```
 
-It installs (if missing): `zsh`, `oh-my-zsh` and plugins, `zellij`, `neovim` + **LazyVim**, nvm + **Node.js 24**, `uv`, AWS CLI v2, **codegraph** `1.5.0`, and **prime-agent** `0.8.0` with a `256k` context override. It also installs shared Pi/Prime skills and configures Prime Agent's bundled web search plus the public Context7 MCP server. Web search needs a one-time Serper credential through `/login`; Context7 needs no login.
+It installs (if missing): `zsh`, `oh-my-zsh` and plugins, `zellij`, `neovim` + **LazyVim**, nvm + **Node.js 24**, `uv`, AWS CLI v2, **codegraph** `1.5.0`, **prime-agent** `0.8.0` with a `256k` context override, **DeepSeek Harness** (`dsh`), and **Oh My Pi** (`omp`). Oh My Pi is installed with its official `curl -fsSL https://omp.sh/install | sh` installer; run it with `omp`. It also installs shared Pi/Prime skills and configures Prime Agent's bundled web search plus the public Context7 MCP server. Web search needs a one-time Serper credential through `/login`; Context7 needs no login.
 
 ### AWS sudo password fix
 
@@ -65,7 +65,8 @@ This makes subsequent `sudo` non-interactive without a password. If `sudo` is no
 - `apt-get update` + installs base packages
 - Installs `zellij` v0.43.1 (arch-aware tarball)
 - Installs nvm + Node.js 24, `uv`, and AWS CLI v2
-- Installs `prime-agent`, shared Pi/Prime skills, and Context7 MCP configuration
+- Installs `prime-agent`, DeepSeek Harness (`dsh`), and Oh My Pi (`omp`)
+- Installs shared Pi/Prime skills, and Context7 MCP configuration
 - Enables bundled web search (Serper login remains a one-time user step)
 - Installs `oh-my-zsh` unattended
 - Clones `zsh-autosuggestions`, `zsh-syntax-highlighting`, `zsh-completions`, `zsh-autocomplete` and wires `~/.zshrc`
@@ -82,6 +83,7 @@ Rerunning `setup.sh` is safe.
 - `config/entrypoint.sh` handles UID/GID remap and `gosu overlord`
 - The launcher prefers `setup-devcontainer.sh` when present; it runs shared `setup.sh`, then adds the container-only Runpod Docs MCP
 - Setup runs as root inside the container on create/start, then ownership is repaired to `overlord`
+- An already-running container does not rerun setup; run `overlord fresh` before attaching if you need a newly added tool such as `omp`
 
 ## Config
 

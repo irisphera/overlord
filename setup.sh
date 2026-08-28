@@ -5,7 +5,8 @@ export DEBIAN_FRONTEND=noninteractive
 # setup.sh - Standalone VM + container initializer
 # Idempotent, non-interactive. Installs: zsh, oh-my-zsh, zsh-autosuggestions,
 # zsh-syntax-highlighting, zsh-completions, zellij, lazyvim (neovim + LazyVim starter),
-# codegraph (local code intelligence), prime-agent (256k contextWindow override).
+# codegraph (local code intelligence), prime-agent (256k contextWindow override),
+# DeepSeek Harness (dsh), and Oh My Pi (omp).
 # Safe to run repeatedly via: bash setup.sh  or  ./setup.sh
 # Also used by the overlord container (as /workspace/setup-devcontainer.sh).
 
@@ -343,7 +344,7 @@ find_tool_command() {
 
 publish_tool_commands() {
   local command_name source destination
-  for command_name in node npm npx corepack prime-agent codegraph uv aws dsh; do
+  for command_name in node npm npx corepack prime-agent codegraph uv aws dsh omp; do
     source="$(find_tool_command "$command_name" || true)"
     if [ -z "$source" ]; then
       continue
@@ -386,7 +387,7 @@ verify_login_shell_tools() {
   fi
   local command_name target_home
   while IFS= read -r target_home; do
-    for command_name in node npm prime-agent; do
+    for command_name in node npm prime-agent omp; do
       if env -i HOME="$target_home" USER="$(stat -c '%U' "$target_home" 2>/dev/null || id -un)" TERM="${TERM:-xterm}" \
         PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
         zsh -lic "command -v $command_name" >/dev/null 2>&1; then
@@ -671,7 +672,9 @@ EOS
 
   # Never keep zsh-autocomplete as an Oh My Zsh plugin; it must load before compinit.
   if grep -qE '^plugins=\(.*zsh-autocomplete' "${zshrc}"; then
-    sed -i -E '/^plugins=\(/ s/[[:space:]]*zsh-autocomplete//g' "${zshrc}"
+    # Use a backup suffix so this works with both GNU and BSD sed.
+    sed -i.bak -E '/^plugins=[(]/ s/[[:space:]]*zsh-autocomplete//g' "${zshrc}"
+    rm -f "${zshrc}.bak"
   fi
 
   if grep -q 'Overlord: oh-my-zsh' "${zshrc}" || ! grep -q 'oh-my-zsh.sh' "${zshrc}"; then
@@ -1041,6 +1044,57 @@ install_dsh() {
     fi
   else
     warn "failed to install $spec via npm"
+  fi
+}
+
+# Oh My Pi (omp) — alternative Pi-based coding-agent harness.
+# https://omp.sh
+omp_is_available() {
+  local binary="$1"
+  if [ -x "$binary" ]; then
+    "$binary" --version >/dev/null 2>&1
+  elif command -v omp >/dev/null 2>&1; then
+    omp --version >/dev/null 2>&1
+  else
+    return 1
+  fi
+}
+
+install_oh_my_pi() {
+  local install_dir="${HOME}/.local/bin"
+  # setup.sh runs as root while the container's interactive shell runs as
+  # overlord. Install into a system directory in that case instead of leaving
+  # omp under /root, where the interactive user cannot use it.
+  if [ "$(id -u)" -eq 0 ]; then
+    install_dir="/usr/local/bin"
+  fi
+  local local_binary="${install_dir}/omp"
+  if omp_is_available "$local_binary"; then
+    info "Oh My Pi already installed"
+    return 0
+  fi
+
+  info "installing Oh My Pi (omp)..."
+  # The official installer chooses a matching prebuilt binary when Bun is not
+  # available. If Bun is present, force the binary mode so PI_INSTALL_DIR is
+  # honored and omp is still available to every package user.
+  local installer_ok=1
+  if command -v bun >/dev/null 2>&1; then
+    if PI_INSTALL_DIR="$install_dir" sh -c 'curl -fsSL https://omp.sh/install | sh -s -- --binary' 2>&1 | sed 's/^/[omp] /'; then
+      installer_ok=0
+    fi
+  elif PI_INSTALL_DIR="$install_dir" sh -c 'curl -fsSL https://omp.sh/install | sh' 2>&1 | sed 's/^/[omp] /'; then
+    installer_ok=0
+  fi
+  if [ "$installer_ok" -ne 0 ]; then
+    warn "failed to install Oh My Pi (omp)"
+    return 0
+  fi
+
+  if omp_is_available "$local_binary"; then
+    info "Oh My Pi (omp) installed"
+  else
+    warn "Oh My Pi installer completed but omp is not available"
   fi
 }
 
@@ -1650,6 +1704,7 @@ make_zsh_default() {
 }
 install_prime_agent
 install_dsh
+install_oh_my_pi
 sync_prime_agent_rc
 publish_tool_commands
 ensure_cross_user_tool_access

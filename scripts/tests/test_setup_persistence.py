@@ -23,7 +23,18 @@ class SetupPersistenceTests(unittest.TestCase):
     def test_commands_are_published_to_usr_local_bin(self):
         self.assertIn("publish_tool_commands", SETUP)
         self.assertIn("node npm npx corepack prime-agent codegraph uv aws", SETUP)
+        self.assertIn("omp", SETUP)
         self.assertIn('destination="/usr/local/bin/$command_name"', SETUP)
+
+    def test_oh_my_pi_is_installed_and_called_before_tool_publishing(self):
+        self.assertIn("install_oh_my_pi", SETUP)
+        self.assertIn("curl -fsSL https://omp.sh/install | sh", SETUP)
+        self.assertIn('PI_INSTALL_DIR="$install_dir"', SETUP)
+        self.assertIn('install_dir="/usr/local/bin"', SETUP)
+        self.assertIn('omp_is_available "$local_binary"', SETUP)
+        self.assertIn("--binary", SETUP)
+        calls = SETUP.rsplit("install_prime_agent\n", 1)[1]
+        self.assertLess(calls.index("install_oh_my_pi"), calls.index("publish_tool_commands"))
 
     def test_prime_agent_skills_are_installed_after_prime_agent(self):
         self.assertIn("install_prime_agent_skills", SETUP)
@@ -98,6 +109,7 @@ class SetupPersistenceTests(unittest.TestCase):
     def test_clean_zsh_login_is_verified(self):
         self.assertIn("verify_login_shell_tools", SETUP)
         self.assertIn('zsh -lic "command -v $command_name"', SETUP)
+        self.assertIn("node npm prime-agent omp", SETUP)
 
     def test_existing_zshrc_gets_oh_my_zsh_bootstrap(self):
         self.assertIn("Overlord: oh-my-zsh", SETUP)

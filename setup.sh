@@ -1377,7 +1377,7 @@ configure_prime_agent_models() {
   fi
   if [ -n "$existing_models_json" ]; then
     info "reusing existing models.json: $existing_models_json"
-    # Patch existing file to ensure 256k and Grok 4.6 on Azure (handles old 272k workspaces)
+    # Patch existing file to ensure 256k defaults and Azure Grok 4.6 at 180k (200k max)
     python3 - "$existing_models_json" <<'PYEOF_PATCH'
 import json, sys
 from pathlib import Path
@@ -1389,10 +1389,24 @@ except Exception as e:
     sys.exit(0)
 changed=False
 AZURE_BASEURL="https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1"
+DEFAULT_CONTEXT_WINDOW=256000
+GROK_46_CONTEXT_WINDOW=180000
+def context_window_for(model_id):
+    return GROK_46_CONTEXT_WINDOW if model_id=="grok-4.6" else DEFAULT_CONTEXT_WINDOW
+def context_label(tokens):
+    return f"{tokens // 1000}k"
+def token_fields(model_id):
+    window=context_window_for(model_id)
+    return {"contextWindow": window, "maxInputTokens": window, "limitTokens": window}
+def model_entry(model_id, name, *, reasoning, extra=None):
+    entry={"id": model_id, "name": f"{name} ({context_label(context_window_for(model_id))})", **token_fields(model_id), "maxTokens": 16384, "reasoning": reasoning}
+    if extra:
+        entry.update(extra)
+    return entry
 defaults=data.setdefault("defaults",{})
 for k in ("contextWindow","maxInputTokens","limitTokens"):
-    if defaults.get(k)!=256000:
-        defaults[k]=256000
+    if defaults.get(k)!=DEFAULT_CONTEXT_WINDOW:
+        defaults[k]=DEFAULT_CONTEXT_WINDOW
         changed=True
 if defaults.get("reasoning") is not True:
     defaults["reasoning"]=True
@@ -1400,40 +1414,41 @@ if defaults.get("reasoning") is not True:
 providers=data.setdefault("providers",{})
 desired_explicit={
     "azure-openai-responses": [
-        {"id": "gpt-5.6-sol", "name": "GPT-5.6 Sol (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "baseUrl": AZURE_BASEURL},
-        {"id": "gpt-5.6-luna", "name": "GPT-5.6 Luna (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "thinkingLevelMap": {"max": "max"}, "baseUrl": AZURE_BASEURL},
-        {"id": "grok-4.6", "name": "Grok 4.6 (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": False, "baseUrl": AZURE_BASEURL},
+        model_entry("gpt-5.6-sol", "GPT-5.6 Sol", reasoning=True, extra={"baseUrl": AZURE_BASEURL}),
+        model_entry("gpt-5.6-luna", "GPT-5.6 Luna", reasoning=True, extra={"thinkingLevelMap": {"max": "max"}, "baseUrl": AZURE_BASEURL}),
+        model_entry("grok-4.6", "Grok 4.6", reasoning=False, extra={"baseUrl": AZURE_BASEURL}),
     ],
     "google-vertex": [
-        {"id": "gemini-3.7-flash", "name": "Gemini 3.7 Flash (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "input": ["text", "image"]},
+        model_entry("gemini-3.7-flash", "Gemini 3.7 Flash", reasoning=True, extra={"input": ["text", "image"]}),
     ],
     "opencode": [
-        {"id": "gpt-5.6-sol", "name": "GPT-5.6 Sol (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True},
-        {"id": "gpt-5.6-luna", "name": "GPT-5.6 Luna (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "thinkingLevelMap": {"max": "max"}},
+        model_entry("gpt-5.6-sol", "GPT-5.6 Sol", reasoning=True),
+        model_entry("gpt-5.6-luna", "GPT-5.6 Luna", reasoning=True, extra={"thinkingLevelMap": {"max": "max"}}),
     ],
     "opencode-go": [
-        {"id": "gpt-5.6-luna", "name": "GPT-5.6 Luna (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "thinkingLevelMap": {"max": "max"}},
-        {"id": "muse-spark-1.2-contributor", "name": "Muse Spark 1.2 Contributor (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True},
-        {"id": "muse-spark-1.2-contributor-free", "name": "Muse Spark 1.2 Contributor Free (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True},
-        {"id": "muse-spark-1.2-free", "name": "Muse Spark 1.2 Free (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True},
+        model_entry("gpt-5.6-luna", "GPT-5.6 Luna", reasoning=True, extra={"thinkingLevelMap": {"max": "max"}}),
+        model_entry("muse-spark-1.2-contributor", "Muse Spark 1.2 Contributor", reasoning=True),
+        model_entry("muse-spark-1.2-contributor-free", "Muse Spark 1.2 Contributor Free", reasoning=True),
+        model_entry("muse-spark-1.2-free", "Muse Spark 1.2 Free", reasoning=True),
     ],
 }
 allowed_ids={"gpt-5.6-sol","gpt-5.6-luna","grok-4.6","gemini-3.7-flash","muse-spark-1.2-contributor","muse-spark-1.2-contributor-free","muse-spark-1.2-free"}
 for prov, explicit_models in desired_explicit.items():
     prov_cfg=providers.setdefault(prov,{})
     overrides=prov_cfg.setdefault("modelOverrides",{})
-    wildcard={"contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "reasoning": True}
+    wildcard={"contextWindow": DEFAULT_CONTEXT_WINDOW, "maxInputTokens": DEFAULT_CONTEXT_WINDOW, "limitTokens": DEFAULT_CONTEXT_WINDOW, "reasoning": True}
     if overrides.get("*")!=wildcard:
         overrides["*"]=wildcard
         changed=True
     for m in explicit_models:
         mid=m["id"]
+        window=context_window_for(mid)
         current_override=overrides.get(mid) or {}
         current_thinking_map=current_override.get("thinkingLevelMap") or {}
         needs_luna_thinking_map = mid=="gpt-5.6-luna" and current_thinking_map.get("max") != "max"
-        if current_override.get("contextWindow")!=256000 or needs_luna_thinking_map:
+        if current_override.get("contextWindow")!=window or needs_luna_thinking_map:
             updated_override=dict(current_override)
-            updated_override["contextWindow"]=256000
+            updated_override["contextWindow"]=window
             if mid=="gpt-5.6-luna":
                 updated_override["thinkingLevelMap"]={**current_thinking_map, "max": "max"}
             overrides[mid]=updated_override
@@ -1445,13 +1460,15 @@ for prov, explicit_models in desired_explicit.items():
             existing_models.append(m)
             changed=True
         else:
+            window=context_window_for(m["id"])
+            label=context_label(window)
             for em in existing_models:
                 if em.get("id")==m["id"]:
                     for kk in ("contextWindow","maxInputTokens","limitTokens"):
-                        if em.get(kk)!=256000:
-                            em[kk]=256000
+                        if em.get(kk)!=window:
+                            em[kk]=window
                             changed=True
-                    if "256k" not in em.get("name",""):
+                    if label not in em.get("name",""):
                         em["name"]=m["name"]
                         changed=True
                     if em.get("reasoning") is not m.get("reasoning", False):
@@ -1557,11 +1574,25 @@ for prov_model in [("azure-openai-responses", "grok-4.6"), ("azure-openai-respon
     if prov_model not in models:
         models.append(prov_model)
 
-# Build providers dict with modelOverrides -> contextWindow 256000
+# Build providers dict with modelOverrides -> contextWindow (256k default; Azure Grok 4.6 is 180k)
+DEFAULT_CONTEXT_WINDOW = 256000
+GROK_46_CONTEXT_WINDOW = 180000
+def context_window_for(model_id):
+    return GROK_46_CONTEXT_WINDOW if model_id == "grok-4.6" else DEFAULT_CONTEXT_WINDOW
+def context_label(tokens):
+    return f"{tokens // 1000}k"
+def token_fields(model_id):
+    window = context_window_for(model_id)
+    return {"contextWindow": window, "maxInputTokens": window, "limitTokens": window}
+def model_entry(model_id, name, *, reasoning, extra=None):
+    entry = {"id": model_id, "name": f"{name} ({context_label(context_window_for(model_id))})", **token_fields(model_id), "maxTokens": 16384, "reasoning": reasoning}
+    if extra:
+        entry.update(extra)
+    return entry
 for provider, model in models:
     if provider not in providers:
         providers[provider] = {}
-    providers[provider][model] = {"contextWindow": 256000}
+    providers[provider][model] = {"contextWindow": context_window_for(model)}
 
 # Route Muse Spark to opencode-go only (not opencode) - config must be applied there
 if "opencode" in providers:
@@ -1580,22 +1611,22 @@ AZURE_BASEURL = "https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1"
 # Build final output with defaults 256k and explicit custom models (ensures Grok 4.6 is always present on Azure)
 custom_explicit = {
     "azure-openai-responses": [
-        {"id": "gpt-5.6-sol", "name": "GPT-5.6 Sol (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "baseUrl": AZURE_BASEURL},
-        {"id": "gpt-5.6-luna", "name": "GPT-5.6 Luna (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "thinkingLevelMap": {"max": "max"}, "baseUrl": AZURE_BASEURL},
-        {"id": "grok-4.6", "name": "Grok 4.6 (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": False, "baseUrl": AZURE_BASEURL},
+        model_entry("gpt-5.6-sol", "GPT-5.6 Sol", reasoning=True, extra={"baseUrl": AZURE_BASEURL}),
+        model_entry("gpt-5.6-luna", "GPT-5.6 Luna", reasoning=True, extra={"thinkingLevelMap": {"max": "max"}, "baseUrl": AZURE_BASEURL}),
+        model_entry("grok-4.6", "Grok 4.6", reasoning=False, extra={"baseUrl": AZURE_BASEURL}),
     ],
     "google-vertex": [
-        {"id": "gemini-3.7-flash", "name": "Gemini 3.7 Flash (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "input": ["text", "image"]},
+        model_entry("gemini-3.7-flash", "Gemini 3.7 Flash", reasoning=True, extra={"input": ["text", "image"]}),
     ],
     "opencode": [
-        {"id": "gpt-5.6-sol", "name": "GPT-5.6 Sol (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True},
-        {"id": "gpt-5.6-luna", "name": "GPT-5.6 Luna (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "thinkingLevelMap": {"max": "max"}},
+        model_entry("gpt-5.6-sol", "GPT-5.6 Sol", reasoning=True),
+        model_entry("gpt-5.6-luna", "GPT-5.6 Luna", reasoning=True, extra={"thinkingLevelMap": {"max": "max"}}),
     ],
     "opencode-go": [
-        {"id": "gpt-5.6-luna", "name": "GPT-5.6 Luna (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "thinkingLevelMap": {"max": "max"}},
-        {"id": "muse-spark-1.2-contributor", "name": "Muse Spark 1.2 Contributor (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True},
-        {"id": "muse-spark-1.2-contributor-free", "name": "Muse Spark 1.2 Contributor Free (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True},
-        {"id": "muse-spark-1.2-free", "name": "Muse Spark 1.2 Free (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True},
+        model_entry("gpt-5.6-luna", "GPT-5.6 Luna", reasoning=True, extra={"thinkingLevelMap": {"max": "max"}}),
+        model_entry("muse-spark-1.2-contributor", "Muse Spark 1.2 Contributor", reasoning=True),
+        model_entry("muse-spark-1.2-contributor-free", "Muse Spark 1.2 Contributor Free", reasoning=True),
+        model_entry("muse-spark-1.2-free", "Muse Spark 1.2 Free", reasoning=True),
     ],
 }
 
@@ -1603,16 +1634,17 @@ custom_explicit = {
 for prov in list(providers.keys()):
     overrides = providers[prov]
     # add wildcard
-    overrides["*"] = {"contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "reasoning": True}
+    overrides["*"] = {"contextWindow": DEFAULT_CONTEXT_WINDOW, "maxInputTokens": DEFAULT_CONTEXT_WINDOW, "limitTokens": DEFAULT_CONTEXT_WINDOW, "reasoning": True}
 # Ensure providers for custom explicit exist even if not in discovered list
 for prov in custom_explicit:
     providers.setdefault(prov, {})
-    providers[prov]["*"] = {"contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "reasoning": True}
+    providers[prov]["*"] = {"contextWindow": DEFAULT_CONTEXT_WINDOW, "maxInputTokens": DEFAULT_CONTEXT_WINDOW, "limitTokens": DEFAULT_CONTEXT_WINDOW, "reasoning": True}
     for m in custom_explicit[prov]:
-        model_override = providers[prov].setdefault(m["id"], {"contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "reasoning": True})
+        window = context_window_for(m["id"])
+        model_override = providers[prov].setdefault(m["id"], {"contextWindow": window, "maxInputTokens": window, "limitTokens": window, "reasoning": True})
+        model_override["contextWindow"] = window
         if m["id"] == "gpt-5.6-luna":
             model_override["thinkingLevelMap"] = {**(model_override.get("thinkingLevelMap") or {}), "max": "max"}
-        # also ensure the explicit model override points to 256k (already)
 
 # Filter to only allowed models (Muse Spark aliases, Gemini 3.7 Flash, GPT-5.6 Sol/Luna, and Grok 4.6)
 # This ensures fresh installs match the committed config
@@ -1633,7 +1665,7 @@ for prov in list(providers.keys()):
     # also prune wildcard if provider was kept but had no allowed - already handled
 
 output = {
-    "defaults": {"contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "reasoning": True},
+    "defaults": {"contextWindow": DEFAULT_CONTEXT_WINDOW, "maxInputTokens": DEFAULT_CONTEXT_WINDOW, "limitTokens": DEFAULT_CONTEXT_WINDOW, "reasoning": True},
     "providers": {}
 }
 for prov, overrides in providers.items():

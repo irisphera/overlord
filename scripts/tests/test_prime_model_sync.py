@@ -15,11 +15,11 @@ def _valid_models_json():
         "providers": {
             "azure-openai-responses": {
                 "modelOverrides": {"*": {"contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "reasoning": True},
-                                   "gpt-5.6-luna": {"contextWindow": 256000, "thinkingLevelMap": {"max": "max"}}, "gpt-5.6-sol": {"contextWindow": 256000}, "grok-4.6": {"contextWindow": 256000}},
+                                   "gpt-5.6-luna": {"contextWindow": 256000, "thinkingLevelMap": {"max": "max"}}, "gpt-5.6-sol": {"contextWindow": 256000}, "grok-4.6": {"contextWindow": 180000}},
                 "models": [
                     {"id": "gpt-5.6-sol", "name": "GPT-5.6 Sol (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "baseUrl": "https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1"},
                     {"id": "gpt-5.6-luna", "name": "GPT-5.6 Luna (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "thinkingLevelMap": {"max": "max"}, "baseUrl": "https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1"},
-                    {"id": "grok-4.6", "name": "Grok 4.6 (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": False, "baseUrl": "https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1"},
+                    {"id": "grok-4.6", "name": "Grok 4.6 (180k)", "contextWindow": 180000, "maxInputTokens": 180000, "limitTokens": 180000, "maxTokens": 16384, "reasoning": False, "baseUrl": "https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1"},
                 ]
             },
             "google-vertex": {
@@ -127,17 +127,28 @@ class PrimeModelSyncTests(unittest.TestCase):
             result = sync_host_prime_models(home=home, prime_agent_data=target)
             self.assertTrue(result.copied)
             data = json.loads((target / "models.json").read_text())
-            # Must have grok
+            # Must have grok 4.6 at 180k (200k hard max)
             self.assertIn("azure-openai-responses", data["providers"])
-            az_models = [m["id"] for m in data["providers"]["azure-openai-responses"].get("models", [])]
+            az_models = {m["id"]: m for m in data["providers"]["azure-openai-responses"].get("models", [])}
             self.assertIn("grok-4.6", az_models)
+            self.assertNotIn("grok-5.6", az_models)
             self.assertIn("gpt-5.6-sol", az_models)
             self.assertIn("gpt-5.6-luna", az_models)
-            # Must be 256k
+            self.assertEqual(az_models["grok-4.6"]["contextWindow"], 180000)
+            self.assertEqual(az_models["grok-4.6"]["maxInputTokens"], 180000)
+            self.assertEqual(az_models["grok-4.6"]["limitTokens"], 180000)
+            self.assertEqual(az_models["grok-4.6"]["reasoning"], False)
+            self.assertIn("180k", az_models["grok-4.6"]["name"])
+            self.assertEqual(
+                data["providers"]["azure-openai-responses"]["modelOverrides"]["grok-4.6"]["contextWindow"],
+                180000,
+            )
+            # Defaults stay 256k; Azure Grok 4.6 is the 180k exception
             self.assertEqual(data["defaults"]["contextWindow"], 256000)
             for prov in data["providers"].values():
                 for m in prov.get("models", []):
-                    self.assertEqual(m["contextWindow"], 256000)
+                    expected = 180000 if m.get("id") == "grok-4.6" else 256000
+                    self.assertEqual(m["contextWindow"], expected)
                     if m.get("id") == "gpt-5.6-luna":
                         self.assertEqual(m.get("thinkingLevelMap", {}).get("max"), "max")
             # Must remove x-preview, retain Luna at 256k/max thinking, and keep Muse Spark out of opencode

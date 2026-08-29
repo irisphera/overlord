@@ -24,7 +24,7 @@
           "contextWindow": 256000
         },
         "grok-4.6": {
-          "contextWindow": 256000
+          "contextWindow": 180000
         }
       },
       "models": [
@@ -40,6 +40,16 @@
         },
         {
           "baseUrl": "https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1",
+          "contextWindow": 180000,
+          "id": "grok-4.6",
+          "limitTokens": 180000,
+          "maxInputTokens": 180000,
+          "maxTokens": 16384,
+          "name": "Grok 4.6 (180k)",
+          "reasoning": false
+        },
+        {
+          "baseUrl": "https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1",
           "contextWindow": 256000,
           "id": "gpt-5.6-luna",
           "limitTokens": 256000,
@@ -50,16 +60,6 @@
           "thinkingLevelMap": {
             "max": "max"
           }
-        },
-        {
-          "baseUrl": "https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1",
-          "contextWindow": 256000,
-          "id": "grok-4.6",
-          "limitTokens": 256000,
-          "maxInputTokens": 256000,
-          "maxTokens": 16384,
-          "name": "Grok 4.6 (256k)",
-          "reasoning": false
         }
       ]
     },
@@ -160,18 +160,6 @@
       "models": [
         {
           "contextWindow": 256000,
-          "id": "gpt-5.6-luna",
-          "limitTokens": 256000,
-          "maxInputTokens": 256000,
-          "maxTokens": 16384,
-          "name": "GPT-5.6 Luna (256k)",
-          "reasoning": true,
-          "thinkingLevelMap": {
-            "max": "max"
-          }
-        },
-        {
-          "contextWindow": 256000,
           "id": "muse-spark-1.2-contributor",
           "limitTokens": 256000,
           "maxInputTokens": 256000,
@@ -196,6 +184,18 @@
           "maxTokens": 16384,
           "name": "Muse Spark 1.2 Free (256k)",
           "reasoning": true
+        },
+        {
+          "contextWindow": 256000,
+          "id": "gpt-5.6-luna",
+          "limitTokens": 256000,
+          "maxInputTokens": 256000,
+          "maxTokens": 16384,
+          "name": "GPT-5.6 Luna (256k)",
+          "reasoning": true,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
         }
       ]
     }

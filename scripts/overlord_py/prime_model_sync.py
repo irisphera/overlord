@@ -10,6 +10,9 @@ from typing import Final
 
 RESPONSIBILITY: Final = "copy the host ~/.prime/agent/models.json into workspace persisted prime-agent data"
 HOST_MODELS_JSON: Final = Path(".prime/agent/models.json")
+DEFAULT_CONTEXT_WINDOW: Final = 256000
+GROK_46_CONTEXT_WINDOW: Final = 180000
+AZURE_PLACEHOLDER_BASEURL: Final = "https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,12 +21,52 @@ class SyncResult:
     reason: str
 
 
+def _context_window_for(model_id: str) -> int:
+    """Azure Grok 4.6 is capped at 200k; keep 180k of headroom. Everything else stays at 256k."""
+    return GROK_46_CONTEXT_WINDOW if model_id == "grok-4.6" else DEFAULT_CONTEXT_WINDOW
+
+
+def _context_label(tokens: int) -> str:
+    return f"{tokens // 1000}k"
+
+
+def _wildcard_override() -> dict:
+    return {
+        "contextWindow": DEFAULT_CONTEXT_WINDOW,
+        "maxInputTokens": DEFAULT_CONTEXT_WINDOW,
+        "limitTokens": DEFAULT_CONTEXT_WINDOW,
+        "reasoning": True,
+    }
+
+
+def _token_fields(model_id: str) -> dict:
+    window = _context_window_for(model_id)
+    return {
+        "contextWindow": window,
+        "maxInputTokens": window,
+        "limitTokens": window,
+    }
+
+
 def host_models_path(home: Path) -> Path:
     return home / HOST_MODELS_JSON
 
 
+def _model_entry(model_id: str, name: str, *, reasoning: bool, extra: dict | None = None) -> dict:
+    entry = {
+        "id": model_id,
+        "name": f"{name} ({_context_label(_context_window_for(model_id))})",
+        **_token_fields(model_id),
+        "maxTokens": 16384,
+        "reasoning": reasoning,
+    }
+    if extra:
+        entry.update(extra)
+    return entry
+
+
 def _ensure_correct_models(path: Path) -> bool:
-    """Patch models.json to ensure 256k GPT-5.6 Luna/Grok models and Muse Spark routing."""
+    """Patch models.json to ensure GPT-5.6 Luna/Grok/Muse Spark routing with per-model context."""
     try:
         text = path.read_text()
         data = json.loads(text)
@@ -31,11 +74,11 @@ def _ensure_correct_models(path: Path) -> bool:
         return False
     changed = False
 
-    # Ensure defaults 256k
+    # Ensure defaults 256k (per-model overrides can still be lower, e.g. Azure Grok 4.6 at 180k)
     defaults = data.setdefault("defaults", {})
     for key in ("contextWindow", "maxInputTokens", "limitTokens"):
-        if defaults.get(key) != 256000:
-            defaults[key] = 256000
+        if defaults.get(key) != DEFAULT_CONTEXT_WINDOW:
+            defaults[key] = DEFAULT_CONTEXT_WINDOW
             changed = True
     if defaults.get("reasoning") is not True:
         defaults["reasoning"] = True
@@ -47,50 +90,60 @@ def _ensure_correct_models(path: Path) -> bool:
     # Azure custom models need an explicit baseUrl: prime-agent silently drops custom
     # models whose baseUrl resolves falsy (built-in azure models have baseUrl "").
     # AZURE_OPENAI_BASE_URL / AZURE_OPENAI_RESOURCE_NAME env vars override it at request time.
-    azure_baseurl = "https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1"
+    azure_extra = {"baseUrl": AZURE_PLACEHOLDER_BASEURL}
+    luna_extra = {"thinkingLevelMap": {"max": "max"}}
     desired_explicit = {
         "azure-openai-responses": [
-            {"id": "gpt-5.6-sol", "name": "GPT-5.6 Sol (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "baseUrl": azure_baseurl},
-            {"id": "gpt-5.6-luna", "name": "GPT-5.6 Luna (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "thinkingLevelMap": {"max": "max"}, "baseUrl": azure_baseurl},
-            {"id": "grok-4.6", "name": "Grok 4.6 (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": False, "baseUrl": azure_baseurl},
+            _model_entry("gpt-5.6-sol", "GPT-5.6 Sol", reasoning=True, extra=azure_extra),
+            _model_entry("gpt-5.6-luna", "GPT-5.6 Luna", reasoning=True, extra={**azure_extra, **luna_extra}),
+            _model_entry("grok-4.6", "Grok 4.6", reasoning=False, extra=azure_extra),
         ],
         "google-vertex": [
-            {"id": "gemini-3.7-flash", "name": "Gemini 3.7 Flash (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "input": ["text", "image"]},
+            _model_entry("gemini-3.7-flash", "Gemini 3.7 Flash", reasoning=True, extra={"input": ["text", "image"]}),
         ],
         "opencode": [
-            {"id": "gpt-5.6-sol", "name": "GPT-5.6 Sol (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True},
-            {"id": "gpt-5.6-luna", "name": "GPT-5.6 Luna (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "thinkingLevelMap": {"max": "max"}},
+            _model_entry("gpt-5.6-sol", "GPT-5.6 Sol", reasoning=True),
+            _model_entry("gpt-5.6-luna", "GPT-5.6 Luna", reasoning=True, extra=luna_extra),
         ],
         "opencode-go": [
-            {"id": "gpt-5.6-luna", "name": "GPT-5.6 Luna (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "thinkingLevelMap": {"max": "max"}},
-            {"id": "muse-spark-1.2-contributor", "name": "Muse Spark 1.2 Contributor (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True},
-            {"id": "muse-spark-1.2-contributor-free", "name": "Muse Spark 1.2 Contributor Free (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True},
-            {"id": "muse-spark-1.2-free", "name": "Muse Spark 1.2 Free (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True},
+            _model_entry("gpt-5.6-luna", "GPT-5.6 Luna", reasoning=True, extra=luna_extra),
+            _model_entry("muse-spark-1.2-contributor", "Muse Spark 1.2 Contributor", reasoning=True),
+            _model_entry("muse-spark-1.2-contributor-free", "Muse Spark 1.2 Contributor Free", reasoning=True),
+            _model_entry("muse-spark-1.2-free", "Muse Spark 1.2 Free", reasoning=True),
         ],
     }
 
-    allowed_ids = {"gpt-5.6-sol", "gpt-5.6-luna", "grok-4.6", "gemini-3.7-flash", "muse-spark-1.2-contributor", "muse-spark-1.2-contributor-free", "muse-spark-1.2-free"}
+    allowed_ids = {
+        "gpt-5.6-sol",
+        "gpt-5.6-luna",
+        "grok-4.6",
+        "gemini-3.7-flash",
+        "muse-spark-1.2-contributor",
+        "muse-spark-1.2-contributor-free",
+        "muse-spark-1.2-free",
+    }
 
     # Ensure each provider has correct wildcard and explicit models
     for prov, explicit_models in desired_explicit.items():
         prov_cfg = providers.setdefault(prov, {})
         # Ensure modelOverrides
         overrides = prov_cfg.setdefault("modelOverrides", {})
-        # Wildcard must be 256k
-        wildcard = {"contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "reasoning": True}
+        # Wildcard stays at the 256k default; Azure Grok 4.6 uses a per-model 180k override.
+        wildcard = _wildcard_override()
         if overrides.get("*") != wildcard:
             overrides["*"] = wildcard
             changed = True
-        # Ensure per-model overrides for allowed ids are 256k and expose Luna's max thinking level.
+        # Ensure per-model overrides for allowed ids use that model's window and Luna's max thinking.
         for m in explicit_models:
             mid = m["id"]
+            window = _context_window_for(mid)
             current_override = overrides.get(mid) or {}
-            desired_override = {"contextWindow": 256000}
+            desired_override = {"contextWindow": window}
             if mid == "gpt-5.6-luna":
                 desired_override["thinkingLevelMap"] = {"max": "max"}
             current_thinking_map = current_override.get("thinkingLevelMap") or {}
             needs_luna_thinking_map = mid == "gpt-5.6-luna" and current_thinking_map.get("max") != "max"
-            if current_override.get("contextWindow") != 256000 or needs_luna_thinking_map:
+            if current_override.get("contextWindow") != window or needs_luna_thinking_map:
                 # Preserve any unrelated per-model settings while applying the Luna map.
                 if mid == "gpt-5.6-luna":
                     desired_override["thinkingLevelMap"] = {**current_thinking_map, "max": "max"}
@@ -104,14 +157,15 @@ def _ensure_correct_models(path: Path) -> bool:
                 existing_models.append(m)
                 changed = True
             else:
-                # Ensure existing entry is 256k and correct name
+                window = _context_window_for(m["id"])
+                label = _context_label(window)
                 for em in existing_models:
                     if em.get("id") == m["id"]:
                         for k in ("contextWindow", "maxInputTokens", "limitTokens"):
-                            if em.get(k) != 256000:
-                                em[k] = 256000
+                            if em.get(k) != window:
+                                em[k] = window
                                 changed = True
-                        if "256k" not in em.get("name", ""):
+                        if label not in em.get("name", ""):
                             em["name"] = m["name"]
                             changed = True
                         if em.get("reasoning") is not m.get("reasoning", False):

@@ -66,7 +66,7 @@ def _model_entry(model_id: str, name: str, *, reasoning: bool, extra: dict | Non
 
 
 def _ensure_correct_models(path: Path) -> bool:
-    """Patch models.json to ensure GPT-5.6 Luna/Grok/Muse Spark routing with per-model context."""
+    """Patch models.json with the supported provider/model routing and context."""
     try:
         text = path.read_text()
         data = json.loads(text)
@@ -101,27 +101,20 @@ def _ensure_correct_models(path: Path) -> bool:
         "google-vertex": [
             _model_entry("gemini-3.7-flash", "Gemini 3.7 Flash", reasoning=True, extra={"input": ["text", "image"]}),
         ],
-        "opencode": [
-            _model_entry("gpt-5.6-sol", "GPT-5.6 Sol", reasoning=True),
-            _model_entry("gpt-5.6-luna", "GPT-5.6 Luna", reasoning=True, extra=luna_extra),
-        ],
         "opencode-go": [
             _model_entry("gpt-5.6-luna", "GPT-5.6 Luna", reasoning=True, extra=luna_extra),
             _model_entry("muse-spark-1.2-contributor", "Muse Spark 1.2 Contributor", reasoning=True),
-            _model_entry("muse-spark-1.2-contributor-free", "Muse Spark 1.2 Contributor Free", reasoning=True),
-            _model_entry("muse-spark-1.2-free", "Muse Spark 1.2 Free", reasoning=True),
         ],
     }
 
-    allowed_ids = {
-        "gpt-5.6-sol",
-        "gpt-5.6-luna",
-        "grok-4.6",
-        "gemini-3.7-flash",
-        "muse-spark-1.2-contributor",
-        "muse-spark-1.2-contributor-free",
-        "muse-spark-1.2-free",
+    allowed_ids_by_provider = {
+        "azure-openai-responses": {"gpt-5.6-sol", "gpt-5.6-luna", "grok-4.6"},
+        "google-vertex": {"gemini-3.7-flash"},
+        # OpenCode does not advertise Muse Spark or the configured GPT models.
+        "opencode": set(),
+        "opencode-go": {"gpt-5.6-luna", "muse-spark-1.2-contributor"},
     }
+    allowed_ids = set().union(*allowed_ids_by_provider.values())
 
     # Ensure each provider has correct wildcard and explicit models
     for prov, explicit_models in desired_explicit.items():
@@ -150,7 +143,10 @@ def _ensure_correct_models(path: Path) -> bool:
                 overrides[mid] = {**current_override, **desired_override}
                 changed = True
         # Ensure models list
-        existing_models = prov_cfg.get("models", [])
+        existing_models = prov_cfg.get("models")
+        if not isinstance(existing_models, list):
+            existing_models = []
+        existing_models = [m for m in existing_models if isinstance(m, dict)]
         existing_ids = {m.get("id") for m in existing_models}
         for m in explicit_models:
             if m["id"] not in existing_ids:
@@ -181,40 +177,39 @@ def _ensure_correct_models(path: Path) -> bool:
                         if prov == "azure-openai-responses" and not em.get("baseUrl"):
                             em["baseUrl"] = m["baseUrl"]
                             changed = True
-        # Filter models to only allowed (remove x-preview-f-free and other unapproved models)
-        filtered = [m for m in existing_models if m.get("id") in allowed_ids]
+        # Filter models by provider so a valid ID cannot be routed to the wrong endpoint.
+        allowed_for_provider = allowed_ids_by_provider[prov]
+        filtered = [m for m in existing_models if m.get("id") in allowed_for_provider]
         if len(filtered) != len(existing_models):
             prov_cfg["models"] = filtered
             changed = True
         else:
             prov_cfg["models"] = filtered
-        # Remove disallowed overrides (keep wildcard and allowed)
-        filtered_overrides = {k: v for k, v in overrides.items() if k == "*" or k in allowed_ids}
+        # Remove disallowed overrides (keep wildcard and provider-specific allowed IDs)
+        filtered_overrides = {k: v for k, v in overrides.items() if k == "*" or k in allowed_for_provider}
         if len(filtered_overrides) != len(overrides):
             prov_cfg["modelOverrides"] = filtered_overrides
             changed = True
         else:
             prov_cfg["modelOverrides"] = filtered_overrides
 
-    # Remove disallowed providers (e.g., openrouter if it has no allowed models, x-preview etc.)
-    # Keep only providers that are in desired_explicit plus any that have allowed overrides (but we filtered)
+    # OpenCode has no configured models in this setup. Remove its stale custom
+    # provider block rather than leaving GPT or Muse entries behind.
+    if "opencode" in providers:
+        del providers["opencode"]
+        changed = True
+
+    # Remove other providers that have no allowed model overrides.
     for prov in list(providers.keys()):
         if prov not in desired_explicit:
-            # Keep provider only if it has at least one allowed model override beyond wildcard
-            has_allowed = any(k in allowed_ids for k in providers[prov].get("modelOverrides", {}).keys())
+            allowed_for_provider = allowed_ids_by_provider.get(prov, allowed_ids)
+            has_allowed = any(
+                key in allowed_for_provider
+                for key in providers[prov].get("modelOverrides", {}).keys()
+            )
             if not has_allowed:
                 del providers[prov]
                 changed = True
-        # Also ensure opencode does not contain muse-spark
-        if prov == "opencode":
-            for key in list(providers[prov].get("modelOverrides", {}).keys()):
-                if "muse-spark" in key:
-                    del providers[prov]["modelOverrides"][key]
-                    changed = True
-            for m in list(providers[prov].get("models", [])):
-                if "muse-spark" in m.get("id", ""):
-                    providers[prov]["models"].remove(m)
-                    changed = True
 
     # Remove any provider that became empty
     for prov in list(providers.keys()):

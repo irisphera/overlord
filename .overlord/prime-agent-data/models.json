@@ -91,48 +91,6 @@
         }
       ]
     },
-    "opencode": {
-      "modelOverrides": {
-        "*": {
-          "contextWindow": 256000,
-          "limitTokens": 256000,
-          "maxInputTokens": 256000,
-          "reasoning": true
-        },
-        "gpt-5.6-luna": {
-          "contextWindow": 256000,
-          "thinkingLevelMap": {
-            "max": "max"
-          }
-        },
-        "gpt-5.6-sol": {
-          "contextWindow": 256000
-        }
-      },
-      "models": [
-        {
-          "contextWindow": 256000,
-          "id": "gpt-5.6-sol",
-          "limitTokens": 256000,
-          "maxInputTokens": 256000,
-          "maxTokens": 16384,
-          "name": "GPT-5.6 Sol (256k)",
-          "reasoning": true
-        },
-        {
-          "contextWindow": 256000,
-          "id": "gpt-5.6-luna",
-          "limitTokens": 256000,
-          "maxInputTokens": 256000,
-          "maxTokens": 16384,
-          "name": "GPT-5.6 Luna (256k)",
-          "reasoning": true,
-          "thinkingLevelMap": {
-            "max": "max"
-          }
-        }
-      ]
-    },
     "opencode-go": {
       "modelOverrides": {
         "*": {
@@ -149,12 +107,6 @@
         },
         "muse-spark-1.2-contributor": {
           "contextWindow": 256000
-        },
-        "muse-spark-1.2-contributor-free": {
-          "contextWindow": 256000
-        },
-        "muse-spark-1.2-free": {
-          "contextWindow": 256000
         }
       },
       "models": [
@@ -165,24 +117,6 @@
           "maxInputTokens": 256000,
           "maxTokens": 16384,
           "name": "Muse Spark 1.2 Contributor (256k)",
-          "reasoning": true
-        },
-        {
-          "contextWindow": 256000,
-          "id": "muse-spark-1.2-contributor-free",
-          "limitTokens": 256000,
-          "maxInputTokens": 256000,
-          "maxTokens": 16384,
-          "name": "Muse Spark 1.2 Contributor Free (256k)",
-          "reasoning": true
-        },
-        {
-          "contextWindow": 256000,
-          "id": "muse-spark-1.2-free",
-          "limitTokens": 256000,
-          "maxInputTokens": 256000,
-          "maxTokens": 16384,
-          "name": "Muse Spark 1.2 Free (256k)",
           "reasoning": true
         },
         {

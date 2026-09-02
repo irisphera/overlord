@@ -1,3 +1,7 @@
+import json
+import os
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -27,7 +31,9 @@ class SetupShTests(unittest.TestCase):
         self.assertIn("models.json", content)
         self.assertIn("256000", content)
         self.assertIn('gpt-5.6-luna', content)
-        self.assertIn('GPT-5.6 Luna (256k)', content)
+        # The setup block constructs the context suffix dynamically.
+        self.assertIn('"GPT-5.6 Luna"', content)
+        self.assertIn('context_label', content)
         self.assertIn('thinkingLevelMap', content)
         self.assertIn('"max": "max"', content)
         # Bind mounts can expose the persisted file through multiple path names.
@@ -37,6 +43,38 @@ class SetupShTests(unittest.TestCase):
         # ensure codegraph is installed and skill is wired
         self.assertIn("codegraph", content.lower())
         self.assertIn("CODEGRAPH_VERSION", content)
+
+    def test_fresh_models_generation_removes_opencode_custom_models(self):
+        content = Path("setup.sh").read_text(encoding="utf-8")
+        marker = 'python3 - "$tmp_json" <<\'PYEOF\'\n'
+        start = content.index(marker) + len(marker)
+        script = content[start : content.index("\nPYEOF", start)]
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_bin = Path(tmp) / "bin"
+            fake_bin.mkdir()
+            fake_prime = fake_bin / "prime-agent"
+            fake_prime.write_text("#!/bin/sh\nexit 0\n")
+            fake_prime.chmod(0o755)
+            output = Path(tmp) / "models.json"
+            env = dict(os.environ)
+            env["PATH"] = f"{fake_bin}:{env.get('PATH', '')}"
+            completed = subprocess.run(
+                ["python3", "-", str(output)],
+                input=script,
+                text=True,
+                capture_output=True,
+                check=False,
+                env=env,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            data = json.loads(output.read_text())
+            self.assertNotIn("opencode", data["providers"])
+            self.assertEqual(
+                {model["id"] for model in data["providers"]["opencode-go"]["models"]},
+                {"gpt-5.6-luna", "muse-spark-1.2-contributor"},
+            )
+            self.assertNotIn("muse-spark-1.2-free", json.dumps(data))
+            self.assertNotIn("muse-spark-1.2-contributor-free", json.dumps(data))
 
     def test_setup_sh_executable(self):
         import os, stat

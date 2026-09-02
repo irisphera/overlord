@@ -27,6 +27,10 @@ AZURE_LEGACY_ENV_ALIASES: Final = {
     "AZURE_API_KEY": "AZURE_OPENAI_API_KEY",
     "AZURE_RESOURCE_NAME": "AZURE_OPENAI_RESOURCE_NAME",
 }
+# Both OpenCode providers resolve credentials from OPENCODE_API_KEY. Forward the
+# key explicitly because the container only mounts persisted agent state, not the
+# host's ~/.prime/agent/auth.json.
+OPENCODE_ENV_VARS: Final = ("OPENCODE_API_KEY",)
 
 @dataclass(frozen=True, slots=True)
 class EnvironmentPlan:
@@ -43,6 +47,7 @@ def build_environment_plan(host_env: Mapping[str, str], *, home: Path, workspace
     for name in OPTIONAL_TERMINAL_ENV_VARS:
         append_present(exec_values, normalized, name)
     append_azure_env(exec_values, normalized)
+    append_opencode_env(exec_values, normalized)
     return EnvironmentPlan(
         exec_env_values=tuple(exec_values),
         exec_env_flags=env_flags(exec_values),
@@ -85,6 +90,12 @@ def append_azure_env(target: list[str], source: Mapping[str, str]) -> None:
         if modern not in source or source[modern] == "":
             if legacy in source and source[legacy] != "":
                 target.append(f"{modern}={source[legacy]}")
+
+def append_opencode_env(target: list[str], source: Mapping[str, str]) -> None:
+    """Forward the shared OpenCode API key used by opencode and opencode-go."""
+    for name in OPENCODE_ENV_VARS:
+        append_present(target, source, name)
+
 
 def env_flags(values: list[str] | tuple[str, ...]) -> tuple[str, ...]:
     flags: list[str] = []

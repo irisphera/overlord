@@ -28,20 +28,11 @@ def _valid_models_json():
                     {"id": "gemini-3.7-flash", "name": "Gemini 3.7 Flash (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "input": ["text", "image"]},
                 ]
             },
-            "opencode": {
-                "modelOverrides": {"*": {"contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "reasoning": True}, "gpt-5.6-luna": {"contextWindow": 256000, "thinkingLevelMap": {"max": "max"}}, "gpt-5.6-sol": {"contextWindow": 256000}},
-                "models": [
-                    {"id": "gpt-5.6-sol", "name": "GPT-5.6 Sol (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True},
-                    {"id": "gpt-5.6-luna", "name": "GPT-5.6 Luna (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "thinkingLevelMap": {"max": "max"}},
-                ]
-            },
             "opencode-go": {
-                "modelOverrides": {"*": {"contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "reasoning": True}, "gpt-5.6-luna": {"contextWindow": 256000, "thinkingLevelMap": {"max": "max"}}, "muse-spark-1.2-contributor": {"contextWindow": 256000}, "muse-spark-1.2-contributor-free": {"contextWindow": 256000}, "muse-spark-1.2-free": {"contextWindow": 256000}},
+                "modelOverrides": {"*": {"contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "reasoning": True}, "gpt-5.6-luna": {"contextWindow": 256000, "thinkingLevelMap": {"max": "max"}}, "muse-spark-1.2-contributor": {"contextWindow": 256000}},
                 "models": [
                     {"id": "gpt-5.6-luna", "name": "GPT-5.6 Luna (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "thinkingLevelMap": {"max": "max"}},
                     {"id": "muse-spark-1.2-contributor", "name": "Muse Spark 1.2 Contributor (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True},
-                    {"id": "muse-spark-1.2-contributor-free", "name": "Muse Spark 1.2 Contributor Free (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True},
-                    {"id": "muse-spark-1.2-free", "name": "Muse Spark 1.2 Free (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True},
                 ]
             },
         }
@@ -107,13 +98,6 @@ class PrimeModelSyncTests(unittest.TestCase):
                         "modelOverrides": {"*": {"contextWindow": 272000, "maxInputTokens": 272000, "limitTokens": 272000, "reasoning": True}},
                         "models": [{"id": "gpt-5.6-sol", "name": "GPT-5.6 Sol (272k)", "contextWindow": 272000, "maxInputTokens": 272000, "limitTokens": 272000, "maxTokens": 16384, "reasoning": True}]
                     },
-                    "opencode": {
-                        "modelOverrides": {"*": {"contextWindow": 272000, "maxInputTokens": 272000, "limitTokens": 272000, "reasoning": True}},
-                        "models": [
-                            {"id": "gpt-5.6-sol", "name": "GPT-5.6 Sol (272k)", "contextWindow": 272000, "maxInputTokens": 272000, "limitTokens": 272000, "maxTokens": 16384, "reasoning": True},
-                            {"id": "x-preview-f-free", "name": "Ox Alpha Free", "contextWindow": 272000, "maxTokens": 64000}
-                        ]
-                    },
                     "opencode-go": {
                         "modelOverrides": {"*": {"contextWindow": 272000, "maxInputTokens": 272000, "limitTokens": 272000, "reasoning": True}},
                         "models": [
@@ -123,6 +107,15 @@ class PrimeModelSyncTests(unittest.TestCase):
                     }
                 }
             })
+            old_data = json.loads(old)
+            old_data["providers"]["opencode"] = {
+                "modelOverrides": {
+                    "*": {"contextWindow": 272000},
+                    "gpt-5.6-sol": {"contextWindow": 272000},
+                },
+                "models": [{"id": "gpt-5.6-sol", "name": "GPT-5.6 Sol"}],
+            }
+            old = json.dumps(old_data)
             (home / ".prime" / "agent" / "models.json").write_text(old)
             result = sync_host_prime_models(home=home, prime_agent_data=target)
             self.assertTrue(result.copied)
@@ -151,8 +144,9 @@ class PrimeModelSyncTests(unittest.TestCase):
                     self.assertEqual(m["contextWindow"], expected)
                     if m.get("id") == "gpt-5.6-luna":
                         self.assertEqual(m.get("thinkingLevelMap", {}).get("max"), "max")
-            # Must remove x-preview, retain Luna at 256k/max thinking, and keep Muse Spark out of opencode
+            # Must remove x-preview and the unsupported OpenCode provider block.
             self.assertNotIn("x-preview-f-free", json.dumps(data))
+            self.assertNotIn("opencode", data["providers"])
             self.assertIn("gpt-5.6-luna", json.dumps(data))
             luna_overrides = [
                 provider["modelOverrides"]["gpt-5.6-luna"]["contextWindow"]
@@ -168,7 +162,10 @@ class PrimeModelSyncTests(unittest.TestCase):
             ]
             self.assertTrue(luna_thinking_maps)
             self.assertTrue(all(mapping.get("max") == "max" for mapping in luna_thinking_maps))
-            self.assertNotIn("muse-spark", json.dumps(data["providers"]["opencode"]))
+            self.assertEqual(
+                {m["id"] for m in data["providers"]["opencode-go"]["models"]},
+                {"gpt-5.6-luna", "muse-spark-1.2-contributor"},
+            )
             # Custom azure models must carry a baseUrl (else prime-agent drops them)
             for m in data["providers"]["azure-openai-responses"]["models"]:
                 self.assertTrue(m.get("baseUrl"))

@@ -75,6 +75,90 @@ class SetupPersistenceTests(unittest.TestCase):
             self.assertEqual(settings["mcpServers"]["context7"]["url"], "https://mcp.context7.com/mcp")
             self.assertNotIn("runpod-docs", settings["mcpServers"])
 
+    def test_existing_models_patch_removes_opencode_models(self):
+        marker = 'python3 - "$existing_models_json" <<\'PYEOF_PATCH\'\n'
+        start = SETUP.index(marker) + len(marker)
+        script = SETUP[start : SETUP.index("\nPYEOF_PATCH", start)]
+        with tempfile.TemporaryDirectory() as tmp:
+            models_path = Path(tmp) / "models.json"
+            models_path.write_text(
+                json.dumps(
+                    {
+                        "defaults": {},
+                        "providers": {
+                            "opencode": {
+                                "modelOverrides": {
+                                    "*": {},
+                                    "gpt-5.6-sol": {},
+                                },
+                                "models": [{"id": "gpt-5.6-sol"}],
+                            },
+                            "opencode-go": {
+                                "modelOverrides": {
+                                    "*": {},
+                                    "muse-spark-1.2-contributor-free": {},
+                                    "muse-spark-1.2-contributor": {},
+                                },
+                                "models": [
+                                    {"id": "muse-spark-1.2-contributor-free"},
+                                    {"id": "muse-spark-1.2-contributor"},
+                                ],
+                            },
+                        },
+                    }
+                )
+                + "\n"
+            )
+            completed = subprocess.run(
+                [sys.executable, "-", str(models_path)],
+                input=script,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            data = json.loads(models_path.read_text())
+            self.assertNotIn("opencode", data["providers"])
+            self.assertEqual(
+                {model["id"] for model in data["providers"]["opencode-go"]["models"]},
+                {"gpt-5.6-luna", "muse-spark-1.2-contributor"},
+            )
+
+    def test_migrates_stale_opencode_settings(self):
+        section = SETUP.split("configure_prime_agent_tools() {", 1)[1]
+        script = section.split("<<'PYEOF'\n", 1)[1].split("\nPYEOF", 1)[0]
+        with tempfile.TemporaryDirectory() as tmp:
+            settings_path = Path(tmp) / "settings.json"
+            settings_path.write_text(
+                json.dumps(
+                    {
+                        "defaultProvider": "opencode",
+                        "defaultModel": "muse-spark-1.2-contributor-free",
+                        "recentModels": [
+                            "opencode/gpt-5.6-sol",
+                            "opencode/muse-spark-1.2-contributor-free",
+                            "opencode-go/muse-spark-1.2-contributor",
+                        ],
+                    }
+                )
+                + "\n"
+            )
+            completed = subprocess.run(
+                [sys.executable, "-", str(settings_path)],
+                input=script,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            settings = json.loads(settings_path.read_text())
+            self.assertEqual(settings["defaultProvider"], "opencode-go")
+            self.assertEqual(settings["defaultModel"], "muse-spark-1.2-contributor")
+            self.assertEqual(
+                settings["recentModels"],
+                ["opencode-go/muse-spark-1.2-contributor"],
+            )
+
     def test_launcher_prefers_devcontainer_setup(self):
         lifecycle = (ROOT / "scripts/overlord_py/container_lifecycle.py").read_text()
         self.assertLess(

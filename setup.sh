@@ -1287,6 +1287,27 @@ for raw_path in sys.argv[1:]:
         }
         # Remove the formerly managed Runpod Docs server on upgrade.
         servers.pop("runpod-docs", None)
+
+        # OpenCode has no configured models. Remove stale picker entries and
+        # migrate a legacy default to the equivalent opencode-go model when one
+        # exists; otherwise let Prime choose its normal default.
+        recent_models = settings.get("recentModels")
+        if isinstance(recent_models, list):
+            settings["recentModels"] = [
+                model for model in recent_models
+                if not (isinstance(model, str) and model.startswith("opencode/"))
+            ]
+        if settings.get("defaultProvider") == "opencode":
+            default_model = settings.get("defaultModel")
+            if default_model == "gpt-5.6-luna":
+                settings["defaultProvider"] = "opencode-go"
+            elif isinstance(default_model, str) and default_model.startswith("muse-spark"):
+                settings["defaultProvider"] = "opencode-go"
+                settings["defaultModel"] = "muse-spark-1.2-contributor"
+            else:
+                settings.pop("defaultProvider", None)
+                settings.pop("defaultModel", None)
+
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(settings, indent=2, sort_keys=True) + "\n")
         path.chmod(0o644)
@@ -1421,18 +1442,18 @@ desired_explicit={
     "google-vertex": [
         model_entry("gemini-3.7-flash", "Gemini 3.7 Flash", reasoning=True, extra={"input": ["text", "image"]}),
     ],
-    "opencode": [
-        model_entry("gpt-5.6-sol", "GPT-5.6 Sol", reasoning=True),
-        model_entry("gpt-5.6-luna", "GPT-5.6 Luna", reasoning=True, extra={"thinkingLevelMap": {"max": "max"}}),
-    ],
     "opencode-go": [
         model_entry("gpt-5.6-luna", "GPT-5.6 Luna", reasoning=True, extra={"thinkingLevelMap": {"max": "max"}}),
         model_entry("muse-spark-1.2-contributor", "Muse Spark 1.2 Contributor", reasoning=True),
-        model_entry("muse-spark-1.2-contributor-free", "Muse Spark 1.2 Contributor Free", reasoning=True),
-        model_entry("muse-spark-1.2-free", "Muse Spark 1.2 Free", reasoning=True),
     ],
 }
-allowed_ids={"gpt-5.6-sol","gpt-5.6-luna","grok-4.6","gemini-3.7-flash","muse-spark-1.2-contributor","muse-spark-1.2-contributor-free","muse-spark-1.2-free"}
+allowed_ids_by_provider={
+    "azure-openai-responses": {"gpt-5.6-sol", "gpt-5.6-luna", "grok-4.6"},
+    "google-vertex": {"gemini-3.7-flash"},
+    "opencode": set(),
+    "opencode-go": {"gpt-5.6-luna", "muse-spark-1.2-contributor"},
+}
+allowed_ids=set().union(*allowed_ids_by_provider.values())
 for prov, explicit_models in desired_explicit.items():
     prov_cfg=providers.setdefault(prov,{})
     overrides=prov_cfg.setdefault("modelOverrides",{})
@@ -1453,7 +1474,10 @@ for prov, explicit_models in desired_explicit.items():
                 updated_override["thinkingLevelMap"]={**current_thinking_map, "max": "max"}
             overrides[mid]=updated_override
             changed=True
-    existing_models=prov_cfg.get("models",[])
+    existing_models=prov_cfg.get("models")
+    if not isinstance(existing_models,list):
+        existing_models=[]
+    existing_models=[mm for mm in existing_models if isinstance(mm,dict)]
     existing_ids={mm.get("id") for mm in existing_models}
     for m in explicit_models:
         if m["id"] not in existing_ids:
@@ -1483,27 +1507,25 @@ for prov, explicit_models in desired_explicit.items():
                     if prov=="azure-openai-responses" and not em.get("baseUrl"):
                         em["baseUrl"]=m["baseUrl"]
                         changed=True
-    prov_cfg["models"]=[mm for mm in existing_models if mm.get("id") in allowed_ids]
+    allowed_for_provider = allowed_ids_by_provider[prov]
+    prov_cfg["models"]=[mm for mm in existing_models if mm.get("id") in allowed_for_provider]
     # filter overrides
-    prov_cfg["modelOverrides"]={k:v for k,v in overrides.items() if k=="*" or k in allowed_ids}
+    prov_cfg["modelOverrides"]={k:v for k,v in overrides.items() if k=="*" or k in allowed_for_provider}
     if len(prov_cfg["modelOverrides"])!=len(overrides):
         changed=True
-# Remove x-preview and other unapproved models/providers
+# OpenCode has no configured models in this setup. Remove its stale custom
+# provider block rather than leaving GPT or Muse entries behind.
+if "opencode" in providers:
+    del providers["opencode"]
+    changed=True
+# Remove other unapproved providers.
 for prov in list(providers.keys()):
     if prov not in desired_explicit:
-        has_allowed=any(k in allowed_ids for k in providers[prov].get("modelOverrides",{}).keys())
+        allowed_for_provider=allowed_ids_by_provider.get(prov, allowed_ids)
+        has_allowed=any(k in allowed_for_provider for k in providers[prov].get("modelOverrides",{}).keys())
         if not has_allowed:
             del providers[prov]
             changed=True
-    if prov=="opencode":
-        for k in list(providers[prov].get("modelOverrides",{}).keys()):
-            if "muse-spark" in k:
-                del providers[prov]["modelOverrides"][k]
-                changed=True
-        for mm in list(providers[prov].get("models",[])):
-            if "muse-spark" in mm.get("id",""):
-                providers[prov]["models"].remove(mm)
-                changed=True
 # Clean empty providers
 for prov in list(providers.keys()):
     if not providers[prov].get("modelOverrides") and not providers[prov].get("models"):
@@ -1557,8 +1579,7 @@ if len(models) < 10:
     fallback = [
         ("google-vertex", "gemini-3.7-flash"), ("google-vertex", "gemini-1.5-flash"), ("google-vertex", "gemini-1.5-flash-8b"), ("google-vertex", "gemini-1.5-pro"),
         ("google-vertex", "gemini-2.0-flash"), ("google-vertex", "gemini-2.0-flash-lite"), ("google-vertex", "gemini-2.5-flash"),
-        ("opencode", "gpt-5.6-sol"), ("opencode", "gpt-5.6-luna"), ("opencode", "claude-opus-4-5"), ("opencode", "claude-sonnet-4"), ("opencode", "gpt-5"), ("opencode", "deepseek-v4-pro"),
-        ("opencode-go", "gpt-5.6-luna"), ("opencode-go", "muse-spark-1.2-contributor"), ("opencode-go", "muse-spark-1.2-contributor-free"), ("opencode-go", "muse-spark-1.2-free"),
+        ("opencode-go", "gpt-5.6-luna"), ("opencode-go", "muse-spark-1.2-contributor"),
         ("azure-openai-responses", "grok-4.6"), ("azure-openai-responses", "gpt-5.6-sol"), ("azure-openai-responses", "gpt-5.6-luna"),
         ("openrouter", "anthropic/claude-opus-4.5"), ("openrouter", "openrouter/auto"),
     ]
@@ -1570,7 +1591,7 @@ if len(models) < 10:
             seen.add(p)
 
 # Ensure critical custom models are present even when discovery succeeded (fresh install must have Grok 4.6 and GPT-5.6 Luna on the configured providers)
-for prov_model in [("azure-openai-responses", "grok-4.6"), ("azure-openai-responses", "gpt-5.6-sol"), ("azure-openai-responses", "gpt-5.6-luna"), ("google-vertex", "gemini-3.7-flash"), ("opencode-go", "gpt-5.6-luna"), ("opencode-go", "muse-spark-1.2-contributor"), ("opencode-go", "muse-spark-1.2-contributor-free"), ("opencode-go", "muse-spark-1.2-free"), ("opencode", "gpt-5.6-sol"), ("opencode", "gpt-5.6-luna")]:
+for prov_model in [("azure-openai-responses", "grok-4.6"), ("azure-openai-responses", "gpt-5.6-sol"), ("azure-openai-responses", "gpt-5.6-luna"), ("google-vertex", "gemini-3.7-flash"), ("opencode-go", "gpt-5.6-luna"), ("opencode-go", "muse-spark-1.2-contributor")]:
     if prov_model not in models:
         models.append(prov_model)
 
@@ -1594,11 +1615,8 @@ for provider, model in models:
         providers[provider] = {}
     providers[provider][model] = {"contextWindow": context_window_for(model)}
 
-# Route Muse Spark to opencode-go only (not opencode) - config must be applied there
-if "opencode" in providers:
-    for key in list(providers["opencode"].keys()):
-        if "muse-spark" in key:
-            del providers["opencode"][key]
+# OpenCode has no custom model entries. Muse Spark is configured only on
+# opencode-go, where the contributor model is advertised.
 
 # Also ensure we have at least these provider keys even if no models discovered for them yet
 for p in ["google-vertex", "opencode", "opencode-go", "openrouter", "azure-openai-responses"]:
@@ -1618,15 +1636,9 @@ custom_explicit = {
     "google-vertex": [
         model_entry("gemini-3.7-flash", "Gemini 3.7 Flash", reasoning=True, extra={"input": ["text", "image"]}),
     ],
-    "opencode": [
-        model_entry("gpt-5.6-sol", "GPT-5.6 Sol", reasoning=True),
-        model_entry("gpt-5.6-luna", "GPT-5.6 Luna", reasoning=True, extra={"thinkingLevelMap": {"max": "max"}}),
-    ],
     "opencode-go": [
         model_entry("gpt-5.6-luna", "GPT-5.6 Luna", reasoning=True, extra={"thinkingLevelMap": {"max": "max"}}),
         model_entry("muse-spark-1.2-contributor", "Muse Spark 1.2 Contributor", reasoning=True),
-        model_entry("muse-spark-1.2-contributor-free", "Muse Spark 1.2 Contributor Free", reasoning=True),
-        model_entry("muse-spark-1.2-free", "Muse Spark 1.2 Free", reasoning=True),
     ],
 }
 
@@ -1646,14 +1658,20 @@ for prov in custom_explicit:
         if m["id"] == "gpt-5.6-luna":
             model_override["thinkingLevelMap"] = {**(model_override.get("thinkingLevelMap") or {}), "max": "max"}
 
-# Filter to only allowed models (Muse Spark aliases, Gemini 3.7 Flash, GPT-5.6 Sol/Luna, and Grok 4.6)
-# This ensures fresh installs match the committed config
-allowed_ids = {"gpt-5.6-sol", "gpt-5.6-luna", "grok-4.6", "gemini-3.7-flash", "muse-spark-1.2-contributor", "muse-spark-1.2-contributor-free", "muse-spark-1.2-free"}
+# Filter by provider. OpenCode has no configured models; opencode-go keeps
+# only the models advertised by that endpoint.
+allowed_ids_by_provider = {
+    "azure-openai-responses": {"gpt-5.6-sol", "gpt-5.6-luna", "grok-4.6"},
+    "google-vertex": {"gemini-3.7-flash"},
+    "opencode": set(),
+    "opencode-go": {"gpt-5.6-luna", "muse-spark-1.2-contributor"},
+}
+allowed_ids = set().union(*allowed_ids_by_provider.values())
 for prov in list(providers.keys()):
-    # keep only wildcard and allowed ids
+    allowed_for_provider = allowed_ids_by_provider.get(prov, allowed_ids)
     filtered = {}
     for k, v in providers[prov].items():
-        if k == "*" or k in allowed_ids:
+        if k == "*" or k in allowed_for_provider:
             filtered[k] = v
     providers[prov] = filtered
 # Remove providers that have no allowed models left (except wildcard is kept only if provider has allowed models)

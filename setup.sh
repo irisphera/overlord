@@ -1288,22 +1288,69 @@ for raw_path in sys.argv[1:]:
         # Remove the formerly managed Runpod Docs server on upgrade.
         servers.pop("runpod-docs", None)
 
-        # OpenCode has no configured models. Remove stale picker entries and
-        # migrate a legacy default to the equivalent opencode-go model when one
-        # exists; otherwise let Prime choose its normal default.
+        # Remove stale picker entries and migrate legacy model IDs to the current
+        # configured versions. OpenCode has no configured models in this setup.
+        muse_spark_model = "muse-spark-1.3-contributor"
+        gemini_model = "gemini-3.8-flash"
+
+        def normalize_muse_spark_model(model):
+            if not isinstance(model, str):
+                return model
+            provider, separator, model_id = model.rpartition("/")
+            if model_id.startswith("muse-spark-") and model_id.endswith("-contributor"):
+                normalized = muse_spark_model
+                return f"{provider}/{normalized}" if separator else normalized
+            if model_id.startswith("muse-spark-"):
+                return None
+            return model
+
+        def normalize_gemini_model(model):
+            if not isinstance(model, str):
+                return model
+            provider, separator, model_id = model.rpartition("/")
+            prefix = "gemini-3."
+            suffix = "-flash"
+            if model_id.startswith(prefix) and model_id.endswith(suffix):
+                minor_text = model_id[len(prefix) : -len(suffix)]
+                try:
+                    minor = int(minor_text)
+                except ValueError:
+                    return model
+                if minor < 8:
+                    normalized = gemini_model
+                    return f"{provider}/{normalized}" if separator else normalized
+            return model
+
+        def normalize_model(model):
+            return normalize_gemini_model(normalize_muse_spark_model(model))
+
         recent_models = settings.get("recentModels")
         if isinstance(recent_models, list):
-            settings["recentModels"] = [
-                model for model in recent_models
-                if not (isinstance(model, str) and model.startswith("opencode/"))
-            ]
+            migrated_recent_models = []
+            for model in recent_models:
+                if isinstance(model, str) and model.startswith("opencode/"):
+                    continue
+                model = normalize_model(model)
+                if model is not None:
+                    migrated_recent_models.append(model)
+            settings["recentModels"] = migrated_recent_models
+
+        raw_default_model = settings.get("defaultModel")
+        default_model = normalize_model(raw_default_model)
+        if isinstance(raw_default_model, str):
+            _, _, raw_model_id = raw_default_model.rpartition("/")
+            if raw_model_id.startswith("muse-spark-"):
+                # Old free/contributor aliases all map to the supported contributor model.
+                default_model = muse_spark_model
+            elif raw_model_id.startswith("gemini-3.") and raw_model_id.endswith("-flash"):
+                _, _, default_model = default_model.rpartition("/")
+        if default_model is not None:
+            settings["defaultModel"] = default_model
         if settings.get("defaultProvider") == "opencode":
-            default_model = settings.get("defaultModel")
             if default_model == "gpt-5.6-luna":
                 settings["defaultProvider"] = "opencode-go"
-            elif isinstance(default_model, str) and default_model.startswith("muse-spark"):
+            elif default_model == muse_spark_model:
                 settings["defaultProvider"] = "opencode-go"
-                settings["defaultModel"] = "muse-spark-1.2-contributor"
             else:
                 settings.pop("defaultProvider", None)
                 settings.pop("defaultModel", None)
@@ -1440,18 +1487,18 @@ desired_explicit={
         model_entry("grok-4.6", "Grok 4.6", reasoning=False, extra={"baseUrl": AZURE_BASEURL}),
     ],
     "google-vertex": [
-        model_entry("gemini-3.7-flash", "Gemini 3.7 Flash", reasoning=True, extra={"input": ["text", "image"]}),
+        model_entry("gemini-3.8-flash", "Gemini 3.8 Flash", reasoning=True, extra={"input": ["text", "image"]}),
     ],
     "opencode-go": [
         model_entry("gpt-5.6-luna", "GPT-5.6 Luna", reasoning=True, extra={"thinkingLevelMap": {"max": "max"}}),
-        model_entry("muse-spark-1.2-contributor", "Muse Spark 1.2 Contributor", reasoning=True),
+        model_entry("muse-spark-1.3-contributor", "Muse Spark 1.3 Contributor", reasoning=True),
     ],
 }
 allowed_ids_by_provider={
     "azure-openai-responses": {"gpt-5.6-sol", "gpt-5.6-luna", "grok-4.6"},
-    "google-vertex": {"gemini-3.7-flash"},
+    "google-vertex": {"gemini-3.8-flash"},
     "opencode": set(),
-    "opencode-go": {"gpt-5.6-luna", "muse-spark-1.2-contributor"},
+    "opencode-go": {"gpt-5.6-luna", "muse-spark-1.3-contributor"},
 }
 allowed_ids=set().union(*allowed_ids_by_provider.values())
 for prov, explicit_models in desired_explicit.items():
@@ -1577,9 +1624,9 @@ except Exception as e:
 if len(models) < 10:
     # fallback: at least ensure these core providers are covered; also use static list to guarantee coverage
     fallback = [
-        ("google-vertex", "gemini-3.7-flash"), ("google-vertex", "gemini-1.5-flash"), ("google-vertex", "gemini-1.5-flash-8b"), ("google-vertex", "gemini-1.5-pro"),
+        ("google-vertex", "gemini-3.8-flash"), ("google-vertex", "gemini-1.5-flash"), ("google-vertex", "gemini-1.5-flash-8b"), ("google-vertex", "gemini-1.5-pro"),
         ("google-vertex", "gemini-2.0-flash"), ("google-vertex", "gemini-2.0-flash-lite"), ("google-vertex", "gemini-2.5-flash"),
-        ("opencode-go", "gpt-5.6-luna"), ("opencode-go", "muse-spark-1.2-contributor"),
+        ("opencode-go", "gpt-5.6-luna"), ("opencode-go", "muse-spark-1.3-contributor"),
         ("azure-openai-responses", "grok-4.6"), ("azure-openai-responses", "gpt-5.6-sol"), ("azure-openai-responses", "gpt-5.6-luna"),
         ("openrouter", "anthropic/claude-opus-4.5"), ("openrouter", "openrouter/auto"),
     ]
@@ -1591,7 +1638,7 @@ if len(models) < 10:
             seen.add(p)
 
 # Ensure critical custom models are present even when discovery succeeded (fresh install must have Grok 4.6 and GPT-5.6 Luna on the configured providers)
-for prov_model in [("azure-openai-responses", "grok-4.6"), ("azure-openai-responses", "gpt-5.6-sol"), ("azure-openai-responses", "gpt-5.6-luna"), ("google-vertex", "gemini-3.7-flash"), ("opencode-go", "gpt-5.6-luna"), ("opencode-go", "muse-spark-1.2-contributor")]:
+for prov_model in [("azure-openai-responses", "grok-4.6"), ("azure-openai-responses", "gpt-5.6-sol"), ("azure-openai-responses", "gpt-5.6-luna"), ("google-vertex", "gemini-3.8-flash"), ("opencode-go", "gpt-5.6-luna"), ("opencode-go", "muse-spark-1.3-contributor")]:
     if prov_model not in models:
         models.append(prov_model)
 
@@ -1634,11 +1681,11 @@ custom_explicit = {
         model_entry("grok-4.6", "Grok 4.6", reasoning=False, extra={"baseUrl": AZURE_BASEURL}),
     ],
     "google-vertex": [
-        model_entry("gemini-3.7-flash", "Gemini 3.7 Flash", reasoning=True, extra={"input": ["text", "image"]}),
+        model_entry("gemini-3.8-flash", "Gemini 3.8 Flash", reasoning=True, extra={"input": ["text", "image"]}),
     ],
     "opencode-go": [
         model_entry("gpt-5.6-luna", "GPT-5.6 Luna", reasoning=True, extra={"thinkingLevelMap": {"max": "max"}}),
-        model_entry("muse-spark-1.2-contributor", "Muse Spark 1.2 Contributor", reasoning=True),
+        model_entry("muse-spark-1.3-contributor", "Muse Spark 1.3 Contributor", reasoning=True),
     ],
 }
 
@@ -1662,9 +1709,9 @@ for prov in custom_explicit:
 # only the models advertised by that endpoint.
 allowed_ids_by_provider = {
     "azure-openai-responses": {"gpt-5.6-sol", "gpt-5.6-luna", "grok-4.6"},
-    "google-vertex": {"gemini-3.7-flash"},
+    "google-vertex": {"gemini-3.8-flash"},
     "opencode": set(),
-    "opencode-go": {"gpt-5.6-luna", "muse-spark-1.2-contributor"},
+    "opencode-go": {"gpt-5.6-luna", "muse-spark-1.3-contributor"},
 }
 allowed_ids = set().union(*allowed_ids_by_provider.values())
 for prov in list(providers.keys()):

@@ -71,10 +71,17 @@ class SetupShTests(unittest.TestCase):
             self.assertNotIn("opencode", data["providers"])
             self.assertEqual(
                 {model["id"] for model in data["providers"]["opencode-go"]["models"]},
-                {"gpt-5.6-luna", "muse-spark-1.2-contributor"},
+                {"gpt-5.6-luna", "muse-spark-1.3-contributor"},
             )
-            self.assertNotIn("muse-spark-1.2-free", json.dumps(data))
-            self.assertNotIn("muse-spark-1.2-contributor-free", json.dumps(data))
+            self.assertEqual(
+                {model["id"] for model in data["providers"]["google-vertex"]["models"]},
+                {"gemini-3.8-flash"},
+            )
+            serialized = json.dumps(data)
+            self.assertNotIn("gemini-3.7-flash", serialized)
+            self.assertNotIn("muse-spark-1.2", serialized)
+            self.assertNotIn("muse-spark-1.3-free", serialized)
+            self.assertNotIn("muse-spark-1.3-contributor-free", serialized)
 
     def test_setup_sh_executable(self):
         import os, stat

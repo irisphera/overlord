@@ -99,20 +99,20 @@ def _ensure_correct_models(path: Path) -> bool:
             _model_entry("grok-4.6", "Grok 4.6", reasoning=False, extra=azure_extra),
         ],
         "google-vertex": [
-            _model_entry("gemini-3.7-flash", "Gemini 3.7 Flash", reasoning=True, extra={"input": ["text", "image"]}),
+            _model_entry("gemini-3.8-flash", "Gemini 3.8 Flash", reasoning=True, extra={"input": ["text", "image"]}),
         ],
         "opencode-go": [
             _model_entry("gpt-5.6-luna", "GPT-5.6 Luna", reasoning=True, extra=luna_extra),
-            _model_entry("muse-spark-1.2-contributor", "Muse Spark 1.2 Contributor", reasoning=True),
+            _model_entry("muse-spark-1.3-contributor", "Muse Spark 1.3 Contributor", reasoning=True),
         ],
     }
 
     allowed_ids_by_provider = {
         "azure-openai-responses": {"gpt-5.6-sol", "gpt-5.6-luna", "grok-4.6"},
-        "google-vertex": {"gemini-3.7-flash"},
+        "google-vertex": {"gemini-3.8-flash"},
         # OpenCode does not advertise Muse Spark or the configured GPT models.
         "opencode": set(),
-        "opencode-go": {"gpt-5.6-luna", "muse-spark-1.2-contributor"},
+        "opencode-go": {"gpt-5.6-luna", "muse-spark-1.3-contributor"},
     }
     allowed_ids = set().union(*allowed_ids_by_provider.values())
 

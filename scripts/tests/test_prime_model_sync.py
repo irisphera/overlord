@@ -23,16 +23,16 @@ def _valid_models_json():
                 ]
             },
             "google-vertex": {
-                "modelOverrides": {"*": {"contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "reasoning": True}, "gemini-3.7-flash": {"contextWindow": 256000}},
+                "modelOverrides": {"*": {"contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "reasoning": True}, "gemini-3.8-flash": {"contextWindow": 256000}},
                 "models": [
-                    {"id": "gemini-3.7-flash", "name": "Gemini 3.7 Flash (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "input": ["text", "image"]},
+                    {"id": "gemini-3.8-flash", "name": "Gemini 3.8 Flash (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "input": ["text", "image"]},
                 ]
             },
             "opencode-go": {
-                "modelOverrides": {"*": {"contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "reasoning": True}, "gpt-5.6-luna": {"contextWindow": 256000, "thinkingLevelMap": {"max": "max"}}, "muse-spark-1.2-contributor": {"contextWindow": 256000}},
+                "modelOverrides": {"*": {"contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "reasoning": True}, "gpt-5.6-luna": {"contextWindow": 256000, "thinkingLevelMap": {"max": "max"}}, "muse-spark-1.3-contributor": {"contextWindow": 256000}},
                 "models": [
                     {"id": "gpt-5.6-luna", "name": "GPT-5.6 Luna (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "thinkingLevelMap": {"max": "max"}},
-                    {"id": "muse-spark-1.2-contributor", "name": "Muse Spark 1.2 Contributor (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True},
+                    {"id": "muse-spark-1.3-contributor", "name": "Muse Spark 1.3 Contributor (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True},
                 ]
             },
         }
@@ -145,9 +145,11 @@ class PrimeModelSyncTests(unittest.TestCase):
                     if m.get("id") == "gpt-5.6-luna":
                         self.assertEqual(m.get("thinkingLevelMap", {}).get("max"), "max")
             # Must remove x-preview and the unsupported OpenCode provider block.
-            self.assertNotIn("x-preview-f-free", json.dumps(data))
+            serialized = json.dumps(data)
+            self.assertNotIn("x-preview-f-free", serialized)
+            self.assertNotIn("muse-spark-1.2", serialized)
             self.assertNotIn("opencode", data["providers"])
-            self.assertIn("gpt-5.6-luna", json.dumps(data))
+            self.assertIn("gpt-5.6-luna", serialized)
             luna_overrides = [
                 provider["modelOverrides"]["gpt-5.6-luna"]["contextWindow"]
                 for provider in data["providers"].values()
@@ -164,7 +166,7 @@ class PrimeModelSyncTests(unittest.TestCase):
             self.assertTrue(all(mapping.get("max") == "max" for mapping in luna_thinking_maps))
             self.assertEqual(
                 {m["id"] for m in data["providers"]["opencode-go"]["models"]},
-                {"gpt-5.6-luna", "muse-spark-1.2-contributor"},
+                {"gpt-5.6-luna", "muse-spark-1.3-contributor"},
             )
             # Custom azure models must carry a baseUrl (else prime-agent drops them)
             for m in data["providers"]["azure-openai-responses"]["models"]:

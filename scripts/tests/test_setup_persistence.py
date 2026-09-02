@@ -119,9 +119,11 @@ class SetupPersistenceTests(unittest.TestCase):
             self.assertEqual(completed.returncode, 0, completed.stderr)
             data = json.loads(models_path.read_text())
             self.assertNotIn("opencode", data["providers"])
+            serialized = json.dumps(data)
+            self.assertNotIn("muse-spark-1.2", serialized)
             self.assertEqual(
                 {model["id"] for model in data["providers"]["opencode-go"]["models"]},
-                {"gpt-5.6-luna", "muse-spark-1.2-contributor"},
+                {"gpt-5.6-luna", "muse-spark-1.3-contributor"},
             )
 
     def test_migrates_stale_opencode_settings(self):
@@ -153,10 +155,78 @@ class SetupPersistenceTests(unittest.TestCase):
             self.assertEqual(completed.returncode, 0, completed.stderr)
             settings = json.loads(settings_path.read_text())
             self.assertEqual(settings["defaultProvider"], "opencode-go")
-            self.assertEqual(settings["defaultModel"], "muse-spark-1.2-contributor")
+            self.assertEqual(settings["defaultModel"], "muse-spark-1.3-contributor")
             self.assertEqual(
                 settings["recentModels"],
-                ["opencode-go/muse-spark-1.2-contributor"],
+                ["opencode-go/muse-spark-1.3-contributor"],
+            )
+
+    def test_migrates_legacy_muse_spark_default_for_opencode_go(self):
+        section = SETUP.split("configure_prime_agent_tools() {", 1)[1]
+        script = section.split("<<'PYEOF'\n", 1)[1].split("\nPYEOF", 1)[0]
+        with tempfile.TemporaryDirectory() as tmp:
+            settings_path = Path(tmp) / "settings.json"
+            settings_path.write_text(
+                json.dumps(
+                    {
+                        "defaultProvider": "opencode-go",
+                        "defaultModel": "opencode-go/muse-spark-1.2-contributor-free",
+                        "recentModels": [
+                            "muse-spark-1.2-contributor",
+                            "opencode-go/muse-spark-1.2-contributor-free",
+                        ],
+                    }
+                )
+                + "\n"
+            )
+            completed = subprocess.run(
+                [sys.executable, "-", str(settings_path)],
+                input=script,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            settings = json.loads(settings_path.read_text())
+            self.assertEqual(settings["defaultProvider"], "opencode-go")
+            self.assertEqual(settings["defaultModel"], "muse-spark-1.3-contributor")
+            self.assertEqual(
+                settings["recentModels"],
+                ["muse-spark-1.3-contributor"],
+            )
+
+    def test_migrates_legacy_gemini_settings(self):
+        section = SETUP.split("configure_prime_agent_tools() {", 1)[1]
+        script = section.split("<<'PYEOF'\n", 1)[1].split("\nPYEOF", 1)[0]
+        with tempfile.TemporaryDirectory() as tmp:
+            settings_path = Path(tmp) / "settings.json"
+            settings_path.write_text(
+                json.dumps(
+                    {
+                        "defaultProvider": "google-vertex",
+                        "defaultModel": "google-vertex/gemini-3.7-flash",
+                        "recentModels": [
+                            "google-vertex/gemini-3.7-flash",
+                            "gemini-3.7-flash",
+                        ],
+                    }
+                )
+                + "\n"
+            )
+            completed = subprocess.run(
+                [sys.executable, "-", str(settings_path)],
+                input=script,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            settings = json.loads(settings_path.read_text())
+            self.assertEqual(settings["defaultProvider"], "google-vertex")
+            self.assertEqual(settings["defaultModel"], "gemini-3.8-flash")
+            self.assertEqual(
+                settings["recentModels"],
+                ["google-vertex/gemini-3.8-flash", "gemini-3.8-flash"],
             )
 
     def test_launcher_prefers_devcontainer_setup(self):

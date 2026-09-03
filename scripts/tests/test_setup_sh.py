@@ -82,6 +82,11 @@ class SetupShTests(unittest.TestCase):
             self.assertNotIn("muse-spark-1.2", serialized)
             self.assertNotIn("muse-spark-1.3-free", serialized)
             self.assertNotIn("muse-spark-1.3-contributor-free", serialized)
+            # Both opencode-go models support max thinking.
+            for mid in ("gpt-5.6-luna", "muse-spark-1.3-contributor"):
+                self.assertEqual(data["providers"]["opencode-go"]["modelOverrides"][mid].get("thinkingLevelMap", {}).get("max"), "max")
+            muse_models = {m["id"]: m for m in data["providers"]["opencode-go"]["models"]}
+            self.assertEqual(muse_models["muse-spark-1.3-contributor"].get("thinkingLevelMap", {}).get("max"), "max")
 
     def test_setup_sh_executable(self):
         import os, stat

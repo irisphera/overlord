@@ -92,6 +92,7 @@ def _ensure_correct_models(path: Path) -> bool:
     # AZURE_OPENAI_BASE_URL / AZURE_OPENAI_RESOURCE_NAME env vars override it at request time.
     azure_extra = {"baseUrl": AZURE_PLACEHOLDER_BASEURL}
     luna_extra = {"thinkingLevelMap": {"max": "max"}}
+    muse_spark_extra = {"thinkingLevelMap": {"max": "max"}}
     desired_explicit = {
         "azure-openai-responses": [
             _model_entry("gpt-5.6-sol", "GPT-5.6 Sol", reasoning=True, extra=azure_extra),
@@ -103,7 +104,7 @@ def _ensure_correct_models(path: Path) -> bool:
         ],
         "opencode-go": [
             _model_entry("gpt-5.6-luna", "GPT-5.6 Luna", reasoning=True, extra=luna_extra),
-            _model_entry("muse-spark-1.3-contributor", "Muse Spark 1.3 Contributor", reasoning=True),
+            _model_entry("muse-spark-1.3-contributor", "Muse Spark 1.3 Contributor", reasoning=True, extra=muse_spark_extra),
         ],
     }
 
@@ -126,19 +127,19 @@ def _ensure_correct_models(path: Path) -> bool:
         if overrides.get("*") != wildcard:
             overrides["*"] = wildcard
             changed = True
-        # Ensure per-model overrides for allowed ids use that model's window and Luna's max thinking.
+        # Ensure per-model overrides for allowed ids use that model's window and max thinking.
         for m in explicit_models:
             mid = m["id"]
             window = _context_window_for(mid)
             current_override = overrides.get(mid) or {}
             desired_override = {"contextWindow": window}
-            if mid == "gpt-5.6-luna":
+            if mid in ("gpt-5.6-luna", "muse-spark-1.3-contributor"):
                 desired_override["thinkingLevelMap"] = {"max": "max"}
             current_thinking_map = current_override.get("thinkingLevelMap") or {}
-            needs_luna_thinking_map = mid == "gpt-5.6-luna" and current_thinking_map.get("max") != "max"
-            if current_override.get("contextWindow") != window or needs_luna_thinking_map:
-                # Preserve any unrelated per-model settings while applying the Luna map.
-                if mid == "gpt-5.6-luna":
+            needs_max_thinking_map = mid in ("gpt-5.6-luna", "muse-spark-1.3-contributor") and current_thinking_map.get("max") != "max"
+            if current_override.get("contextWindow") != window or needs_max_thinking_map:
+                # Preserve any unrelated per-model settings while applying the max-thinking map.
+                if mid in ("gpt-5.6-luna", "muse-spark-1.3-contributor"):
                     desired_override["thinkingLevelMap"] = {**current_thinking_map, "max": "max"}
                 overrides[mid] = {**current_override, **desired_override}
                 changed = True

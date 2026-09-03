@@ -1,16 +1,16 @@
-# Overlord - Minimal dev container (minimal)
-FROM ubuntu:24.04
+# Overlord - Minimal dev container (Debian 13 trixie-slim: smaller than Ubuntu, same tooling)
+FROM debian:trixie-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Base deps + Docker CLI for DinD via socket (optional but kept for dev)
+# NOTE: no lsb-release on trixie-slim; codename comes from /etc/os-release.
 RUN apt-get update && apt-get install -y --no-install-recommends \
   git \
   curl \
   wget \
   ca-certificates \
   gnupg \
-  lsb-release \
   sudo \
   gosu \
   zsh \
@@ -24,9 +24,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN locale-gen en_US.UTF-8
 
-# Docker CLI
-RUN curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg \
-  && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" \
+# Docker CLI (Debian trixie repo)
+RUN mkdir -p /etc/apt/keyrings \
+  && curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg \
+  && . /etc/os-release && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian ${VERSION_CODENAME} stable" \
     | tee /etc/apt/sources.list.d/docker.list > /dev/null \
   && apt-get update && apt-get install -y docker-ce-cli docker-compose-plugin && rm -rf /var/lib/apt/lists/*
 

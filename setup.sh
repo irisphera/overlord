@@ -2,8 +2,9 @@
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
-# setup.sh - Standalone VM + container initializer
-# Idempotent, non-interactive. Installs: zsh, oh-my-zsh, zsh-autosuggestions,
+# setup.sh - Standalone VM + container initializer (Debian 13 trixie preferred, Ubuntu also works)
+# Idempotent, non-interactive, safe to re-run: re-runs update oh-my-zsh/plugins
+# and re-enforce prompt/colors. Installs: zsh, oh-my-zsh, zsh-autosuggestions,
 # zsh-syntax-highlighting, zsh-completions, zellij, lazyvim (neovim + LazyVim starter),
 # codegraph (local code intelligence), prime-agent (256k contextWindow override),
 # DeepSeek Harness (dsh), and Oh My Pi (omp).
@@ -140,7 +141,7 @@ install_base_packages() {
   info "installing: ${missing[*]}"
   run_sudo apt-get install -y --no-install-recommends "${missing[@]}"
   run_sudo rm -rf /var/lib/apt/lists/* 2>/dev/null || true
-  # fd-find installs as fdfind on Ubuntu; link to fd
+  # fd-find installs as fdfind on Debian/Ubuntu; link to fd
   if command -v fdfind >/dev/null 2>&1 && ! command -v fd >/dev/null 2>&1; then
     run_sudo ln -sf "$(command -v fdfind)" /usr/local/bin/fd 2>/dev/null || true
   fi
@@ -472,10 +473,23 @@ install_aws_cli
 # Setup may run as root while interactive shells/zellij run as the 'overlord'
 # user. Provision oh-my-zsh in every target home so no shell misses plugins.
 omz_target_homes() {
-  printf '%s\n' "${HOME}"
-  if [ -d /home/overlord ] && [ "$(realpath /home/overlord 2>/dev/null)" != "$(realpath "${HOME}" 2>/dev/null)" ]; then
-    printf '%s\n' "/home/overlord"
-  fi
+  local seen=""
+  local h
+  for h in "${HOME}" ${SUDO_USER:+/home/${SUDO_USER}} /home/overlord /root; do
+    [ -n "$h" ] || continue
+    [ -d "$h" ] || continue
+    case " $seen " in
+      *" $h "*) continue ;;
+    esac
+    # Compare real paths to avoid duplicates (e.g. HOME=/root).
+    local rh sh
+    rh="$(realpath "$h" 2>/dev/null || printf '%s' "$h")"
+    case " $seen " in
+      *" $rh "*) continue ;;
+    esac
+    seen="$seen $h $rh"
+    printf '%s\n' "$h"
+  done
 }
 
 fix_home_ownership() {
@@ -491,11 +505,23 @@ fix_home_ownership() {
   done
 }
 
+update_git_checkout() {
+  local dir="$1"
+  local label="${2:-$1}"
+  if [ ! -d "${dir}/.git" ]; then
+    return 1
+  fi
+  info "updating ${label}..."
+  # Best-effort only: never fail setup on update errors (dirty tree, offline, etc).
+  git -C "${dir}" pull --ff-only --quiet 2>/dev/null || warn "could not update ${label} (kept existing copy)"
+}
+
 install_oh_my_zsh_for() {
   local target_home="$1"
   local omz_dir="${target_home}/.oh-my-zsh"
   if [ -f "${omz_dir}/oh-my-zsh.sh" ]; then
-    info "oh-my-zsh already installed for ${target_home}"
+    update_git_checkout "${omz_dir}" "oh-my-zsh (${target_home})" || true
+    fix_home_ownership "$omz_dir"
     return 0
   fi
   if [ "$target_home" = "$HOME" ]; then
@@ -548,26 +574,28 @@ install_zsh_plugins_for() {
     info "cloning zsh-autosuggestions..."
     git clone --depth=1 https://github.com/zsh-users/zsh-autosuggestions "${custom}/plugins/zsh-autosuggestions"
   else
-    info "zsh-autosuggestions already present"
+    update_git_checkout "${custom}/plugins/zsh-autosuggestions" "zsh-autosuggestions" || true
   fi
   # zsh-syntax-highlighting
   if [ ! -d "${custom}/plugins/zsh-syntax-highlighting" ]; then
     info "cloning zsh-syntax-highlighting..."
     git clone --depth=1 https://github.com/zsh-users/zsh-syntax-highlighting "${custom}/plugins/zsh-syntax-highlighting"
   else
-    info "zsh-syntax-highlighting already present"
+    update_git_checkout "${custom}/plugins/zsh-syntax-highlighting" "zsh-syntax-highlighting" || true
   fi
   # zsh-completions
   if [ ! -d "${custom}/plugins/zsh-completions" ]; then
     info "cloning zsh-completions..."
     git clone --depth=1 https://github.com/zsh-users/zsh-completions "${custom}/plugins/zsh-completions"
   else
-    info "zsh-completions already present"
+    update_git_checkout "${custom}/plugins/zsh-completions" "zsh-completions" || true
   fi
   # zsh-autocomplete (optional, provides real-time autocomplete)
   if [ ! -d "${custom}/plugins/zsh-autocomplete" ]; then
     info "cloning zsh-autocomplete..."
     git clone --depth=1 https://github.com/marlonrichert/zsh-autocomplete "${custom}/plugins/zsh-autocomplete" 2>&1 | sed 's/^/[zsh-autocomplete] /' || true
+  else
+    update_git_checkout "${custom}/plugins/zsh-autocomplete" "zsh-autocomplete" || true
   fi
 
   # Ensure .zshrc / .zshenv load plugins correctly (idempotent).
@@ -660,13 +688,17 @@ configure_overlord_zsh_files() {
   local target_home="$1"
   local zshrc="${target_home}/.zshrc"
   local zshenv="${target_home}/.zshenv"
+  local bashrc="${target_home}/.bashrc"
   mkdir -p "${target_home}"
-  touch "${zshrc}" "${zshenv}"
+  touch "${zshrc}" "${zshenv}" "${bashrc}"
 
+  # Same marker prefix as before so existing installs update in place.
+  # Content now covers Debian + Ubuntu (both ship a global /etc/zsh/zshrc).
   upsert_overlord_shell_block "${zshenv}" "Overlord: skip Ubuntu global compinit" <<'EOS'
 # --- Overlord: skip Ubuntu global compinit ---
-# Ubuntu /etc/zsh/zshrc runs compinit before ~/.zshrc. That dump never includes
-# zsh-autocomplete helpers, so Tab later prints "_autocomplete__unambiguous not found".
+# Debian/Ubuntu /etc/zsh/zshrc runs compinit before ~/.zshrc. That dump never
+# includes zsh-autocomplete helpers, so Tab later prints
+# "_autocomplete__unambiguous not found".
 skip_global_compinit=1
 EOS
 
@@ -677,11 +709,19 @@ EOS
     rm -f "${zshrc}.bak"
   fi
 
+  # Migrate old dull prompt to a colored one that always shows user@host:path.
+  # bira is built into oh-my-zsh, needs no nerd fonts (agnoster/p10k break on plain VMs).
+  if grep -q 'ZSH_THEME="robbyrussell"' "${zshrc}"; then
+    info "migrating ${zshrc} from robbyrussell to bira (colored user@host:path)..."
+    sed -i.bak 's/ZSH_THEME="robbyrussell"/ZSH_THEME="bira"/' "${zshrc}"
+    rm -f "${zshrc}.bak"
+  fi
+
   if grep -q 'Overlord: oh-my-zsh' "${zshrc}" || ! grep -q 'oh-my-zsh.sh' "${zshrc}"; then
     upsert_overlord_shell_block "${zshrc}" "Overlord: oh-my-zsh" <<'EOS'
 # --- Overlord: oh-my-zsh ---
 export ZSH="$HOME/.oh-my-zsh"
-ZSH_THEME="robbyrussell"
+ZSH_THEME="bira"
 plugins=(git zsh-autosuggestions zsh-syntax-highlighting zsh-completions)
 # Source autocomplete before omz so Completions are on fpath for compinit.
 # Loading it as an omz plugin runs after OMZ compinit and leaves helpers unloaded.
@@ -692,20 +732,90 @@ source $ZSH/oh-my-zsh.sh
 EOS
     info "ensured oh-my-zsh bootstrap in ${zshrc}"
   else
-    if grep -qE '^plugins=\(git\)[[:space:]]*$' "${zshrc}"; then
-      info "updating plugins in ${zshrc}..."
-      sed -i 's/^plugins=(git)/plugins=(git zsh-autosuggestions zsh-syntax-highlighting zsh-completions)/' "${zshrc}"
-    elif ! grep -q 'zsh-autosuggestions' "${zshrc}"; then
-      warn "${zshrc} exists but doesn't contain zsh plugins; please add: plugins=(git zsh-autosuggestions zsh-syntax-highlighting zsh-completions)"
-    else
-      info "zsh plugins already configured in ${zshrc}"
+    # Enforce required plugins on unmanaged .zshrc too (old code only warned).
+    python3 - "${zshrc}" <<'PY' || true
+from pathlib import Path
+import re
+import sys
+path = Path(sys.argv[1])
+text = path.read_text() if path.exists() else ""
+want = ["git", "zsh-autosuggestions", "zsh-syntax-highlighting", "zsh-completions"]
+m = re.search(r"^plugins=\(([^)]*)\)", text, re.M)
+if m:
+    have = m.group(1).split()
+    changed = False
+    for p in want:
+        if p not in have:
+            have.append(p)
+            changed = True
+    # drop zsh-autocomplete from plugin list (must load before compinit instead)
+    if "zsh-autocomplete" in have:
+        have = [p for p in have if p != "zsh-autocomplete"]
+        changed = True
+    if changed:
+        text = text[:m.start()] + "plugins=(" + " ".join(have) + ")" + text[m.end():]
+        path.write_text(text)
+        print(f"updated plugins in {path}")
+else:
+    print(f"no plugins= line in {path}, leaving as-is")
+PY
+    # Enforce bira theme on unmanaged files as well.
+    if grep -qE '^ZSH_THEME=' "${zshrc}"; then
+      sed -i.bak -E 's/^ZSH_THEME=".*"/ZSH_THEME="bira"/; s/^ZSH_THEME='"'"'.*'"'"'/ZSH_THEME="bira"/' "${zshrc}" || true
+      rm -f "${zshrc}.bak"
     fi
     insert_autocomplete_before_omz "${zshrc}"
     info "sourced zsh-autocomplete before oh-my-zsh in ${zshrc}"
   fi
 
-  # Stale dumps from Ubuntu global compinit / old plugin order omit autocomplete helpers.
+  # Colored ls/grep + handy aliases. Always shows colors and folder context.
+  upsert_overlord_shell_block "${zshrc}" "Overlord: colors + aliases" <<'EOS'
+# --- Overlord: colors + aliases ---
+export CLICOLOR=1
+export TERM="${TERM:-xterm-256color}"
+[ -x /usr/bin/dircolors ] && eval "$(dircolors -b 2>/dev/null)"
+alias ls='ls --color=auto'
+alias ll='ls -alF --color=auto'
+alias la='ls -A --color=auto'
+alias l='ls -CF --color=auto'
+alias grep='grep --color=auto'
+alias fgrep='fgrep --color=auto'
+alias egrep='egrep --color=auto'
+EOS
+  upsert_overlord_shell_block "${bashrc}" "Overlord: colors + aliases" <<'EOS'
+# --- Overlord: colors + aliases ---
+export CLICOLOR=1
+export TERM="${TERM:-xterm-256color}"
+[ -x /usr/bin/dircolors ] && eval "$(dircolors -b 2>/dev/null)"
+alias ls='ls --color=auto'
+alias ll='ls -alF --color=auto'
+alias la='ls -A --color=auto'
+alias l='ls -CF --color=auto'
+alias grep='grep --color=auto'
+alias fgrep='fgrep --color=auto'
+alias egrep='egrep --color=auto'
+EOS
+
+  # Colored bash prompt with user@host:folder + git branch (for VMs still on bash).
+  upsert_overlord_shell_block "${bashrc}" "Overlord: bash prompt" <<'EOS'
+# --- Overlord: bash prompt ---
+# Always colored, always shows user@host:full-path + git branch.
+__overlord_git_branch() {
+  git branch --show-current 2>/dev/null | sed 's/^/ (/;s/$/)/'
+}
+case "$TERM" in
+  xterm*|screen*|tmux*|rxvt*) color_prompt=yes ;;
+esac
+if [ "$color_prompt" = yes ]; then
+  PS1='\[\033[01;32m\]\u@\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[01;31m\]$(__overlord_git_branch)\[\033[00m\]\$ '
+else
+  PS1='\u@\h:\w$(__overlord_git_branch)\$ '
+fi
+EOS
+
+  # Stale dumps from global compinit / old plugin order omit autocomplete helpers.
   rm -f "${target_home}/.zcompdump" "${target_home}/.zcompdump"-* "${target_home}/.cache/zsh/compdump" 2>/dev/null || true
+  fix_home_ownership "${zshrc}" "${zshenv}" "${bashrc}" || true
 }
 
 # --- zellij config + autostart on SSH (non-interactive, idempotent) ---
@@ -1491,7 +1601,7 @@ desired_explicit={
     ],
     "opencode-go": [
         model_entry("gpt-5.6-luna", "GPT-5.6 Luna", reasoning=True, extra={"thinkingLevelMap": {"max": "max"}}),
-        model_entry("muse-spark-1.3-contributor", "Muse Spark 1.3 Contributor", reasoning=True),
+        model_entry("muse-spark-1.3-contributor", "Muse Spark 1.3 Contributor", reasoning=True, extra={"thinkingLevelMap": {"max": "max"}}),
     ],
 }
 allowed_ids_by_provider={
@@ -1513,11 +1623,11 @@ for prov, explicit_models in desired_explicit.items():
         window=context_window_for(mid)
         current_override=overrides.get(mid) or {}
         current_thinking_map=current_override.get("thinkingLevelMap") or {}
-        needs_luna_thinking_map = mid=="gpt-5.6-luna" and current_thinking_map.get("max") != "max"
-        if current_override.get("contextWindow")!=window or needs_luna_thinking_map:
+        needs_max_thinking_map = mid in ("gpt-5.6-luna", "muse-spark-1.3-contributor") and current_thinking_map.get("max") != "max"
+        if current_override.get("contextWindow")!=window or needs_max_thinking_map:
             updated_override=dict(current_override)
             updated_override["contextWindow"]=window
-            if mid=="gpt-5.6-luna":
+            if mid in ("gpt-5.6-luna", "muse-spark-1.3-contributor"):
                 updated_override["thinkingLevelMap"]={**current_thinking_map, "max": "max"}
             overrides[mid]=updated_override
             changed=True
@@ -1685,7 +1795,7 @@ custom_explicit = {
     ],
     "opencode-go": [
         model_entry("gpt-5.6-luna", "GPT-5.6 Luna", reasoning=True, extra={"thinkingLevelMap": {"max": "max"}}),
-        model_entry("muse-spark-1.3-contributor", "Muse Spark 1.3 Contributor", reasoning=True),
+        model_entry("muse-spark-1.3-contributor", "Muse Spark 1.3 Contributor", reasoning=True, extra={"thinkingLevelMap": {"max": "max"}}),
     ],
 }
 
@@ -1702,7 +1812,7 @@ for prov in custom_explicit:
         window = context_window_for(m["id"])
         model_override = providers[prov].setdefault(m["id"], {"contextWindow": window, "maxInputTokens": window, "limitTokens": window, "reasoning": True})
         model_override["contextWindow"] = window
-        if m["id"] == "gpt-5.6-luna":
+        if m["id"] in ("gpt-5.6-luna", "muse-spark-1.3-contributor"):
             model_override["thinkingLevelMap"] = {**(model_override.get("thinkingLevelMap") or {}), "max": "max"}
 
 # Filter by provider. OpenCode has no configured models; opencode-go keeps

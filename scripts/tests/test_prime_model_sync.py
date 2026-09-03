@@ -29,10 +29,10 @@ def _valid_models_json():
                 ]
             },
             "opencode-go": {
-                "modelOverrides": {"*": {"contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "reasoning": True}, "gpt-5.6-luna": {"contextWindow": 256000, "thinkingLevelMap": {"max": "max"}}, "muse-spark-1.3-contributor": {"contextWindow": 256000}},
+                "modelOverrides": {"*": {"contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "reasoning": True}, "gpt-5.6-luna": {"contextWindow": 256000, "thinkingLevelMap": {"max": "max"}}, "muse-spark-1.3-contributor": {"contextWindow": 256000, "thinkingLevelMap": {"max": "max"}}},
                 "models": [
                     {"id": "gpt-5.6-luna", "name": "GPT-5.6 Luna (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "thinkingLevelMap": {"max": "max"}},
-                    {"id": "muse-spark-1.3-contributor", "name": "Muse Spark 1.3 Contributor (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True},
+                    {"id": "muse-spark-1.3-contributor", "name": "Muse Spark 1.3 Contributor (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "thinkingLevelMap": {"max": "max"}},
                 ]
             },
         }
@@ -142,7 +142,7 @@ class PrimeModelSyncTests(unittest.TestCase):
                 for m in prov.get("models", []):
                     expected = 180000 if m.get("id") == "grok-4.6" else 256000
                     self.assertEqual(m["contextWindow"], expected)
-                    if m.get("id") == "gpt-5.6-luna":
+                    if m.get("id") in ("gpt-5.6-luna", "muse-spark-1.3-contributor"):
                         self.assertEqual(m.get("thinkingLevelMap", {}).get("max"), "max")
             # Must remove x-preview and the unsupported OpenCode provider block.
             serialized = json.dumps(data)
@@ -164,6 +164,13 @@ class PrimeModelSyncTests(unittest.TestCase):
             ]
             self.assertTrue(luna_thinking_maps)
             self.assertTrue(all(mapping.get("max") == "max" for mapping in luna_thinking_maps))
+            muse_thinking_maps = [
+                provider["modelOverrides"]["muse-spark-1.3-contributor"]["thinkingLevelMap"]
+                for provider in data["providers"].values()
+                if "muse-spark-1.3-contributor" in provider.get("modelOverrides", {})
+            ]
+            self.assertTrue(muse_thinking_maps)
+            self.assertTrue(all(mapping.get("max") == "max" for mapping in muse_thinking_maps))
             self.assertEqual(
                 {m["id"] for m in data["providers"]["opencode-go"]["models"]},
                 {"gpt-5.6-luna", "muse-spark-1.3-contributor"},

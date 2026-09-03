@@ -5,7 +5,7 @@ Minimal per-workspace dev container launcher + standalone VM setup.
 - **Container**: `overlord` creates a persistent container per workspace and runs `setup.sh` inside.
 - **VM direct**: `bash setup.sh` sets up the current machine (AWS-friendly, non-interactive, fixes sudo password prompts).
 
-A clean dev environment with **zsh + oh-my-zsh + autosuggestions + syntax-highlighting + completions + zellij + lazyvim**, plus Prime Agent, DeepSeek Harness, and Oh My Pi coding-agent harnesses.
+A clean dev environment with **zsh + oh-my-zsh (bira theme: colored user@host:path + git) + autosuggestions + syntax-highlighting + completions + zellij + lazyvim**, plus Prime Agent, DeepSeek Harness, and Oh My Pi coding-agent harnesses. Base image is **Debian 13 trixie-slim** (smaller than Ubuntu).
 
 ## Quick start (container)
 

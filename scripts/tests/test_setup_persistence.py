@@ -125,6 +125,10 @@ class SetupPersistenceTests(unittest.TestCase):
                 {model["id"] for model in data["providers"]["opencode-go"]["models"]},
                 {"gpt-5.6-luna", "muse-spark-1.3-contributor"},
             )
+            for mid in ("gpt-5.6-luna", "muse-spark-1.3-contributor"):
+                self.assertEqual(data["providers"]["opencode-go"]["modelOverrides"][mid].get("thinkingLevelMap", {}).get("max"), "max")
+            patched_models = {m["id"]: m for m in data["providers"]["opencode-go"]["models"]}
+            self.assertEqual(patched_models["muse-spark-1.3-contributor"].get("thinkingLevelMap", {}).get("max"), "max")
 
     def test_migrates_stale_opencode_settings(self):
         section = SETUP.split("configure_prime_agent_tools() {", 1)[1]

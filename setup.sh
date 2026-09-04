@@ -191,10 +191,12 @@ own_provisioned_home_files() {
   if [ "$uh" = "$home" ] && [ "$(id -u)" -eq 0 ]; then
     chown "$owner:$owner" "$home" 2>/dev/null || true
   fi
-  for p in .oh-my-zsh .zshrc .bashrc .profile .zprofile .zsh_history .config .local .cache .nvm .prime .npm .bun .zellij .codegraph; do
+  for p in .oh-my-zsh .zshrc .zshenv .bashrc .bash_profile .profile .zprofile .zsh_history .config .local .cache .nvm .prime .npm .bun .zellij .codegraph; do
     [ -e "${home}/${p}" ] || continue
-    cur="$(stat -c '%U' "${home}/${p}" 2>/dev/null || echo "")"
-    [ -n "$cur" ] && [ "$cur" != "$owner" ] || continue
+    # Repair if the top entry OR anything under it belongs to someone else
+    # (root-owned leftovers from previous root runs); find stops at the first
+    # hit, so correctly-owned trees cost almost nothing.
+    find "${home}/${p}" -not -user "$owner" -print -quit 2>/dev/null | grep -q . || continue
     chown -R "$owner:$owner" "${home}/${p}" 2>/dev/null       || run_sudo chown -R "$owner:$owner" "${home}/${p}" 2>/dev/null       || warn "could not chown ${home}/${p} to $owner"
   done
 }

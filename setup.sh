@@ -1753,7 +1753,7 @@ configure_prime_agent_models() {
     info "reusing existing models.json: $existing_models_json"
     # Patch existing file to ensure 256k defaults and Azure Grok 4.6 at 180k (200k max)
     python3 - "$existing_models_json" <<'PYEOF_PATCH'
-import json, sys
+import json, sys, os
 from pathlib import Path
 path = Path(sys.argv[1])
 try:
@@ -1762,7 +1762,8 @@ except Exception as e:
     print(f"could not patch {path}: {e}", file=sys.stderr)
     sys.exit(0)
 changed=False
-AZURE_BASEURL="https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1"
+_azure_resource=os.environ.get("AZURE_OPENAI_RESOURCE_NAME","").strip()
+AZURE_BASEURL=f"https://{_azure_resource}.openai.azure.com/openai/v1" if _azure_resource else "https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1"
 DEFAULT_CONTEXT_WINDOW=256000
 GROK_46_CONTEXT_WINDOW=180000
 def context_window_for(model_id):
@@ -1791,6 +1792,7 @@ desired_explicit={
         model_entry("gpt-5.6-sol", "GPT-5.6 Sol", reasoning=True, extra={"baseUrl": AZURE_BASEURL}),
         model_entry("gpt-5.6-luna", "GPT-5.6 Luna", reasoning=True, extra={"thinkingLevelMap": {"max": "max"}, "baseUrl": AZURE_BASEURL}),
         model_entry("grok-4.6", "Grok 4.6", reasoning=False, extra={"baseUrl": AZURE_BASEURL}),
+        model_entry("gpt-6-astra", "GPT-6 Astra", reasoning=True, extra={"baseUrl": AZURE_BASEURL}),
     ],
     "google-vertex": [
         model_entry("gemini-3.8-flash", "Gemini 3.8 Flash", reasoning=True, extra={"input": ["text", "image"]}),
@@ -1801,7 +1803,7 @@ desired_explicit={
     ],
 }
 allowed_ids_by_provider={
-    "azure-openai-responses": {"gpt-5.6-sol", "gpt-5.6-luna", "grok-4.6"},
+    "azure-openai-responses": {"gpt-5.6-sol", "gpt-5.6-luna", "grok-4.6", "gpt-6-astra"},
     "google-vertex": {"gemini-3.8-flash"},
     "opencode": set(),
     "opencode-go": {"gpt-5.6-luna", "muse-spark-1.3-contributor"},
@@ -1857,9 +1859,15 @@ for prov, explicit_models in desired_explicit.items():
                         if em.get("thinkingLevelMap") != thinking_level_map:
                             em["thinkingLevelMap"]=thinking_level_map
                             changed=True
-                    if prov=="azure-openai-responses" and not em.get("baseUrl"):
-                        em["baseUrl"]=m["baseUrl"]
-                        changed=True
+                    if prov=="azure-openai-responses":
+                        if _azure_resource:
+                            _env_baseurl=f"https://{_azure_resource}.openai.azure.com/openai/v1"
+                            if em.get("baseUrl")!=_env_baseurl:
+                                em["baseUrl"]=_env_baseurl
+                                changed=True
+                        elif not em.get("baseUrl"):
+                            em["baseUrl"]=m["baseUrl"]
+                            changed=True
     allowed_for_provider = allowed_ids_by_provider[prov]
     prov_cfg["models"]=[mm for mm in existing_models if mm.get("id") in allowed_for_provider]
     # filter overrides
@@ -1933,7 +1941,7 @@ if len(models) < 10:
         ("google-vertex", "gemini-3.8-flash"), ("google-vertex", "gemini-1.5-flash"), ("google-vertex", "gemini-1.5-flash-8b"), ("google-vertex", "gemini-1.5-pro"),
         ("google-vertex", "gemini-2.0-flash"), ("google-vertex", "gemini-2.0-flash-lite"), ("google-vertex", "gemini-2.5-flash"),
         ("opencode-go", "gpt-5.6-luna"), ("opencode-go", "muse-spark-1.3-contributor"),
-        ("azure-openai-responses", "grok-4.6"), ("azure-openai-responses", "gpt-5.6-sol"), ("azure-openai-responses", "gpt-5.6-luna"),
+        ("azure-openai-responses", "grok-4.6"), ("azure-openai-responses", "gpt-5.6-sol"), ("azure-openai-responses", "gpt-5.6-luna"), ("azure-openai-responses", "gpt-6-astra"),
         ("openrouter", "anthropic/claude-opus-4.5"), ("openrouter", "openrouter/auto"),
     ]
     # merge without duplicates
@@ -1944,7 +1952,7 @@ if len(models) < 10:
             seen.add(p)
 
 # Ensure critical custom models are present even when discovery succeeded (fresh install must have Grok 4.6 and GPT-5.6 Luna on the configured providers)
-for prov_model in [("azure-openai-responses", "grok-4.6"), ("azure-openai-responses", "gpt-5.6-sol"), ("azure-openai-responses", "gpt-5.6-luna"), ("google-vertex", "gemini-3.8-flash"), ("opencode-go", "gpt-5.6-luna"), ("opencode-go", "muse-spark-1.3-contributor")]:
+for prov_model in [("azure-openai-responses", "grok-4.6"), ("azure-openai-responses", "gpt-5.6-sol"), ("azure-openai-responses", "gpt-5.6-luna"), ("azure-openai-responses", "gpt-6-astra"), ("google-vertex", "gemini-3.8-flash"), ("opencode-go", "gpt-5.6-luna"), ("opencode-go", "muse-spark-1.3-contributor")]:
     if prov_model not in models:
         models.append(prov_model)
 
@@ -1976,15 +1984,18 @@ for p in ["google-vertex", "opencode", "opencode-go", "openrouter", "azure-opena
     providers.setdefault(p, {})
 
 # Azure custom models need an explicit baseUrl: prime-agent silently drops custom models
-# whose baseUrl resolves falsy (built-in azure models have baseUrl ""). The env vars
-# AZURE_OPENAI_BASE_URL / AZURE_OPENAI_RESOURCE_NAME override this placeholder at request time.
-AZURE_BASEURL = "https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1"
+# whose baseUrl resolves falsy (built-in azure models have baseUrl ""). The URL is built
+# from AZURE_OPENAI_RESOURCE_NAME when set (AZURE_OPENAI_BASE_URL /
+# AZURE_OPENAI_RESOURCE_NAME env vars still override it at request time).
+_azure_resource = os.environ.get("AZURE_OPENAI_RESOURCE_NAME", "").strip()
+AZURE_BASEURL = f"https://{_azure_resource}.openai.azure.com/openai/v1" if _azure_resource else "https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1"
 # Build final output with defaults 256k and explicit custom models (ensures Grok 4.6 is always present on Azure)
 custom_explicit = {
     "azure-openai-responses": [
         model_entry("gpt-5.6-sol", "GPT-5.6 Sol", reasoning=True, extra={"baseUrl": AZURE_BASEURL}),
         model_entry("gpt-5.6-luna", "GPT-5.6 Luna", reasoning=True, extra={"thinkingLevelMap": {"max": "max"}, "baseUrl": AZURE_BASEURL}),
         model_entry("grok-4.6", "Grok 4.6", reasoning=False, extra={"baseUrl": AZURE_BASEURL}),
+        model_entry("gpt-6-astra", "GPT-6 Astra", reasoning=True, extra={"baseUrl": AZURE_BASEURL}),
     ],
     "google-vertex": [
         model_entry("gemini-3.8-flash", "Gemini 3.8 Flash", reasoning=True, extra={"input": ["text", "image"]}),
@@ -2014,7 +2025,7 @@ for prov in custom_explicit:
 # Filter by provider. OpenCode has no configured models; opencode-go keeps
 # only the models advertised by that endpoint.
 allowed_ids_by_provider = {
-    "azure-openai-responses": {"gpt-5.6-sol", "gpt-5.6-luna", "grok-4.6"},
+    "azure-openai-responses": {"gpt-5.6-sol", "gpt-5.6-luna", "grok-4.6", "gpt-6-astra"},
     "google-vertex": {"gemini-3.8-flash"},
     "opencode": set(),
     "opencode-go": {"gpt-5.6-luna", "muse-spark-1.3-contributor"},

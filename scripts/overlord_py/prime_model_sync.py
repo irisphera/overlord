@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import json
+import os
 import shutil
 from typing import Final
 
@@ -13,6 +14,20 @@ HOST_MODELS_JSON: Final = Path(".prime/agent/models.json")
 DEFAULT_CONTEXT_WINDOW: Final = 256000
 GROK_46_CONTEXT_WINDOW: Final = 180000
 AZURE_PLACEHOLDER_BASEURL: Final = "https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1"
+
+
+def _azure_baseurl() -> str:
+    """Build the Azure baseUrl from AZURE_OPENAI_RESOURCE_NAME when set.
+
+    prime-agent resolves AZURE_OPENAI_BASE_URL / AZURE_OPENAI_RESOURCE_NAME at
+    request time, but models.json still needs a truthy baseUrl or the custom
+    model is silently dropped. Use the env var value when available so the
+    stored URL tracks the configured resource, falling back to the placeholder.
+    """
+    resource = os.environ.get("AZURE_OPENAI_RESOURCE_NAME", "").strip()
+    if resource:
+        return f"https://{resource}.openai.azure.com/openai/v1"
+    return AZURE_PLACEHOLDER_BASEURL
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,8 +104,9 @@ def _ensure_correct_models(path: Path) -> bool:
     # Desired explicit models (must be present)
     # Azure custom models need an explicit baseUrl: prime-agent silently drops custom
     # models whose baseUrl resolves falsy (built-in azure models have baseUrl "").
-    # AZURE_OPENAI_BASE_URL / AZURE_OPENAI_RESOURCE_NAME env vars override it at request time.
-    azure_extra = {"baseUrl": AZURE_PLACEHOLDER_BASEURL}
+    # The URL is built from AZURE_OPENAI_RESOURCE_NAME when set (AZURE_OPENAI_BASE_URL /
+    # AZURE_OPENAI_RESOURCE_NAME env vars still override it at request time).
+    azure_extra = {"baseUrl": _azure_baseurl()}
     luna_extra = {"thinkingLevelMap": {"max": "max"}}
     muse_spark_extra = {"thinkingLevelMap": {"max": "max"}}
     desired_explicit = {
@@ -98,6 +114,7 @@ def _ensure_correct_models(path: Path) -> bool:
             _model_entry("gpt-5.6-sol", "GPT-5.6 Sol", reasoning=True, extra=azure_extra),
             _model_entry("gpt-5.6-luna", "GPT-5.6 Luna", reasoning=True, extra={**azure_extra, **luna_extra}),
             _model_entry("grok-4.6", "Grok 4.6", reasoning=False, extra=azure_extra),
+            _model_entry("gpt-6-astra", "GPT-6 Astra", reasoning=True, extra=azure_extra),
         ],
         "google-vertex": [
             _model_entry("gemini-3.8-flash", "Gemini 3.8 Flash", reasoning=True, extra={"input": ["text", "image"]}),
@@ -109,7 +126,7 @@ def _ensure_correct_models(path: Path) -> bool:
     }
 
     allowed_ids_by_provider = {
-        "azure-openai-responses": {"gpt-5.6-sol", "gpt-5.6-luna", "grok-4.6"},
+        "azure-openai-responses": {"gpt-5.6-sol", "gpt-5.6-luna", "grok-4.6", "gpt-6-astra"},
         "google-vertex": {"gemini-3.8-flash"},
         # OpenCode does not advertise Muse Spark or the configured GPT models.
         "opencode": set(),
@@ -175,9 +192,18 @@ def _ensure_correct_models(path: Path) -> bool:
                             if em.get("thinkingLevelMap") != thinking_level_map:
                                 em["thinkingLevelMap"] = thinking_level_map
                                 changed = True
-                        if prov == "azure-openai-responses" and not em.get("baseUrl"):
-                            em["baseUrl"] = m["baseUrl"]
-                            changed = True
+                        if prov == "azure-openai-responses":
+                            # When AZURE_OPENAI_RESOURCE_NAME is set, the stored URL
+                            # must track it; otherwise just ensure a truthy baseUrl.
+                            env_resource = os.environ.get("AZURE_OPENAI_RESOURCE_NAME", "").strip()
+                            if env_resource:
+                                env_baseurl = f"https://{env_resource}.openai.azure.com/openai/v1"
+                                if em.get("baseUrl") != env_baseurl:
+                                    em["baseUrl"] = env_baseurl
+                                    changed = True
+                            elif not em.get("baseUrl"):
+                                em["baseUrl"] = m["baseUrl"]
+                                changed = True
         # Filter models by provider so a valid ID cannot be routed to the wrong endpoint.
         allowed_for_provider = allowed_ids_by_provider[prov]
         filtered = [m for m in existing_models if m.get("id") in allowed_for_provider]

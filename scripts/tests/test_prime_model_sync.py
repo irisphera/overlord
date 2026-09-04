@@ -8,18 +8,25 @@ from overlord_py.prime_model_sync import sync_host_prime_models
 import json
 
 # Helper to create a minimal valid patched models.json (what _ensure_correct_models would produce)
+def _azure_test_baseurl():
+    import os
+    _r = os.environ.get("AZURE_OPENAI_RESOURCE_NAME", "").strip()
+    return f"https://{_r}.openai.azure.com/openai/v1" if _r else "https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1"
+
 def _valid_models_json():
     # This is what _ensure_correct_models ensures for a fresh valid file
+    _azure_base = _azure_test_baseurl()
     return json.dumps({
         "defaults": {"contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "reasoning": True},
         "providers": {
             "azure-openai-responses": {
                 "modelOverrides": {"*": {"contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "reasoning": True},
-                                   "gpt-5.6-luna": {"contextWindow": 256000, "thinkingLevelMap": {"max": "max"}}, "gpt-5.6-sol": {"contextWindow": 256000}, "grok-4.6": {"contextWindow": 180000}},
+                                   "gpt-5.6-luna": {"contextWindow": 256000, "thinkingLevelMap": {"max": "max"}}, "gpt-5.6-sol": {"contextWindow": 256000}, "grok-4.6": {"contextWindow": 180000}, "gpt-6-astra": {"contextWindow": 256000}},
                 "models": [
-                    {"id": "gpt-5.6-sol", "name": "GPT-5.6 Sol (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "baseUrl": "https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1"},
-                    {"id": "gpt-5.6-luna", "name": "GPT-5.6 Luna (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "thinkingLevelMap": {"max": "max"}, "baseUrl": "https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1"},
-                    {"id": "grok-4.6", "name": "Grok 4.6 (180k)", "contextWindow": 180000, "maxInputTokens": 180000, "limitTokens": 180000, "maxTokens": 16384, "reasoning": False, "baseUrl": "https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1"},
+                    {"id": "gpt-5.6-sol", "name": "GPT-5.6 Sol (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "baseUrl": _azure_base},
+                    {"id": "gpt-5.6-luna", "name": "GPT-5.6 Luna (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "thinkingLevelMap": {"max": "max"}, "baseUrl": _azure_base},
+                    {"id": "grok-4.6", "name": "Grok 4.6 (180k)", "contextWindow": 180000, "maxInputTokens": 180000, "limitTokens": 180000, "maxTokens": 16384, "reasoning": False, "baseUrl": _azure_base},
+                    {"id": "gpt-6-astra", "name": "GPT-6 Astra (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "baseUrl": _azure_base},
                 ]
             },
             "google-vertex": {

@@ -92,6 +92,124 @@ run_sudo() {
   fi
 }
 
+# --- console users + setup identity (defined early: the install steps
+# below call these before anything user-scoped is installed) ---
+console_login_users() {
+  local seen="" u
+  if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ] && id "${SUDO_USER}" >/dev/null 2>&1; then
+    printf '%s\n' "${SUDO_USER}"
+    seen=" ${SUDO_USER} "
+  fi
+  local entry name uid home shell
+  while IFS=: read -r name _ uid _ _ home shell; do
+    case " $seen " in *" $name "*) continue ;; esac
+    case "$uid" in ''|*[!0-9]*) continue ;; esac
+    [ "$uid" -ge 1000 ] || continue
+    case "$shell" in *nologin*|*/false|"") continue ;; esac
+    [ -d "$home" ] || continue
+    seen="$seen $name "
+    printf '%s\n' "$name"
+  done < <(getent passwd)
+  if id overlord >/dev/null 2>&1; then
+    case " $seen " in *" overlord "*) ;; *) printf '%s\n' overlord ;; esac
+  fi
+}
+omz_target_homes() {
+  local seen=""
+  local h u uh
+  {
+    printf '%s\n' "${HOME}"
+    [ -n "${SUDO_USER:-}" ] && printf '/home/%s\n' "${SUDO_USER}"
+    printf '/home/overlord\n/root\n'
+    while IFS= read -r u; do
+      uh="$(getent passwd "$u" 2>/dev/null | cut -d: -f6)"
+      [ -n "$uh" ] && printf '%s\n' "$uh"
+    done < <(console_login_users)
+  } | while IFS= read -r h; do
+    [ -n "$h" ] || continue
+    [ -d "$h" ] || continue
+    case " $seen " in
+      *" $h "*) continue ;;
+    esac
+    # Compare real paths to avoid duplicates (e.g. HOME=/root).
+    local rh sh
+    rh="$(realpath "$h" 2>/dev/null || printf '%s' "$h")"
+    case " $seen " in
+      *" $rh "*) continue ;;
+    esac
+    seen="$seen $h $rh"
+    printf '%s\n' "$h"
+  done
+}
+resolve_setup_identity() {
+  TARGET_USER="$(whoami)"
+  if id overlord >/dev/null 2>&1; then
+    TARGET_USER="overlord"
+  else
+    local first
+    first="$(console_login_users | head -n1 || true)"
+    [ -n "$first" ] && TARGET_USER="$first"
+  fi
+  TARGET_HOME="$(getent passwd "$TARGET_USER" 2>/dev/null | cut -d: -f6)"
+  [ -n "$TARGET_HOME" ] || TARGET_HOME="$HOME"
+  NATIVE_USER_INSTALL=""
+  if [ "$(id -u)" -eq 0 ] && [ "$TARGET_USER" != "root" ] && ! id overlord >/dev/null 2>&1; then
+    NATIVE_USER_INSTALL=1
+  fi
+  info "setup identity: user=$TARGET_USER home=$TARGET_HOME${NATIVE_USER_INSTALL:+ (native mode: user-scoped tools install as $TARGET_USER)}"
+}
+as_target() {
+  # Run a user-scoped command as the target console user when we are root on a
+  # native VM; otherwise run directly.
+  if [ -n "${NATIVE_USER_INSTALL:-}" ]; then
+    if command -v sudo >/dev/null 2>&1; then
+      sudo -H -u "$TARGET_USER" env HOME="$TARGET_HOME" "$@"
+    elif command -v runuser >/dev/null 2>&1; then
+      runuser -u "$TARGET_USER" -- env HOME="$TARGET_HOME" "$@"
+    else
+      warn "cannot drop privileges (no sudo/runuser); running as root: $*"
+      "$@"
+    fi
+  else
+    "$@"
+  fi
+}
+own_provisioned_home_files() {
+  local home="$1" owner uh p cur
+  [ -d "$home" ] || return 0
+  owner="$(stat -c '%U' "$home" 2>/dev/null || echo "")"
+  [ -n "$owner" ] || return 0
+  # The home dir itself must belong to its user (root-created homes lock out
+  # everything); contents are fixed per managed path below.
+  uh="$(getent passwd "$owner" 2>/dev/null | cut -d: -f6)"
+  if [ "$uh" = "$home" ] && [ "$(id -u)" -eq 0 ]; then
+    chown "$owner:$owner" "$home" 2>/dev/null || true
+  fi
+  for p in .oh-my-zsh .zshrc .bashrc .profile .zprofile .zsh_history .config .local .cache .nvm .prime .npm .bun .zellij .codegraph; do
+    [ -e "${home}/${p}" ] || continue
+    cur="$(stat -c '%U' "${home}/${p}" 2>/dev/null || echo "")"
+    [ -n "$cur" ] && [ "$cur" != "$owner" ] || continue
+    chown -R "$owner:$owner" "${home}/${p}" 2>/dev/null       || run_sudo chown -R "$owner:$owner" "${home}/${p}" 2>/dev/null       || warn "could not chown ${home}/${p} to $owner"
+  done
+}
+own_all_provisioned_homes() {
+  local target_home
+  while IFS= read -r target_home; do
+    own_provisioned_home_files "$target_home"
+  done < <(omz_target_homes)
+}
+ensure_git_safe_directories() {
+  command -v git >/dev/null 2>&1 || return 0
+  if git config --system --get-all safe.directory 2>/dev/null | grep -qxF '*'; then
+    return 0
+  fi
+  if [ "$(id -u)" -eq 0 ]; then
+    git config --system --add safe.directory '*' 2>/dev/null && info "git trusts all directories (safe.directory '*')" || warn "could not set system git safe.directory"
+  else
+    run_sudo git config --system --add safe.directory '*' 2>/dev/null       && info "git trusts all directories (safe.directory '*')"       || warn "could not set system git safe.directory"
+  fi
+}
+
 APT_UPDATED=0
 apt_update_once() {
   if [ "${APT_UPDATED}" -eq 0 ]; then
@@ -191,26 +309,45 @@ NVM_VERSION="${NVM_VERSION:-0.40.3}"
 NODE_MAJOR="${NODE_MAJOR:-24}"
 install_nvm_node() {
   local nvm_dir="${NVM_DIR:-${HOME}/.nvm}"
-  export NVM_DIR="$nvm_dir"
-  if [ ! -s "${nvm_dir}/nvm.sh" ]; then
-    info "installing nvm v${NVM_VERSION}..."
-    curl -fsSL "https://raw.githubusercontent.com/nvm-sh/nvm/v${NVM_VERSION}/install.sh" \
-      | bash -s -- --no-use 2>&1 | sed 's/^/[nvm] /' || warn "nvm install failed"
+  if [ -n "${NATIVE_USER_INSTALL:-}" ]; then
+    # Native VM: the toolchain must belong to the console user, not root.
+    # Install + provision Node fully as the target user, then source it here
+    # (readable) so later root-side npm steps work too.
+    nvm_dir="${TARGET_HOME}/.nvm"
+    info "installing Node.js ${NODE_MAJOR} as ${TARGET_USER}..."
+    as_target env NVM_DIR="$nvm_dir" bash -c '
+      export NVM_DIR="$NVM_DIR"
+      if [ ! -s "$NVM_DIR/nvm.sh" ]; then
+        curl -fsSL "https://raw.githubusercontent.com/nvm-sh/nvm/v'"$NVM_VERSION"'/install.sh" | bash -s -- --no-use
+      fi
+      # shellcheck disable=SC1091
+      . "$NVM_DIR/nvm.sh" --no-use
+      nvm install "'"$NODE_MAJOR"'" && nvm alias default "'"$NODE_MAJOR"'" >/dev/null && nvm use default --silent
+    ' 2>&1 | sed 's/^/[nvm] /' || warn "Node.js ${NODE_MAJOR} install as ${TARGET_USER} failed"
   else
-    info "nvm already installed"
+    if [ ! -s "${nvm_dir}/nvm.sh" ]; then
+      info "installing nvm v${NVM_VERSION}..."
+      curl -fsSL "https://raw.githubusercontent.com/nvm-sh/nvm/v${NVM_VERSION}/install.sh" \
+        | bash -s -- --no-use 2>&1 | sed 's/^/[nvm] /' || warn "nvm install failed"
+    else
+      info "nvm already installed"
+    fi
+    # shellcheck disable=SC1091
+    . "${nvm_dir}/nvm.sh" --no-use >/dev/null 2>&1 || true
+    if ! type nvm >/dev/null 2>&1; then
+      warn "nvm not available; skipping Node.js install (npm-dependent steps may fail)"
+      return 0
+    fi
+    if ! command -v node >/dev/null 2>&1 || ! node --version 2>/dev/null | grep -q "^v${NODE_MAJOR}\."; then
+      info "installing Node.js ${NODE_MAJOR} via nvm..."
+      nvm install "${NODE_MAJOR}" 2>&1 | sed 's/^/[nvm] /' || warn "Node.js ${NODE_MAJOR} install failed"
+    fi
+    nvm alias default "${NODE_MAJOR}" >/dev/null 2>&1 || true
+    nvm use default --silent >/dev/null 2>&1 || true
   fi
+  export NVM_DIR="$nvm_dir"
   # shellcheck disable=SC1091
   . "${nvm_dir}/nvm.sh" --no-use >/dev/null 2>&1 || true
-  if ! type nvm >/dev/null 2>&1; then
-    warn "nvm not available; skipping Node.js install (npm-dependent steps may fail)"
-    return 0
-  fi
-  if ! command -v node >/dev/null 2>&1 || ! node --version 2>/dev/null | grep -q "^v${NODE_MAJOR}\."; then
-    info "installing Node.js ${NODE_MAJOR} via nvm..."
-    nvm install "${NODE_MAJOR}" 2>&1 | sed 's/^/[nvm] /' || warn "Node.js ${NODE_MAJOR} install failed"
-  fi
-  nvm alias default "${NODE_MAJOR}" >/dev/null 2>&1 || true
-  nvm use default --silent >/dev/null 2>&1 || true
   if command -v node >/dev/null 2>&1; then
     info "node $(node --version), npm $(npm --version)"
   else
@@ -314,11 +451,28 @@ sync_prime_agent_rc_for() {
       *prime-agent*|*prime_agent*|*NVM_DIR*|*nvm.sh*) ;;
       *) continue ;;
     esac
+    # Never leak another home's absolute paths (e.g. /root/.nvm from a root
+    # install) into this user's shell: those lines break with permission
+    # denied and shadow the user's own toolchain.
+    case "$line" in
+      *"${HOME}"*) [ "$home" = "${HOME}" ] || continue ;;
+    esac
     if ! grep -qxF "$line" "$zshrc"; then
       printf '%s\n' "$line" >> "$zshrc"
       info "copied to ${zshrc}: $line"
     fi
   done < "$bashrc"
+  # If this user has their own nvm, make sure the shell loads it (uses $HOME
+  # literally, so it stays correct per user).
+  if [ -s "${home}/.nvm/nvm.sh" ]; then
+    local nvm_line
+    for nvm_line in 'export NVM_DIR="$HOME/.nvm"' '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # loads nvm' '[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # loads nvm bash_completion'; do
+      if ! grep -qxF "$nvm_line" "$zshrc"; then
+        printf '%s\n' "$nvm_line" >> "$zshrc"
+        info "added to ${zshrc}: $nvm_line"
+      fi
+    done
+  fi
   fix_home_ownership "$zshrc"
 }
 
@@ -377,31 +531,57 @@ publish_tool_commands() {
 }
 
 # Published /usr/local/bin symlinks often resolve through a home dir
-# ($HOME/.nvm, ~/.prime/bin). If that home blocks traversal (Debian keeps
-# /root at 700), every other user gets 'permission denied' on node, npm,
-# prime-agent, etc. Grant traverse-only (o+x) on such homes so published tools
-# work for all users. Files inside keep their own permissions.
+# ($HOME/.nvm, ~/.prime/bin). If any directory on that chain blocks traversal
+# (Debian keeps /root at 700), every other user gets 'permission denied' on
+# node, npm, prime-agent, etc. Grant traverse-only (o+x) on blocking chain
+# directories and read (o+r) on a locked binary itself. Files otherwise keep
+# their own permissions.
+ensure_traversable_chain() {
+  local target="$1" tool="$2" dir mode last
+  dir="$(dirname "$target")"
+  while :; do
+    case "$dir" in
+      /root|/root/*|/home/*) : ;;
+      *) break ;;
+    esac
+    if [ -d "$dir" ]; then
+      mode="$(stat -c '%a' "$dir" 2>/dev/null || echo "")"
+      last="${mode: -1}"
+      case "$last" in
+        1|3|5|7) : ;;
+        *)
+          if [ "$(id -u)" -eq 0 ]; then
+            chmod o+x "$dir" 2>/dev/null && info "made $dir traversable (o+x) for published $tool" || warn "could not chmod $dir"
+          else
+            run_sudo chmod o+x "$dir" 2>/dev/null \
+              && info "made $dir traversable (o+x) for published $tool" \
+              || warn "could not make $dir traversable; other users may hit 'permission denied' on $tool"
+          fi
+          ;;
+      esac
+    fi
+    if [ "$dir" = "/root" ]; then break; fi
+    dir="$(dirname "$dir")"
+  done
+  if [ -f "$target" ] && [ "$(id -u)" -eq 0 ]; then
+    mode="$(stat -c '%a' "$target" 2>/dev/null || echo "")"
+    last="${mode: -1}"
+    case "$last" in
+      0|1|2|3) chmod o+r "$target" 2>/dev/null && info "made $target readable (o+r) for published $tool" || true ;;
+    esac
+  fi
+}
+
 ensure_cross_user_tool_access() {
-  local tool dest target home_dir mode last
+  local tool dest target
   for tool in node npm npx corepack prime-agent codegraph uv aws dsh omp; do
     dest="/usr/local/bin/$tool"
     [ -L "$dest" ] || continue
     target="$(readlink -f "$dest" 2>/dev/null || true)"
     [ -n "$target" ] || continue
     case "$target" in
-      /root/*) home_dir="/root" ;;
-      /home/*/*) home_dir="$(printf '%s' "$target" | cut -d/ -f1-3)" ;;
-      *) continue ;;
+      /root/*|/home/*) ensure_traversable_chain "$target" "$tool" ;;
     esac
-    [ -d "$home_dir" ] || continue
-    mode="$(stat -c '%a' "$home_dir" 2>/dev/null || echo "")"
-    last="${mode: -1}"
-    case "$last" in 1|3|5|7) continue ;; esac
-    if [ "$(id -u)" -eq 0 ]; then
-      chmod o+x "$home_dir" && info "made $home_dir traversable (o+x) so all users can run published $tool"
-    else
-      run_sudo chmod o+x "$home_dir" 2>/dev/null         && info "made $home_dir traversable (o+x) so all users can run published $tool"         || warn "could not make $home_dir traversable; other users may hit 'permission denied' on $tool"
-    fi
   done
 }
 
@@ -411,7 +591,7 @@ verify_login_shell_tools() {
   fi
   local command_name target_home
   while IFS= read -r target_home; do
-    for command_name in node npm prime-agent omp; do
+    for command_name in node npm npx prime-agent git omp; do
       if env -i HOME="$target_home" USER="$(stat -c '%U' "$target_home" 2>/dev/null || id -un)" TERM="${TERM:-xterm}" \
         PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
         zsh -lic "command -v $command_name" >/dev/null 2>&1; then
@@ -486,6 +666,12 @@ install_codegraph() {
   fi
 }
 
+# Resolve who this machine is for before anything user-scoped is installed.
+# Also repair ownership damage from previous root runs and trust checkouts, so
+# plain commands work without sudo.
+resolve_setup_identity
+ensure_git_safe_directories
+own_all_provisioned_homes
 install_nvm_node
 install_codegraph
 ensure_node_shell_rc
@@ -496,57 +682,16 @@ install_aws_cli
 # Human login users that will actually open shells on this machine. Covers
 # native VMs (admin/ubuntu/debian, even when setup runs as root without
 # SUDO_USER via su/cloud-init/SSM) as well as the Overlord container user.
-console_login_users() {
-  local seen="" u
-  if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ] && id "${SUDO_USER}" >/dev/null 2>&1; then
-    printf '%s\n' "${SUDO_USER}"
-    seen=" ${SUDO_USER} "
-  fi
-  local entry name uid home shell
-  while IFS=: read -r name _ uid _ _ home shell; do
-    case " $seen " in *" $name "*) continue ;; esac
-    case "$uid" in ''|*[!0-9]*) continue ;; esac
-    [ "$uid" -ge 1000 ] || continue
-    case "$shell" in *nologin*|*/false|"") continue ;; esac
-    [ -d "$home" ] || continue
-    seen="$seen $name "
-    printf '%s\n' "$name"
-  done < <(getent passwd)
-  if id overlord >/dev/null 2>&1; then
-    case " $seen " in *" overlord "*) ;; *) printf '%s\n' overlord ;; esac
-  fi
-}
 
 # Setup may run as root while interactive shells/zellij run as the 'overlord'
 # user (container) or a login user like admin (native VM). Provision oh-my-zsh
 # in every target home so no shell misses plugins.
-omz_target_homes() {
-  local seen=""
-  local h u uh
-  {
-    printf '%s\n' "${HOME}"
-    [ -n "${SUDO_USER:-}" ] && printf '/home/%s\n' "${SUDO_USER}"
-    printf '/home/overlord\n/root\n'
-    while IFS= read -r u; do
-      uh="$(getent passwd "$u" 2>/dev/null | cut -d: -f6)"
-      [ -n "$uh" ] && printf '%s\n' "$uh"
-    done < <(console_login_users)
-  } | while IFS= read -r h; do
-    [ -n "$h" ] || continue
-    [ -d "$h" ] || continue
-    case " $seen " in
-      *" $h "*) continue ;;
-    esac
-    # Compare real paths to avoid duplicates (e.g. HOME=/root).
-    local rh sh
-    rh="$(realpath "$h" 2>/dev/null || printf '%s' "$h")"
-    case " $seen " in
-      *" $rh "*) continue ;;
-    esac
-    seen="$seen $h $rh"
-    printf '%s\n' "$h"
-  done
-}
+
+# --- setup identity: one script, two layouts ---
+# Container: 'overlord' exists, shells run as overlord, root owns the toolchain
+# in /root (published + traversable) — current behavior, unchanged.
+# Native VM: no overlord user; user-scoped toolchains must belong to the human
+# console user, never root — otherwise every command needs sudo.
 
 fix_home_ownership() {
   local target owner
@@ -560,6 +705,15 @@ fix_home_ownership() {
     fi
   done
 }
+
+# Previous root runs leave root-owned dotfiles inside human homes (.oh-my-zsh,
+# .zshrc, .nvm, ...) — the user then needs sudo for everything, or zsh refuses
+# to load. Hand provisioned paths back to the home owner. Only touches paths
+# whose owner is wrong, so re-runs stay fast.
+
+# Root-owned checkouts make plain 'git status' fail (dubious ownership), which
+# reads as "git needs sudo". Trust checkouts machine-wide: single-tenant dev
+# machine standard (same as devcontainers).
 
 update_git_checkout() {
   local dir="$1"
@@ -1150,7 +1304,15 @@ install_prime_agent() {
   local installer
   installer="$(mktemp)"
   if curl -fsSL https://app.primeintellect.ai/prime-agent/install.sh -o "$installer"; then
-    PRIME_AGENT_INSTALLER_PLAIN=1 PRIME_AGENT_BOOTSTRAP_KERNEL_ON_INSTALL=0 sh "$installer" "$want" 2>&1 | sed 's/^/[prime-agent] /' || true
+    # Native mode installs as the target user, who must be able to read the
+    # root-downloaded installer (mktemp is 600).
+    chmod 644 "$installer" 2>/dev/null || true
+    if [ -n "${NATIVE_USER_INSTALL:-}" ]; then
+      info "installing prime-agent as ${TARGET_USER}..."
+      as_target env PRIME_AGENT_INSTALLER_PLAIN=1 PRIME_AGENT_BOOTSTRAP_KERNEL_ON_INSTALL=0 sh "$installer" "$want" 2>&1 | sed 's/^/[prime-agent] /' || true
+    else
+      PRIME_AGENT_INSTALLER_PLAIN=1 PRIME_AGENT_BOOTSTRAP_KERNEL_ON_INSTALL=0 sh "$installer" "$want" 2>&1 | sed 's/^/[prime-agent] /' || true
+    fi
     rm -f "$installer"
     if command -v prime-agent >/dev/null 2>&1; then
       prime-agent --version 2>&1 | sed 's/^/[prime-agent] /' || true
@@ -1358,7 +1520,6 @@ import os
 from pathlib import Path
 import sys
 
-
 def parse_jsonc(text: str) -> dict:
     """Parse Prime's JSON-with-comments/trailing-commas settings safely."""
     cleaned = []
@@ -1431,7 +1592,6 @@ def parse_jsonc(text: str) -> dict:
     if not isinstance(parsed, dict):
         raise ValueError("settings root must be an object")
     return parsed
-
 
 seen = set()
 for raw_path in sys.argv[1:]:
@@ -2000,12 +2160,45 @@ make_zsh_default() {
     fi
   done
 }
+# Prove the target user can run the toolchain WITHOUT sudo. If a published
+# binary is still locked (root-installed files at 700), open its tool root
+# with o+rX (read + traverse, no write) and re-check.
+ensure_target_tool_access() {
+  [ -n "${NATIVE_USER_INSTALL:-}" ] || return 0
+  local tool bin_path tool_root
+  for tool in node npm npx prime-agent git; do
+    if as_target env PATH="/usr/local/bin:/usr/bin:/bin" "$tool" --version >/dev/null 2>&1; then
+      info "$tool runs as $TARGET_USER without sudo"
+      continue
+    fi
+    warn "$tool does NOT run as $TARGET_USER; attempting permission repair..."
+    bin_path="$(readlink -f "/usr/local/bin/$tool" 2>/dev/null || command -v "$tool" 2>/dev/null || true)"
+    tool_root=""
+    case "$bin_path" in
+      /root/.nvm/*) tool_root="/root/.nvm" ;;
+      /root/*) tool_root="/root" ;;
+      /home/*) tool_root="$(printf '%s' "$bin_path" | cut -d/ -f1-3)" ;;
+    esac
+    if [ -n "$tool_root" ] && [ -d "$tool_root" ] && [ "$(id -u)" -eq 0 ]; then
+      chmod -R o+rX "$tool_root" 2>/dev/null && info "opened $tool_root (o+rX) for $tool" || true
+    fi
+    if as_target env PATH="/usr/local/bin:/usr/bin:/bin" "$tool" --version >/dev/null 2>&1; then
+      info "$tool runs as $TARGET_USER without sudo (after repair)"
+    else
+      warn "$tool STILL needs sudo for $TARGET_USER. Diagnose with: sudo -H -u $TARGET_USER $tool --version; ls -la $bin_path"
+    fi
+  done
+}
+
 install_prime_agent
 install_dsh
 install_oh_my_pi
 sync_prime_agent_rc
+# This run created home files as root (omz, plugins, rc blocks); hand them back.
+own_all_provisioned_homes
 publish_tool_commands
 ensure_cross_user_tool_access
+ensure_target_tool_access
 install_prime_agent_skills
 configure_prime_agent_tools
 configure_prime_agent_models

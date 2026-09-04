@@ -128,6 +128,12 @@ omz_target_homes() {
   } | while IFS= read -r h; do
     [ -n "$h" ] || continue
     [ -d "$h" ] || continue
+    # Non-root runs cannot provision homes they cannot write (e.g. /root):
+    # skip them instead of dying on touch/mkdir permission errors.
+    if [ ! -w "$h" ]; then
+      printf '%s WARN: skipping unwritable home %s (run as root to provision it)\n' "${LOG_PREFIX}" "$h" >&2
+      continue
+    fi
     case " $seen " in
       *" $h "*) continue ;;
     esac

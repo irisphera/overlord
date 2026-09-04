@@ -1480,8 +1480,8 @@ configure_prime_agent_tools() {
   info "enabling Prime Agent web search and Context7 tools..."
   local settings_paths=()
   settings_paths+=("$HOME/.prime/agent/settings.json")
-  if [ -d /home/overlord ]; then settings_paths+=("/home/overlord/.prime/agent/settings.json"); fi
-  if [ -d /root ]; then settings_paths+=("/root/.prime/agent/settings.json"); fi
+  if [ -d /home/overlord ] && { [ "$(id -u)" -eq 0 ] || [ -w /home/overlord/.prime/agent ] || [ -w /home/overlord ]; }; then settings_paths+=("/home/overlord/.prime/agent/settings.json"); fi
+  if [ -d /root ] && { [ "$(id -u)" -eq 0 ] || [ -w /root/.prime/agent/settings.json ] || [ -w /root ]; }; then settings_paths+=("/root/.prime/agent/settings.json"); fi
   if [ -d /workspace/.overlord/prime-agent-data ]; then
     settings_paths+=("/workspace/.overlord/prime-agent-data/settings.json")
   elif [ -d ./.overlord/prime-agent-data ]; then
@@ -1661,24 +1661,38 @@ for raw_path in sys.argv[1:]:
                 settings.pop("defaultProvider", None)
                 settings.pop("defaultModel", None)
 
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(settings, indent=2, sort_keys=True) + "\n")
-        path.chmod(0o644)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+        except Exception as mkdir_error:
+            print(f"skipping unwritable {path.parent}: {mkdir_error}", file=sys.stderr)
+            continue
+        try:
+            path.write_text(json.dumps(settings, indent=2, sort_keys=True) + "\n")
+        except Exception as error:
+            print(f"skipping unwritable {path}: {error}", file=sys.stderr)
+            continue
+        try:
+            path.chmod(0o644)
+        except OSError:
+            pass
         print(f"configured {path}")
     except Exception as error:
         print(f"could not update {path}: {error}", file=sys.stderr)
-        raise
+        continue
 PYEOF
 
   # Add routing instructions so Prime knows when to reach for the MCP tools.
   local agent_dirs=("$HOME/.prime/agent")
-  if [ -d /home/overlord ]; then agent_dirs+=("/home/overlord/.prime/agent"); fi
-  if [ -d /root ]; then agent_dirs+=("/root/.prime/agent"); fi
+  if [ -d /home/overlord ] && { [ "$(id -u)" -eq 0 ] || [ -w /home/overlord/.prime/agent ] || [ -w /home/overlord ]; }; then agent_dirs+=("/home/overlord/.prime/agent"); fi
+  if [ -d /root ] && { [ "$(id -u)" -eq 0 ] || [ -w /root/.prime/agent ] || [ -w /root ]; }; then agent_dirs+=("/root/.prime/agent"); fi
   local agent_dir
   for agent_dir in "${agent_dirs[@]}"; do
-    mkdir -p "$agent_dir/skills/context7"
-    rm -rf "$agent_dir/skills/runpod-docs"
-    cat > "$agent_dir/skills/context7/SKILL.md" <<'SKILLEOF'
+    if ! mkdir -p "$agent_dir/skills/context7" 2>/dev/null; then
+      warn "skipping unwritable $agent_dir (run as root to provision it)"
+      continue
+    fi
+    rm -rf "$agent_dir/skills/runpod-docs" 2>/dev/null || true
+    if ! cat > "$agent_dir/skills/context7/SKILL.md" <<'SKILLEOF'
 ---
 name: context7
 description: Look up current library and framework documentation through Context7 MCP. Use when API details, current examples, configuration, or version-specific behavior are needed.
@@ -1688,6 +1702,10 @@ description: Look up current library and framework documentation through Context
 
 Use the tools exposed by the `context7` MCP server to resolve a library and retrieve its current documentation. Prefer Context7 over memory when implementation depends on current APIs or version-specific behavior.
 SKILLEOF
+    then
+      warn "skipping unwritable $agent_dir/skills/context7/SKILL.md"
+      continue
+    fi
   done
   if [ -d /home/overlord ]; then
     chown -R overlord:overlord /home/overlord/.prime 2>/dev/null || true
@@ -1701,11 +1719,11 @@ configure_prime_agent_models() {
   # Determine agent dirs to configure
   local agent_dirs=()
   agent_dirs+=("$HOME/.prime/agent")
-  # Also ensure overlord and root dirs are covered when running as root
-  if [ -d "/home/overlord" ]; then
+  # Also ensure overlord and root dirs are covered when running as root (or writable)
+  if [ -d "/home/overlord" ] && { [ "$(id -u)" -eq 0 ] || [ -w /home/overlord/.prime/agent ] || [ -w /home/overlord ]; }; then
     agent_dirs+=("/home/overlord/.prime/agent")
   fi
-  if [ -d "/root" ]; then
+  if [ -d "/root" ] && { [ "$(id -u)" -eq 0 ] || [ -w /root/.prime/agent ] || [ -w /root ]; }; then
     agent_dirs+=("/root/.prime/agent")
   fi
   # Also handle workspace persisted mount (for container)
@@ -2072,12 +2090,18 @@ PYEOF
   # Copy to each agent dir (from the reused file, or the freshly generated one)
   local models_source="${existing_models_json:-$tmp_json}"
   for d in "${uniq_dirs[@]}"; do
-    mkdir -p "$d"
+    if ! mkdir -p "$d" 2>/dev/null; then
+      warn "skipping unwritable $d (run as root to provision it)"
+      continue
+    fi
     # The workspace bind mount and the persisted Prime Agent bind mount can
     # expose the same file through different path names. Compare file identity
     # so cp is not asked to copy models.json onto itself.
     if [ ! "$models_source" -ef "$d/models.json" ]; then
-      cp "$models_source" "$d/models.json"
+      if ! cp "$models_source" "$d/models.json" 2>/dev/null; then
+        warn "skipping unwritable $d/models.json (run as root to provision it)"
+        continue
+      fi
       chmod 644 "$d/models.json" 2>/dev/null || true
     fi
     info "wrote $d/models.json ($(wc -l < "$d/models.json" | tr -d ' ') lines)"

@@ -129,7 +129,7 @@
           "provider": "opencode-go",
           "reasoning": true,
           "thinkingLevelMap": {
-            "max": "max"
+            "xhigh": "xhigh"
           }
         },
         {

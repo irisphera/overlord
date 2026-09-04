@@ -23,6 +23,9 @@
         "gpt-5.6-sol": {
           "contextWindow": 256000
         },
+        "gpt-6-astra": {
+          "contextWindow": 256000
+        },
         "grok-4.6": {
           "contextWindow": 180000
         }
@@ -60,6 +63,16 @@
           "thinkingLevelMap": {
             "max": "max"
           }
+        },
+        {
+          "baseUrl": "https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1",
+          "contextWindow": 256000,
+          "id": "gpt-6-astra",
+          "limitTokens": 256000,
+          "maxInputTokens": 256000,
+          "maxTokens": 16384,
+          "name": "GPT-6 Astra (256k)",
+          "reasoning": true
         }
       ]
     },
@@ -129,6 +142,7 @@
           "provider": "opencode-go",
           "reasoning": true,
           "thinkingLevelMap": {
+            "max": "max",
             "xhigh": "xhigh"
           }
         },

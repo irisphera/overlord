@@ -407,20 +407,10 @@ ensure_node_shell_rc() {
   local snippet='export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"
 export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
 [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"'
-  local target_homes=()
-  target_homes+=("${HOME}")
-  if [ -d /home/overlord ]; then target_homes+=("/home/overlord"); fi
-  if [ -d /root ]; then target_homes+=("/root"); fi
-  local uniq=()
-  local seen=""
-  for target_home in "${target_homes[@]}"; do
-    case " $seen " in
-      *" $target_home "*) continue ;;
-      *) uniq+=("$target_home"); seen="$seen $target_home" ;;
-    esac
-  done
-  for target_home in "${uniq[@]}"; do
-    if [ ! -d "$target_home" ]; then continue; fi
+  # Share the filtered target-home list (writable homes only, all console
+  # users) so non-root runs never touch e.g. /root.
+  local target_home
+  while IFS= read -r target_home; do
     for rc in \
       "$target_home/.zshrc" \
       "$target_home/.zprofile" \
@@ -439,7 +429,7 @@ export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
         chown "$owner":"$owner" "$rc" 2>/dev/null || run_sudo chown "$owner":"$owner" "$rc" 2>/dev/null || true
       fi
     done
-  done
+  done < <(omz_target_homes)
 }
 
 # The prime-agent installer appends its PATH setup to ~/.bashrc only. Mirror
@@ -1038,20 +1028,10 @@ EOS
 ensure_zellij_config() {
   local target_home
   local target_homes=()
-  # Primary HOME
-  target_homes+=("$HOME")
-  # Original sudo user if any
-  if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ] && [ -d "/home/${SUDO_USER}" ]; then
-    target_homes+=("/home/${SUDO_USER}")
-  fi
-  # Overlord user (container)
-  if [ -d "/home/overlord" ]; then
-    target_homes+=("/home/overlord")
-  fi
-  if [ -d "/root" ]; then
-    target_homes+=("/root")
-  fi
-  # Workspace user home if different
+  # Shared filtered list: writable homes only, all console users.
+  while IFS= read -r target_home; do
+    target_homes+=("$target_home")
+  done < <(omz_target_homes)
   # Deduplicate
   local uniq=()
   local seen=""
@@ -1099,16 +1079,10 @@ ensure_zellij_config() {
 ensure_zellij_autostart() {
   local target_home
   local target_homes=()
-  target_homes+=("$HOME")
-  if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ] && [ -d "/home/${SUDO_USER}" ]; then
-    target_homes+=("/home/${SUDO_USER}")
-  fi
-  if [ -d "/home/overlord" ]; then
-    target_homes+=("/home/overlord")
-  fi
-  if [ -d "/root" ]; then
-    target_homes+=("/root")
-  fi
+  # Shared filtered list: writable homes only, all console users.
+  while IFS= read -r target_home; do
+    target_homes+=("$target_home")
+  done < <(omz_target_homes)
   local uniq=()
   local seen=""
   for target_home in "${target_homes[@]}"; do
@@ -1168,16 +1142,11 @@ ensure_codegraph_skill() {
     return 0
   fi
   local target_homes=()
-  target_homes+=("$HOME")
-  if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ] && [ -d "/home/${SUDO_USER}" ]; then
-    target_homes+=("/home/${SUDO_USER}")
-  fi
-  if [ -d "/home/overlord" ]; then
-    target_homes+=("/home/overlord")
-  fi
-  if [ -d "/root" ]; then
-    target_homes+=("/root")
-  fi
+  # Shared filtered list: writable homes only, all console users.
+  local _omz_home
+  while IFS= read -r _omz_home; do
+    target_homes+=("$_omz_home")
+  done < <(omz_target_homes)
   local uniq=()
   local seen=""
   local h
@@ -1451,9 +1420,12 @@ install_prime_agent_skills() {
   # The skills CLI knows Pi as ~/.pi/agent, while Prime Agent uses
   # ~/.prime/agent. Copy the installed Pi skills into every Prime Agent home.
   local pi_skills="$HOME/.pi/agent/skills"
-  local target_homes=("$HOME")
-  if [ -d /home/overlord ]; then target_homes+=("/home/overlord"); fi
-  if [ -d /root ]; then target_homes+=("/root"); fi
+  local target_homes=()
+  # Shared filtered list: writable homes only, all console users.
+  local _omz_home2
+  while IFS= read -r _omz_home2; do
+    target_homes+=("$_omz_home2")
+  done < <(omz_target_homes)
   local target_home prime_skills owner
   if [ -d "$pi_skills" ]; then
     for target_home in "${target_homes[@]}"; do

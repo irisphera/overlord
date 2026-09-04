@@ -1915,8 +1915,11 @@ if "defaults" not in data:
     data["defaults"]={"contextWindow":256000,"maxInputTokens":256000,"limitTokens":256000,"reasoning":True}
     changed=True
 if changed:
-    path.write_text(json.dumps(data, indent=2, sort_keys=True)+"\n")
-    print(f"patched {path} to 256k/Grok", file=sys.stderr)
+    try:
+        path.write_text(json.dumps(data, indent=2, sort_keys=True)+"\n")
+        print(f"patched {path} to 256k/Grok", file=sys.stderr)
+    except OSError as e:
+        print(f"skipping unwritable {path}: {e}", file=sys.stderr)
 PYEOF_PATCH
   fi
   local tmp_json

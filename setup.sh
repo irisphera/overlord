@@ -301,10 +301,12 @@ export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
 
 # The prime-agent installer appends its PATH setup to ~/.bashrc only. Mirror
 # those lines into ~/.zshrc so prime-agent works in the zsh/zellij default shell.
-sync_prime_agent_rc() {
-  local bashrc="${HOME}/.bashrc"
+sync_prime_agent_rc_for() {
+  local home="$1"
+  local bashrc="${home}/.bashrc"
+  local zshrc="${home}/.zshrc"
   [ -f "$bashrc" ] || return 0
-  touch "${HOME}/.zshrc"
+  touch "$zshrc"
   local line
   while IFS= read -r line; do
     case "$line" in ""|"#"*) continue ;; esac
@@ -312,11 +314,19 @@ sync_prime_agent_rc() {
       *prime-agent*|*prime_agent*|*NVM_DIR*|*nvm.sh*) ;;
       *) continue ;;
     esac
-    if ! grep -qxF "$line" "${HOME}/.zshrc"; then
-      printf '%s\n' "$line" >> "${HOME}/.zshrc"
-      info "copied to ~/.zshrc: $line"
+    if ! grep -qxF "$line" "$zshrc"; then
+      printf '%s\n' "$line" >> "$zshrc"
+      info "copied to ${zshrc}: $line"
     fi
   done < "$bashrc"
+  fix_home_ownership "$zshrc"
+}
+
+sync_prime_agent_rc() {
+  local target_home
+  while IFS= read -r target_home; do
+    sync_prime_agent_rc_for "$target_home"
+  done < <(omz_target_homes)
 }
 
 # Publish user/nvm-installed commands at a stable system path. This makes
@@ -366,20 +376,33 @@ publish_tool_commands() {
   hash -r 2>/dev/null || true
 }
 
-# Interactive shells/zellij run as the 'overlord' user while this setup often
-# runs as root. Published /usr/local/bin symlinks resolve through $HOME/.nvm,
-# so /root must be traversable for overlord. Mode 711 allows traversal without
-# listing; files inside keep their own permissions.
+# Published /usr/local/bin symlinks often resolve through a home dir
+# ($HOME/.nvm, ~/.prime/bin). If that home blocks traversal (Debian keeps
+# /root at 700), every other user gets 'permission denied' on node, npm,
+# prime-agent, etc. Grant traverse-only (o+x) on such homes so published tools
+# work for all users. Files inside keep their own permissions.
 ensure_cross_user_tool_access() {
-  [ -d /home/overlord ] || return 0
-  if [ "$(stat -c '%a' /root 2>/dev/null || echo "")" = "711" ]; then
-    return 0
-  fi
-  if [ "$(id -u)" -eq 0 ]; then
-    chmod 711 /root && info "made /root traversable (711) so the overlord user can run published tools"
-  else
-    run_sudo chmod 711 /root 2>/dev/null || warn "could not make /root traversable; overlord may hit 'permission denied' on root-published tools"
-  fi
+  local tool dest target home_dir mode last
+  for tool in node npm npx corepack prime-agent codegraph uv aws dsh omp; do
+    dest="/usr/local/bin/$tool"
+    [ -L "$dest" ] || continue
+    target="$(readlink -f "$dest" 2>/dev/null || true)"
+    [ -n "$target" ] || continue
+    case "$target" in
+      /root/*) home_dir="/root" ;;
+      /home/*/*) home_dir="$(printf '%s' "$target" | cut -d/ -f1-3)" ;;
+      *) continue ;;
+    esac
+    [ -d "$home_dir" ] || continue
+    mode="$(stat -c '%a' "$home_dir" 2>/dev/null || echo "")"
+    last="${mode: -1}"
+    case "$last" in 1|3|5|7) continue ;; esac
+    if [ "$(id -u)" -eq 0 ]; then
+      chmod o+x "$home_dir" && info "made $home_dir traversable (o+x) so all users can run published $tool"
+    else
+      run_sudo chmod o+x "$home_dir" 2>/dev/null         && info "made $home_dir traversable (o+x) so all users can run published $tool"         || warn "could not make $home_dir traversable; other users may hit 'permission denied' on $tool"
+    fi
+  done
 }
 
 verify_login_shell_tools() {
@@ -470,12 +493,45 @@ install_uv
 install_aws_cli
 
 # --- oh-my-zsh (unattended, non-interactive) ---
+# Human login users that will actually open shells on this machine. Covers
+# native VMs (admin/ubuntu/debian, even when setup runs as root without
+# SUDO_USER via su/cloud-init/SSM) as well as the Overlord container user.
+console_login_users() {
+  local seen="" u
+  if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ] && id "${SUDO_USER}" >/dev/null 2>&1; then
+    printf '%s\n' "${SUDO_USER}"
+    seen=" ${SUDO_USER} "
+  fi
+  local entry name uid home shell
+  while IFS=: read -r name _ uid _ _ home shell; do
+    case " $seen " in *" $name "*) continue ;; esac
+    case "$uid" in ''|*[!0-9]*) continue ;; esac
+    [ "$uid" -ge 1000 ] || continue
+    case "$shell" in *nologin*|*/false|"") continue ;; esac
+    [ -d "$home" ] || continue
+    seen="$seen $name "
+    printf '%s\n' "$name"
+  done < <(getent passwd)
+  if id overlord >/dev/null 2>&1; then
+    case " $seen " in *" overlord "*) ;; *) printf '%s\n' overlord ;; esac
+  fi
+}
+
 # Setup may run as root while interactive shells/zellij run as the 'overlord'
-# user. Provision oh-my-zsh in every target home so no shell misses plugins.
+# user (container) or a login user like admin (native VM). Provision oh-my-zsh
+# in every target home so no shell misses plugins.
 omz_target_homes() {
   local seen=""
-  local h
-  for h in "${HOME}" ${SUDO_USER:+/home/${SUDO_USER}} /home/overlord /root; do
+  local h u uh
+  {
+    printf '%s\n' "${HOME}"
+    [ -n "${SUDO_USER:-}" ] && printf '/home/%s\n' "${SUDO_USER}"
+    printf '/home/overlord\n/root\n'
+    while IFS= read -r u; do
+      uh="$(getent passwd "$u" 2>/dev/null | cut -d: -f6)"
+      [ -n "$uh" ] && printf '%s\n' "$uh"
+    done < <(console_login_users)
+  } | while IFS= read -r h; do
     [ -n "$h" ] || continue
     [ -d "$h" ] || continue
     case " $seen " in
@@ -1898,7 +1954,8 @@ make_zsh_default() {
   if [ -z "${zsh_path}" ]; then
     return 0
   fi
-  # Determine users to set shell for: current user and original sudo user if different
+  # Determine users to set shell for: current user, original sudo user, all
+  # console login users (native VM admins without SUDO_USER), and overlord.
   local users=()
   users+=("$(whoami)")
   if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "$(whoami)" ] && [ "${SUDO_USER}" != "root" ]; then
@@ -1908,8 +1965,15 @@ make_zsh_default() {
   if id overlord >/dev/null 2>&1; then
     users+=("overlord")
   fi
+  local cu
+  while IFS= read -r cu; do
+    users+=("$cu")
+  done < <(console_login_users)
+  local seen_users=" "
   local u
   for u in "${users[@]}"; do
+    case "$seen_users" in *" $u "*) continue ;; esac
+    seen_users="$seen_users$u "
     # Skip if already zsh
     local cur_shell
     cur_shell="$(getent passwd "$u" 2>/dev/null | cut -d: -f7 || echo "")"

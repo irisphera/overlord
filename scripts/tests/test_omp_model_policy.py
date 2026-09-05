@@ -17,6 +17,7 @@ LUNA = "azure-gpt6/gpt-5.6-luna:max"
 ASTRA = "azure-gpt6/gpt-6-astra:medium"
 NORMAL_ROLES = ("default", "smol", "vision", "commit", "tiny", "task")
 DEEP_ROLES = ("slow", "plan", "advisor")
+ASTRA_EFFORTS = ["low", "medium", "high", "xhigh", "max"]
 
 
 class OmpModelPolicyTests(unittest.TestCase):
@@ -50,13 +51,13 @@ class OmpModelPolicyTests(unittest.TestCase):
         models = {model["id"]: model for model in provider["models"]}
         for model_id, effort in (("gpt-5.6-luna", "max"), ("gpt-6-astra", "medium")):
             model = models[model_id]
+            efforts = ASTRA_EFFORTS if model_id == "gpt-6-astra" else [effort]
             self.assertTrue(model["reasoning"])
             self.assertEqual(model["thinking"]["mode"], "effort")
-            self.assertEqual(model["thinking"]["efforts"], [effort])
+            self.assertEqual(model["thinking"]["efforts"], efforts)
             self.assertEqual(model["thinking"]["defaultLevel"], effort)
-            self.assertTrue(model["thinking"]["requiresEffort"])
-            self.assertNotIn("thinkingLevelMap", model)
-            self.assertEqual(model["compat"]["reasoningEffortMap"], {effort: effort})
+            self.assertEqual(model["thinking"]["requiresEffort"], model_id != "gpt-6-astra")
+            self.assertEqual(model["compat"]["reasoningEffortMap"], {level: level for level in efforts})
             self.assertTrue(model["compat"]["supportsReasoningParams"])
         return settings, provider
 
@@ -96,6 +97,7 @@ modelRoles:
   default: azure/gpt-5.6-luna:max
   slow: azure-gpt6/gpt-6-astra:max
   custom-review: example/custom-model:high
+  custom-astra: azure-gpt6/gpt-6-astra:max
 theme:
   dark: titanium
 tools:
@@ -126,6 +128,7 @@ tools:
             self.assertEqual(settings["theme"]["dark"], "titanium")
             self.assertEqual(settings["tools"]["approvalMode"], "write")
             self.assertEqual(settings["modelRoles"]["custom-review"], "example/custom-model:high")
+            self.assertEqual(settings["modelRoles"]["custom-astra"], "azure-gpt6/gpt-6-astra:max")
             self.assertIn("custom-provider", self.read_yaml(target, "models.yml")["providers"])
             self.assertIn("unrelated-deployment", {model["id"] for model in provider["models"]})
             self.assertEqual((target / "config.yml.bak").read_text(), old_config)
@@ -134,7 +137,7 @@ tools:
             self.run_generator(target, AZURE_OPENAI_RESOURCE_NAME="new-resource")
             self.assertEqual(before, {name: (target / name).read_bytes() for name in before})
 
-    def test_stale_thinking_maps_and_wildcard_overrides_cannot_raise_astra_effort(self):
+    def test_stale_maps_and_overrides_cannot_restrict_or_remap_astra_efforts(self):
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp)
             stale = {
@@ -176,8 +179,10 @@ tools:
             self.assertFalse(astra["compat"]["supportsStore"])
             for model_id, effort in (("gpt-5.6-luna", "max"), ("gpt-6-astra", "medium")):
                 override = provider["modelOverrides"][model_id]
-                self.assertEqual(override["thinking"]["efforts"], [effort])
-                self.assertEqual(override["compat"]["reasoningEffortMap"], {effort: effort})
+                efforts = ASTRA_EFFORTS if model_id == "gpt-6-astra" else [effort]
+                self.assertEqual(override["thinking"]["efforts"], efforts)
+                self.assertEqual(override["thinking"]["requiresEffort"], model_id != "gpt-6-astra")
+                self.assertEqual(override["compat"]["reasoningEffortMap"], {level: level for level in efforts})
                 self.assertTrue(override["compat"]["supportsReasoningParams"])
             self.assertFalse(provider["modelOverrides"]["gpt-6-astra"]["compat"]["supportsStore"])
 

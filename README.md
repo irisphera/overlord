@@ -54,9 +54,9 @@ It installs (if missing): `zsh`, `oh-my-zsh` and plugins, `zellij`, `neovim` + *
 | Work | Model | Reasoning effort |
 | --- | --- | --- |
 | Normal work | `gpt-5.6-luna` | `max` |
-| High-brain work (planning, hard problems, advisor) | `gpt-6-astra` | `medium` only |
+| High-brain work (planning, hard problems, advisor) | `gpt-6-astra` | `medium` by default; OMP also allows `off`, `low`, `high`, `xhigh`, `max` |
 
-- **Oh My Pi:** `omp` uses Luna. The `default`, `smol`, `vision`, `commit`, `tiny`, and `task` roles use Luna/max. The `slow`, `plan`, and `advisor` roles use Astra/medium. Use `omp --slow` for hard problems or `omp --plan` for planning. Both models live under the existing `azure-gpt6` provider ID. Their supported effort lists are restricted to `max` and `medium` respectively, so inherited thinking levels cannot raise Astra's effort.
+- **Oh My Pi:** Setup assigns Luna/max to the `default`, `smol`, `vision`, `commit`, `tiny`, and `task` roles, and Astra/medium to `slow`, `plan`, and `advisor`. Both models live under the `azure-gpt6` provider ID. Luna remains max-only; Astra supports `off` (no reasoning), `low`, `medium`, `high`, `xhigh`, and `max`. For example, use `omp --model azure-gpt6/gpt-6-astra --thinking xhigh`. Managed roles retain their defaults, while custom Astra role suffixes are preserved.
 - **Codex:** `codex` (or `codex --profile default`) uses Luna/max. Use `codex --profile high-brain` for Astra/medium. These are explicit profiles, not automatic task-complexity routing. Plan-mode effort matches the selected profile. Codex `0.153.4` supports literal `max`; it is not replaced with `xhigh`. Select the profile instead of changing only `--model`, which would keep the old effort.
 - Setup merges `~/.omp/agent/models.yml`, `~/.omp/agent/config.yml`, `~/.codex/config.toml`, and Codex's `default.config.toml` / `high-brain.config.toml` profile files. It preserves unrelated settings and saves the first originals as `*.bak`. Codex `0.153.4` uses these file profiles. Setup removes rejected legacy `profile = "..."` selectors and migrates managed `[profiles.default]` / `[profiles.high-brain]` tables into the corresponding files. It updates old Astra/high defaults on re-runs. Invalid files are left unchanged with a warning. The setup uses distro `python3-yaml` and `python3-tomlkit` packages for safe config merges.
 - `AZURE_OPENAI_BASE_URL` takes precedence over `AZURE_OPENAI_RESOURCE_NAME`. Codex resolves both model names through `AZURE_OPENAI_DEPLOYMENT_NAME_MAP`; Oh My Pi's Azure adapter resolves that map at runtime. API keys stay in the environment, not in the generated configuration.
@@ -78,7 +78,7 @@ This makes subsequent `sudo` non-interactive without a password. If `sudo` is no
 - Installs `zellij` v0.43.1 (arch-aware tarball)
 - Installs nvm + Node.js 24, `uv`, and AWS CLI v2
 - Installs `prime-agent`, DeepSeek Harness (`dsh`), Oh My Pi (`omp`), and Codex CLI (`codex`) with Azure model support
-- Installs shared Pi/Prime skills (including `cursor/plugins`), and Context7 MCP configuration
+- Installs shared Pi/Prime/OMP skills from `mattpocock/skills`, `aws/agent-toolkit-for-aws`, and `cursor/plugins`. Copies the shared collection and AWS setup skill into each console user's `~/.omp/agent/skills` as well as Prime's native directory; OMP also receives the Context7 routing skill. Restart OMP after installing to refresh discovery. Context7 MCP configuration remains Prime-specific.
 - Enables bundled web search (Serper login remains a one-time user step)
 - Installs `oh-my-zsh` unattended
 - Clones `zsh-autosuggestions`, `zsh-syntax-highlighting`, `zsh-completions`, `zsh-autocomplete` and wires `~/.zshrc`

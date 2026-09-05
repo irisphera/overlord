@@ -113,15 +113,44 @@ class SetupPersistenceTests(unittest.TestCase):
             self.assertIn('wire_api = "responses"', config_toml)
             self.assertIn("api-version", config_toml)
 
-    def test_prime_agent_skills_are_installed_after_prime_agent(self):
-        self.assertIn("install_prime_agent_skills", SETUP)
-        self.assertIn("mattpocock/skills", SETUP)
-        self.assertIn("aws/agent-toolkit-for-aws", SETUP)
-        self.assertIn("cursor/plugins", SETUP)
-        self.assertIn("--global --agent pi --yes --copy --full-depth", SETUP)
-        self.assertIn("aws-agent-toolkit-setup", SETUP)
-        calls = SETUP.rsplit("install_prime_agent\n", 1)[1]
-        self.assertIn("install_prime_agent_skills", calls)
+
+    def test_shared_skills_reach_omp_for_each_user_with_assets(self):
+        section = SETUP.split("install_prime_agent_skills() {", 1)[1]
+        function = "install_prime_agent_skills() {" + section.split("\nconfigure_prime_agent_tools() {", 1)[0]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            installer = root / "installer"
+            user = root / "user"
+            source = installer / ".pi/agent/skills/example"
+            source.mkdir(parents=True)
+            (source / "SKILL.md").write_text("---\nname: example\ndescription: Example skill\n---\n")
+            (source / "reference.txt").write_text("reference content\n")
+            unrelated = user / ".omp/agent/skills/personal/SKILL.md"
+            unrelated.parent.mkdir(parents=True)
+            unrelated.write_text("personal skill\n")
+            upstream = root / "aws-setup.txt"
+            upstream.write_text("AWS login instructions\n")
+            harness = '''set -e
+info() { :; }
+warn() { printf '%s\\n' "$*" >&2; }
+npx() { :; }
+omz_target_homes() { printf '%s\\n' "$HOME" "$TEST_USER_HOME"; }
+curl() { cp "$TEST_AWS_SETUP" "$4"; }
+'''
+            env = dict(os.environ, HOME=str(installer), TEST_USER_HOME=str(user), TEST_AWS_SETUP=str(upstream))
+            for _ in range(2):
+                result = subprocess.run(
+                    ["bash"], input=harness + function + "\ninstall_prime_agent_skills\n",
+                    text=True, capture_output=True, env=env,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                for home in (installer, user):
+                    for agent in (".prime", ".omp"):
+                        skills = home / agent / "agent/skills"
+                        self.assertEqual((skills / "example/SKILL.md").read_bytes(), (source / "SKILL.md").read_bytes())
+                        self.assertEqual((skills / "example/reference.txt").read_text(), "reference content\n")
+                        self.assertIn("AWS login instructions", (skills / "aws-agent-toolkit-setup/SKILL.md").read_text())
+                self.assertEqual(unrelated.read_text(), "personal skill\n")
 
     def test_prime_agent_tools_are_configured(self):
         self.assertIn('bundled["websearch"] = True', SETUP)

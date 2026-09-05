@@ -1580,10 +1580,11 @@ for raw in sys.argv[1:]:
         if not isinstance(entries, list) or any(not isinstance(entry, dict) for entry in entries):
             raise ValueError("models must be a list of mappings")
         for model_id, name, effort in ((luna, "GPT-5.6 Luna", "max"), (astra, "GPT-6 Astra", "medium")):
-            # Singleton efforts also cap compaction and inherited session/task effort.
+            efforts = ["low", "medium", "high", "xhigh", "max"] if model_id == astra else [effort]
+            effort_map = {level: level for level in efforts}
             thinking = {
-                "mode": "effort", "efforts": [effort], "defaultLevel": effort,
-                "effortMap": {effort: effort}, "requiresEffort": True,
+                "mode": "effort", "efforts": efforts, "defaultLevel": effort,
+                "effortMap": effort_map, "requiresEffort": model_id != astra,
             }
             matching = [entry for entry in entries if entry.get("id") == model_id]
             if not matching:
@@ -1593,7 +1594,7 @@ for raw in sys.argv[1:]:
                 entry.update(name=name, reasoning=True, thinking=copy.deepcopy(thinking))
                 # Compat maps take precedence over thinking metadata on the wire.
                 mapping(entry, "compat").update(
-                    reasoningEffortMap={effort: effort}, supportsReasoningParams=True,
+                    reasoningEffortMap=effort_map.copy(), supportsReasoningParams=True,
                 )
                 entry.setdefault("input", ["text", "image"])
                 entry.setdefault("contextWindow", 256000)
@@ -1604,14 +1605,10 @@ for raw in sys.argv[1:]:
                 mapping(overrides, model_id)["thinking"] = copy.deepcopy(thinking)
                 overrides[model_id]["reasoning"] = True
                 mapping(overrides[model_id], "compat").update(
-                    reasoningEffortMap={effort: effort}, supportsReasoningParams=True,
+                    reasoningEffortMap=effort_map.copy(), supportsReasoningParams=True,
                 )
         configured_roles = mapping(config, "modelRoles")
         configured_roles.update(roles)
-        # Custom role names are kept, but Astra must never retain a high/max suffix.
-        for role, selector in list(configured_roles.items()):
-            if isinstance(selector, str) and selector.split(":", 1)[0].split("/")[-1] == astra:
-                configured_roles[role] = selector.split(":", 1)[0] + ":medium"
         config["defaultThinkingLevel"] = "max"
         # Parse and merge both files before writing either one.
         write_config(models_path, models_original, models)
@@ -1801,7 +1798,7 @@ install_prime_agent_skills() {
     warn "npx unavailable; skipping Prime Agent skill installation"
     return 0
   fi
-  info "installing shared skills for the Pi-based Prime Agent..."
+  info "installing shared skills for Pi, Prime Agent, and Oh My Pi..."
   local skill_source
   for skill_source in mattpocock/skills aws/agent-toolkit-for-aws cursor/plugins; do
     if npx --yes skills add "$skill_source" --global --agent pi --yes --copy --full-depth \
@@ -1812,8 +1809,8 @@ install_prime_agent_skills() {
     fi
   done
 
-  # The skills CLI knows Pi as ~/.pi/agent, while Prime Agent uses
-  # ~/.prime/agent. Copy the installed Pi skills into every Prime Agent home.
+  # The skills CLI targets Pi, not Prime Agent or OMP. Provision each
+  # harness's native directory for every console user.
   local pi_skills="$HOME/.pi/agent/skills"
   local target_homes=()
   # Shared filtered list: writable homes only, all console users.
@@ -1821,31 +1818,32 @@ install_prime_agent_skills() {
   while IFS= read -r _omz_home2; do
     target_homes+=("$_omz_home2")
   done < <(omz_target_homes)
-  local target_home prime_skills owner
+  local target_home agent_skills owner
   if [ -d "$pi_skills" ]; then
     for target_home in "${target_homes[@]}"; do
-      prime_skills="$target_home/.prime/agent/skills"
-      mkdir -p "$prime_skills"
-      cp -a "$pi_skills/." "$prime_skills/"
-      owner="$(stat -c '%U' "$target_home" 2>/dev/null || true)"
-      if [ -n "$owner" ]; then
-        chown -R "$owner":"$owner" "$prime_skills" 2>/dev/null || true
-      fi
-      info "synced Pi skills to $prime_skills"
+      for agent_skills in "$target_home/.prime/agent/skills" "$target_home/.omp/agent/skills"; do
+        mkdir -p "$agent_skills"
+        cp -a "$pi_skills/." "$agent_skills/"
+        owner="$(stat -c '%U' "$target_home" 2>/dev/null || true)"
+        if [ -n "$owner" ]; then
+          chown -R "$owner":"$owner" "$agent_skills" 2>/dev/null || true
+        fi
+        info "synced Pi skills to $agent_skills"
+      done
     done
   else
     warn "Pi skills directory was not created: $pi_skills"
   fi
 
   # The AWS setup URL is an interactive workflow, not a skills CLI package.
-  # Install it as a local skill so Prime/Pi can guide login/profile setup later.
+  # Install it as a local skill so each harness can guide login/profile setup later.
   local aws_setup_url="https://raw.githubusercontent.com/aws/agent-toolkit-for-aws/refs/heads/main/setup-instructions/setup.md"
   local aws_setup_tmp
   aws_setup_tmp="$(mktemp)"
   if curl -fsSL "$aws_setup_url" -o "$aws_setup_tmp"; then
-    local agent_skills skill_dir
+    local skill_dir
     for target_home in "${target_homes[@]}"; do
-      for agent_skills in "$target_home/.pi/agent/skills" "$target_home/.prime/agent/skills"; do
+      for agent_skills in "$target_home/.pi/agent/skills" "$target_home/.prime/agent/skills" "$target_home/.omp/agent/skills"; do
         skill_dir="$agent_skills/aws-agent-toolkit-setup"
         mkdir -p "$skill_dir"
         {
@@ -1859,7 +1857,7 @@ install_prime_agent_skills() {
       done
       owner="$(stat -c '%U' "$target_home" 2>/dev/null || true)"
       if [ -n "$owner" ]; then
-        chown -R "$owner":"$owner" "$target_home/.pi" "$target_home/.prime" 2>/dev/null || true
+        chown -R "$owner":"$owner" "$target_home/.pi" "$target_home/.prime" "$target_home/.omp/agent/skills" 2>/dev/null || true
       fi
     done
     info "installed AWS Agent Toolkit setup skill"
@@ -2074,10 +2072,11 @@ for raw_path in sys.argv[1:]:
         continue
 PYEOF
 
-  # Add routing instructions so Prime knows when to reach for the MCP tools.
-  local agent_dirs=("$HOME/.prime/agent")
-  if [ -d /home/overlord ] && { [ "$(id -u)" -eq 0 ] || [ -w /home/overlord/.prime/agent ] || [ -w /home/overlord ]; }; then agent_dirs+=("/home/overlord/.prime/agent"); fi
-  if [ -d /root ] && { [ "$(id -u)" -eq 0 ] || [ -w /root/.prime/agent ] || [ -w /root ]; }; then agent_dirs+=("/root/.prime/agent"); fi
+  # Add the Context7 routing skill to both Prime and OMP native roots.
+  local agent_dirs=() target_home
+  while IFS= read -r target_home; do
+    agent_dirs+=("$target_home/.prime/agent" "$target_home/.omp/agent")
+  done < <(omz_target_homes)
   local agent_dir
   for agent_dir in "${agent_dirs[@]}"; do
     if ! mkdir -p "$agent_dir/skills/context7" 2>/dev/null; then

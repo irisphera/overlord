@@ -5,7 +5,7 @@ Minimal per-workspace dev container launcher + standalone VM setup.
 - **Container**: `overlord` creates a persistent container per workspace and runs `setup.sh` inside.
 - **VM direct**: `bash setup.sh` sets up the current machine (AWS-friendly, non-interactive, fixes sudo password prompts).
 
-A clean dev environment with **zsh + oh-my-zsh (bira theme: colored user@host:path + git) + autosuggestions + syntax-highlighting + completions + zellij + lazyvim**, plus Prime Agent, DeepSeek Harness, Oh My Pi, and Codex CLI coding-agent harnesses (all pointed at the Azure `gpt-6-astra` deployment). Base image is **Debian 13 trixie-slim** (smaller than Ubuntu).
+A clean dev environment with **zsh + oh-my-zsh (bira theme: colored user@host:path + git) + autosuggestions + syntax-highlighting + completions + zellij + lazyvim**, plus Prime Agent, DeepSeek Harness, Oh My Pi, and Codex CLI coding-agent harnesses with Azure model support. Base image is **Debian 13 trixie-slim** (smaller than Ubuntu).
 
 ## Quick start (container)
 
@@ -47,7 +47,19 @@ bash setup.sh
 curl -fsSL https://raw.githubusercontent.com/irisphera/overlord/main/setup.sh | bash
 ```
 
-It installs (if missing): `zsh`, `oh-my-zsh` and plugins, `zellij`, `neovim` + **LazyVim**, nvm + **Node.js 24**, `uv`, AWS CLI v2, **codegraph** `1.5.0`, **prime-agent** `0.8.0` with a `256k` context override, **DeepSeek Harness** (`dsh`), **Oh My Pi** (`omp`, always upgraded to the latest release), and **Codex CLI** (`codex` `0.153.4`). Oh My Pi is installed with its official `curl -fsSL https://omp.sh/install | sh` installer; run it with `omp`. Azure `gpt-6-astra` is registered for omp (`omp -p --model azure-gpt6/gpt-6-astra`) and as the default model for `codex` (`codex exec`), using `AZURE_OPENAI_API_KEY` plus `AZURE_OPENAI_RESOURCE_NAME` (or `AZURE_OPENAI_BASE_URL`). It also installs shared Pi/Prime skills from `mattpocock/skills`, `aws/agent-toolkit-for-aws`, and `cursor/plugins`, then configures Prime Agent's bundled web search plus the public Context7 MCP server. Web search needs a one-time Serper credential through `/login`; Context7 needs no login.
+It installs (if missing): `zsh`, `oh-my-zsh` and plugins, `zellij`, `neovim` + **LazyVim**, nvm + **Node.js 24**, `uv`, AWS CLI v2, **codegraph** `1.5.0`, **prime-agent** `0.8.0` with a `256k` context override, **DeepSeek Harness** (`dsh`), **Oh My Pi** (`omp`, always upgraded to the latest release), and **Codex CLI** (`codex` `0.153.4`). Oh My Pi is installed with its official `curl -fsSL https://omp.sh/install | sh` installer; run it with `omp`. Oh My Pi and Codex use Azure `gpt-5.6-luna` with **max** reasoning for normal work and `gpt-6-astra` with **medium** reasoning for high-brain work, using `AZURE_OPENAI_API_KEY` plus `AZURE_OPENAI_RESOURCE_NAME` (or `AZURE_OPENAI_BASE_URL`). See the model policy below. It also installs shared Pi/Prime skills from `mattpocock/skills`, `aws/agent-toolkit-for-aws`, and `cursor/plugins`, then configures Prime Agent's bundled web search plus the public Context7 MCP server. Web search needs a one-time Serper credential through `/login`; Context7 needs no login.
+
+### Oh My Pi and Codex model policy
+
+| Work | Model | Reasoning effort |
+| --- | --- | --- |
+| Normal work | `gpt-5.6-luna` | `max` |
+| High-brain work (planning, hard problems, advisor) | `gpt-6-astra` | `medium` only |
+
+- **Oh My Pi:** `omp` uses Luna. The `default`, `smol`, `vision`, `commit`, `tiny`, and `task` roles use Luna/max. The `slow`, `plan`, and `advisor` roles use Astra/medium. Use `omp --slow` for hard problems or `omp --plan` for planning. Both models live under the existing `azure-gpt6` provider ID. Their supported effort lists are restricted to `max` and `medium` respectively, so inherited thinking levels cannot raise Astra's effort.
+- **Codex:** `codex` (or `codex --profile default`) uses Luna/max. Use `codex --profile high-brain` for Astra/medium. These are explicit profiles, not automatic task-complexity routing. Plan-mode effort matches the selected profile. Codex `0.153.4` supports literal `max`; it is not replaced with `xhigh`. Select the profile instead of changing only `--model`, which would keep the old effort.
+- Setup merges `~/.omp/agent/models.yml`, `~/.omp/agent/config.yml`, `~/.codex/config.toml`, and Codex's `default.config.toml` / `high-brain.config.toml` profile files. It preserves unrelated settings and saves the first originals as `*.bak`. Codex `0.153.4` uses these file profiles. Setup removes rejected legacy `profile = "..."` selectors and migrates managed `[profiles.default]` / `[profiles.high-brain]` tables into the corresponding files. It updates old Astra/high defaults on re-runs. Invalid files are left unchanged with a warning. The setup uses distro `python3-yaml` and `python3-tomlkit` packages for safe config merges.
+- `AZURE_OPENAI_BASE_URL` takes precedence over `AZURE_OPENAI_RESOURCE_NAME`. Codex resolves both model names through `AZURE_OPENAI_DEPLOYMENT_NAME_MAP`; Oh My Pi's Azure adapter resolves that map at runtime. API keys stay in the environment, not in the generated configuration.
 
 ### AWS sudo password fix
 
@@ -65,7 +77,7 @@ This makes subsequent `sudo` non-interactive without a password. If `sudo` is no
 - `apt-get update` + installs base packages
 - Installs `zellij` v0.43.1 (arch-aware tarball)
 - Installs nvm + Node.js 24, `uv`, and AWS CLI v2
-- Installs `prime-agent`, DeepSeek Harness (`dsh`), Oh My Pi (`omp`), and Codex CLI (`codex`), all wired to Azure `gpt-6-astra`
+- Installs `prime-agent`, DeepSeek Harness (`dsh`), Oh My Pi (`omp`), and Codex CLI (`codex`) with Azure model support
 - Installs shared Pi/Prime skills (including `cursor/plugins`), and Context7 MCP configuration
 - Enables bundled web search (Serper login remains a one-time user step)
 - Installs `oh-my-zsh` unattended

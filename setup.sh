@@ -244,6 +244,8 @@ install_base_packages() {
     locales
     jq
     xdg-utils
+    python3-yaml
+    python3-tomlkit
   )
   # Check which are missing
   local missing=()
@@ -1475,12 +1477,10 @@ install_codex() {
   fi
 }
 
-# Oh My Pi models: ensure the Azure gpt-6-astra deployment is listed under a
-# dedicated azure-gpt6 provider (the built-in `azure` provider catalog is left
-# untouched). Additive only: an existing models.yml that already mentions
-# gpt-6-astra is kept; any other existing file is backed up to models.yml.bak.
+# Oh My Pi: Luna/max for routine roles, Astra/medium for slow/plan/advisor.
+# Merge managed models and roles, preserving other settings and first backups.
 configure_omp_models() {
-  info "configuring Oh My Pi Azure models (gpt-6-astra)..."
+  info "configuring Oh My Pi model policy (Luna max / Astra medium)..."
   local omp_dirs=()
   omp_dirs+=("${PI_CODING_AGENT_DIR:-$HOME/.omp/agent}")
   if [ -d "/home/overlord" ] && { [ "$(id -u)" -eq 0 ] || [ -w /home/overlord/.omp/agent ] || [ -w /home/overlord ]; }; then
@@ -1498,66 +1498,135 @@ configure_omp_models() {
       *) uniq_dirs+=("$d"); seen="$seen $d" ;;
     esac
   done
-  python3 - "${uniq_dirs[@]}" <<'PYEOF_OMP'
+  /usr/bin/python3 - "${uniq_dirs[@]}" <<'PYEOF_OMP'
+import copy
 import os
+import shutil
+import stat
 import sys
+import tempfile
 from pathlib import Path
+
+import yaml
+
 resource = os.environ.get("AZURE_OPENAI_RESOURCE_NAME", "").strip()
 base = os.environ.get("AZURE_OPENAI_BASE_URL", "").strip().rstrip("/")
-if not base:
-    if resource:
-        base = f"https://{resource}.openai.azure.com/openai/v1"
-    else:
-        base = "https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1"
-models_yml = f"""# Managed by overlord setup.sh (configure_omp_models).
-providers:
-  azure-gpt6:
-    baseUrl: {base}
-    api: azure-openai-responses
-    apiKey: AZURE_OPENAI_API_KEY
-    models:
-      - id: gpt-6-astra
-        name: GPT-6 Astra
-        contextWindow: 256000
-        maxTokens: 16384
-        reasoning: true
-"""
+if not base and resource:
+    base = f"https://{resource}.openai.azure.com/openai/v1"
+provider_id = "azure-gpt6"  # Keep the existing provider ID for saved sessions.
+luna = "gpt-5.6-luna"
+astra = "gpt-6-astra"
+roles = {
+    role: f"{provider_id}/{astra if role in ('slow', 'plan', 'advisor') else luna}:"
+          f"{'medium' if role in ('slow', 'plan', 'advisor') else 'max'}"
+    for role in ("default", "smol", "slow", "vision", "plan", "commit", "tiny", "task", "advisor")
+}
+
+
+def mapping(parent, key):
+    value = parent.setdefault(key, {})
+    if not isinstance(value, dict):
+        raise ValueError(f"{key} must be a mapping")
+    return value
+
+
+def read_config(path):
+    existing = path.read_text() if path.exists() else None
+    data = yaml.safe_load(existing) if existing is not None else {}
+    if data is None:
+        data = {}
+    if not isinstance(data, dict):
+        raise ValueError("configuration must be a mapping")
+    return existing, data
+
+
+def write_config(path, original, data):
+    rendered = "# Managed model policy by overlord setup.sh. Other settings are preserved.\n"
+    rendered += yaml.safe_dump(data, sort_keys=False, allow_unicode=True)
+    # Keep comments/formatting and mtime on an already-correct config.
+    if original is not None and yaml.safe_load(original) == data:
+        print(f"unchanged {path}")
+        return
+    backup = path.with_suffix(path.suffix + ".bak")
+    if original is not None and not backup.exists():
+        shutil.copy2(path, backup)
+    mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else 0o600
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as stream:
+            temporary = Path(stream.name)
+            stream.write(rendered)
+        temporary.chmod(mode)
+        temporary.replace(path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+    print(f"wrote {path}")
+
+
 for raw in sys.argv[1:]:
     agent_dir = Path(raw)
     try:
         agent_dir.mkdir(parents=True, exist_ok=True)
-        target = agent_dir / "models.yml"
-        if target.exists():
-            try:
-                existing = target.read_text()
-            except OSError as e:
-                print(f"skipping unreadable {target}: {e}")
-                continue
-            if "gpt-6-astra" in existing:
-                print(f"keeping existing {target} (already provides gpt-6-astra)")
-                continue
-            backup = target.with_suffix(".yml.bak")
-            try:
-                if not backup.exists():
-                    backup.write_text(existing)
-                    print(f"backed up {target} to {backup}")
-            except OSError as e:
-                print(f"skipping unwritable {target}: {e}")
-                continue
-        target.write_text(models_yml)
-        print(f"wrote {target}")
-    except OSError as e:
-        print(f"skipping unwritable {agent_dir}: {e}")
+        models_path, config_path = agent_dir / "models.yml", agent_dir / "config.yml"
+        models_original, models = read_config(models_path)
+        config_original, config = read_config(config_path)
+        provider = mapping(mapping(models, "providers"), provider_id)
+        provider.update(
+            baseUrl=base or provider.get("baseUrl") or "https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1",
+            api="azure-openai-responses", apiKey="AZURE_OPENAI_API_KEY",
+        )
+        entries = provider.setdefault("models", [])
+        if not isinstance(entries, list) or any(not isinstance(entry, dict) for entry in entries):
+            raise ValueError("models must be a list of mappings")
+        for model_id, name, effort in ((luna, "GPT-5.6 Luna", "max"), (astra, "GPT-6 Astra", "medium")):
+            # Singleton efforts also cap compaction and inherited session/task effort.
+            thinking = {
+                "mode": "effort", "efforts": [effort], "defaultLevel": effort,
+                "effortMap": {effort: effort}, "requiresEffort": True,
+            }
+            matching = [entry for entry in entries if entry.get("id") == model_id]
+            if not matching:
+                matching = [{"id": model_id}]
+                entries.extend(matching)
+            for entry in matching:
+                entry.update(name=name, reasoning=True, thinking=copy.deepcopy(thinking))
+                # Compat maps take precedence over thinking metadata on the wire.
+                mapping(entry, "compat").update(
+                    reasoningEffortMap={effort: effort}, supportsReasoningParams=True,
+                )
+                entry.setdefault("input", ["text", "image"])
+                entry.setdefault("contextWindow", 256000)
+                entry.setdefault("maxTokens", 16384)
+            # Existing wildcard/model overrides must not undo the effort policy.
+            if "modelOverrides" in provider:
+                overrides = mapping(provider, "modelOverrides")
+                mapping(overrides, model_id)["thinking"] = copy.deepcopy(thinking)
+                overrides[model_id]["reasoning"] = True
+                mapping(overrides[model_id], "compat").update(
+                    reasoningEffortMap={effort: effort}, supportsReasoningParams=True,
+                )
+        configured_roles = mapping(config, "modelRoles")
+        configured_roles.update(roles)
+        # Custom role names are kept, but Astra must never retain a high/max suffix.
+        for role, selector in list(configured_roles.items()):
+            if isinstance(selector, str) and selector.split(":", 1)[0].split("/")[-1] == astra:
+                configured_roles[role] = selector.split(":", 1)[0] + ":medium"
+        config["defaultThinkingLevel"] = "max"
+        # Parse and merge both files before writing either one.
+        write_config(models_path, models_original, models)
+        write_config(config_path, config_original, config)
+    except (OSError, ValueError, yaml.YAMLError) as error:
+        # Parser errors may contain credentials from user configuration: do not echo them.
+        print(f"skipping invalid or unwritable Oh My Pi config in {agent_dir} ({type(error).__name__})")
 PYEOF_OMP
 }
 
-# Codex config: point codex at the same Azure gpt-6-astra deployment.
-# Codex sends `model` verbatim as the Azure deployment name (no
-# deployment-name map support), so resolve AZURE_OPENAI_DEPLOYMENT_NAME_MAP
-# here. Additive only: an existing config.toml that already mentions
-# gpt-6-astra is kept; any other existing file is backed up to config.toml.bak.
+# Codex: Luna/max by default, explicit high-brain profile for Astra/medium.
+# Merge config instead of skipping old Astra defaults; preserve unrelated settings.
+# Resolve deployment mappings here because Codex sends model names verbatim.
 configure_codex() {
-  info "configuring Codex CLI for Azure gpt-6-astra..."
+  info "configuring Codex model policy (Luna max / Astra medium)..."
   local codex_dirs=()
   codex_dirs+=("${CODEX_HOME:-$HOME/.codex}")
   if [ -d "/home/overlord" ] && { [ "$(id -u)" -eq 0 ] || [ -w /home/overlord/.codex ] || [ -w /home/overlord ]; }; then
@@ -1575,66 +1644,155 @@ configure_codex() {
       *) uniq_dirs+=("$d"); seen="$seen $d" ;;
     esac
   done
-  python3 - "${uniq_dirs[@]}" <<'PYEOF_CODEX'
+  /usr/bin/python3 - "${uniq_dirs[@]}" <<'PYEOF_CODEX'
+import copy
 import os
+import stat
 import sys
+import tempfile
+from collections.abc import MutableMapping
 from pathlib import Path
+
+import tomlkit
+
 resource = os.environ.get("AZURE_OPENAI_RESOURCE_NAME", "").strip()
 env_base = os.environ.get("AZURE_OPENAI_BASE_URL", "").strip().rstrip("/")
-if resource:
-    base = f"https://{resource}.openai.azure.com/openai"
-elif env_base:
-    # Prime-style base URLs end in /openai/v1; codex appends /responses itself.
-    base = env_base[:-3].rstrip("/") if env_base.endswith("/v1") else env_base
+if env_base:
+    # Azure's versioned Responses endpoint is /openai/responses?api-version=...
+    # Codex appends /responses; Prime/OMP bases may include the /v1 suffix.
+    configured_base = env_base[:-3].rstrip("/") if env_base.endswith("/v1") else env_base
+elif resource:
+    configured_base = f"https://{resource}.openai.azure.com/openai"
 else:
-    base = "https://YOUR-RESOURCE-NAME.openai.azure.com/openai"
-deployment = "gpt-6-astra"
+    configured_base = None
+api_version = os.environ.get("AZURE_OPENAI_API_VERSION", "").strip()
+deployments = {"gpt-5.6-luna": "gpt-5.6-luna", "gpt-6-astra": "gpt-6-astra"}
 for chunk in os.environ.get("AZURE_OPENAI_DEPLOYMENT_NAME_MAP", "").split(","):
-    if "=" in chunk:
-        key, _, value = chunk.partition("=")
-        if key.strip() == "gpt-6-astra" and value.strip():
-            deployment = value.strip()
-api_version = os.environ.get("AZURE_OPENAI_API_VERSION", "").strip() or "2025-04-01-preview"
-config_toml = f"""# Managed by overlord setup.sh (configure_codex).
-model = "{deployment}"
-model_provider = "azure"
-model_reasoning_effort = "high"
+    key, separator, value = chunk.partition("=")
+    if separator and key.strip() in deployments and value.strip():
+        deployments[key.strip()] = value.strip()
 
-[model_providers.azure]
-name = "Azure OpenAI"
-base_url = "{base}"
-env_key = "AZURE_OPENAI_API_KEY"
-wire_api = "responses"
 
-[model_providers.azure.query_params]
-api-version = "{api_version}"
-"""
+def table(parent, key):
+    if key not in parent:
+        parent[key] = tomlkit.table()
+    value = parent[key]
+    if not isinstance(value, MutableMapping):
+        raise ValueError("managed configuration entry must be a table")
+    return value
+
+
+def apply_model_policy(config, model, effort):
+    # Since Codex 0.153.4 --profile selects <name>.config.toml. A legacy
+    # root profile selector is rejected, even though older schemas retain it.
+    config.pop("profile", None)
+    config["model"] = deployments[model]
+    config["model_provider"] = "azure"
+    config["model_reasoning_effort"] = effort
+    config["plan_mode_reasoning_effort"] = effort
+    # Reviews inherit the current effort. Do not leave an Astra-only model
+    # override that could send Luna's max effort to Astra.
+    if config.get("review_model") in {"gpt-6-astra", deployments["gpt-6-astra"]}:
+        config.pop("review_model", None)
+
+
+def apply_policy(config, model, effort, is_base):
+    apply_model_policy(config, model, effort)
+    # Keep unrelated legacy profiles, but enforce medium for any Astra entries.
+    if "profiles" in config:
+        for profile in table(config, "profiles").values():
+            if isinstance(profile, MutableMapping) and profile.get("model") in {"gpt-6-astra", deployments["gpt-6-astra"]}:
+                profile["model_reasoning_effort"] = "medium"
+                profile["plan_mode_reasoning_effort"] = "medium"
+    if is_base:
+        azure = table(table(config, "model_providers"), "azure")
+        azure["name"] = "Azure OpenAI"
+        azure["base_url"] = configured_base or azure.get("base_url") or "https://YOUR-RESOURCE-NAME.openai.azure.com/openai"
+        azure["env_key"] = "AZURE_OPENAI_API_KEY"
+        azure["wire_api"] = "responses"
+        query = table(azure, "query_params")
+        query["api-version"] = api_version or query.get("api-version") or "2025-04-01-preview"
+
+
+def write_config(target, existing, updated):
+    if updated == existing:
+        print(f"keeping unchanged {target}")
+        return
+    if existing is not None:
+        backup = target.with_suffix(".toml.bak")
+        try:
+            descriptor = os.open(backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            pass
+        else:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                stream.write(existing)
+            print(f"backed up {target} to {backup}")
+    mode = stat.S_IMODE(target.stat().st_mode) if target.exists() else 0o600
+    descriptor, temporary_name = tempfile.mkstemp(prefix=".config-", suffix=".toml", dir=target.parent)
+    temporary_path = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(updated)
+        temporary_path.chmod(mode)
+        os.replace(temporary_path, target)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+    print(f"wrote {target}")
+
+
+def merge_missing(target, source):
+    # An existing file-profile setting wins over a legacy inline setting.
+    for key, value in source.items():
+        if key not in target:
+            target[key] = copy.deepcopy(value)
+        elif isinstance(target[key], MutableMapping) and isinstance(value, MutableMapping):
+            merge_missing(target[key], value)
+
+
+policy = {
+    "config.toml": ("gpt-5.6-luna", "max"),
+    "default.config.toml": ("gpt-5.6-luna", "max"),
+    "high-brain.config.toml": ("gpt-6-astra", "medium"),
+}
 for raw in sys.argv[1:]:
     home_dir = Path(raw)
     try:
         home_dir.mkdir(parents=True, exist_ok=True)
-        target = home_dir / "config.toml"
-        if target.exists():
-            try:
-                existing = target.read_text()
-            except OSError as e:
-                print(f"skipping unreadable {target}: {e}")
+        originals, documents = {}, {}
+        # Validate all files before modifying any. Malformed user config stays intact.
+        for filename in policy:
+            target = home_dir / filename
+            original = target.read_text(encoding="utf-8") if target.exists() else None
+            originals[filename] = original
+            config = tomlkit.parse(original) if original is not None else tomlkit.document()
+            if original is None:
+                config.add(tomlkit.comment("Managed model policy from overlord setup.sh (configure_codex)."))
+            documents[filename] = config
+        # Codex rejects --profile NAME while a legacy [profiles.NAME] table
+        # remains in any loaded layer. Move managed tables into their files.
+        for config in documents.values():
+            if "profiles" not in config:
                 continue
-            if "gpt-6-astra" in existing:
-                print(f"keeping existing {target} (already provides gpt-6-astra)")
-                continue
-            backup = target.with_suffix(".toml.bak")
-            try:
-                if not backup.exists():
-                    backup.write_text(existing)
-                    print(f"backed up {target} to {backup}")
-            except OSError as e:
-                print(f"skipping unwritable {target}: {e}")
-                continue
-        target.write_text(config_toml)
-        print(f"wrote {target}")
-    except OSError as e:
-        print(f"skipping unwritable {home_dir}: {e}")
+            legacy = table(config, "profiles")
+            for name in ("default", "high-brain"):
+                if name in legacy:
+                    source = table(legacy, name)
+                    merge_missing(documents[f"{name}.config.toml"], source)
+                    del legacy[name]
+            if not legacy:
+                del config["profiles"]
+        rendered = {}
+        for filename, (model, effort) in policy.items():
+            config = documents[filename]
+            apply_policy(config, model, effort, filename == "config.toml")
+            rendered[filename] = tomlkit.dumps(config)
+        # Save profile settings before removing their old tables from the base.
+        for filename in ("default.config.toml", "high-brain.config.toml", "config.toml"):
+            write_config(home_dir / filename, originals[filename], rendered[filename])
+    except (OSError, UnicodeError, ValueError, TypeError, tomlkit.exceptions.TOMLKitError) as error:
+        # Parser diagnostics may contain credentials: report only the error type.
+        print(f"skipping invalid or unwritable Codex config in {home_dir}: {type(error).__name__}")
 PYEOF_CODEX
 }
 

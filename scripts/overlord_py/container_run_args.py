@@ -19,6 +19,7 @@ def build_container_run_args(
         workspace=paths.workspace,
         zsh_data=paths.state.zsh_data,
         prime_agent_data=paths.state.prime_agent_data,
+        omp_agent_data=paths.state.omp_agent_data,
         gitconfig=host_home / ".gitconfig",
         ssh_dir=host_home / ".ssh",
     )
@@ -39,6 +40,8 @@ def build_container_run_args(
         f"{sources.zsh_data}:/home/overlord/.zsh_data",
         "-v",
         f"{sources.prime_agent_data}:/home/overlord/.prime/agent",
+        "-v",
+        f"{sources.omp_agent_data}:/home/overlord/.omp/agent",
         *exec_env_flags,
     ]
     gitconfig = host_home / ".gitconfig"

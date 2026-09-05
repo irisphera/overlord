@@ -76,6 +76,19 @@ else
 	echo "[entrypoint] no remap needed — overlord is $(id overlord)"
 fi
 
+# Seed a new OMP bind from image defaults without replacing persisted state.
+OMP_DEFAULTS=/usr/local/share/overlord/omp-agent-defaults
+OMP_AGENT_DIR=/home/overlord/.omp/agent
+if [ -d "$OMP_DEFAULTS" ]; then
+	mkdir -p "$OMP_AGENT_DIR"
+	chmod 700 "$OMP_AGENT_DIR"
+	for entry in config.yml models.yml skills; do
+		if [ -e "$OMP_DEFAULTS/$entry" ] && [ ! -e "$OMP_AGENT_DIR/$entry" ]; then
+			cp -a "$OMP_DEFAULTS/$entry" "$OMP_AGENT_DIR/$entry"
+		fi
+	done
+fi
+
 # --- Fix home directory ownership ---
 # Always ensure /home/overlord is owned by the overlord user, regardless of
 # whether UID/GID remapping occurred. This catches:

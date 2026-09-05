@@ -27,6 +27,8 @@ EXAMPLES:
     Use 'fresh' to destroy the container and start from a clean image.
     Use 'purge' to also remove the image (full rebuild on next launch).
     .overlord/ inside the workspace survives fresh/purge.
+    OMP sessions/config live in .overlord/omp-agent-data, mounted at ~/.omp/agent.
+    Old containers' OMP state is rescued before removal; failed rescue blocks deletion.
 
 ZELLIJ:
     Ctrl+q         Detach from session (container stays alive)

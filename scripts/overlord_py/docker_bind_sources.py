@@ -13,6 +13,7 @@ class BindSourcePaths:
     workspace: Path
     zsh_data: Path
     prime_agent_data: Path
+    omp_agent_data: Path
     gitconfig: Path
     ssh_dir: Path
 
@@ -30,6 +31,7 @@ def resolve_bind_source_paths(
         workspace=paths.workspace,
         zsh_data=paths.state.zsh_data,
         prime_agent_data=paths.state.prime_agent_data,
+        omp_agent_data=paths.state.omp_agent_data,
         gitconfig=home / ".gitconfig",
         ssh_dir=home / ".ssh",
     )

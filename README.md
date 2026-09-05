@@ -91,11 +91,13 @@ Rerunning `setup.sh` is safe.
 
 - Image: `localhost/overlord-<workspace-slug>:latest`
 - Container: `overlord-<workspace-slug>` (one per workspace directory name)
-- Binds: `workspace:/workspace`, `~/.gitconfig`/`~/.ssh` (ro), `.overlord/zsh-data:/home/overlord/.zsh_data`
+- Binds: `workspace:/workspace`, `~/.gitconfig`/`~/.ssh` (ro), `.overlord/zsh-data:/home/overlord/.zsh_data`, `.overlord/prime-agent-data:/home/overlord/.prime/agent`, and `.overlord/omp-agent-data:/home/overlord/.omp/agent`.
 - `config/entrypoint.sh` handles UID/GID remap and `gosu overlord`
 - The launcher prefers `setup-devcontainer.sh` when present; it runs shared `setup.sh`, then adds the container-only Runpod Docs MCP
 - Setup runs as root inside the container on create/start, then ownership is repaired to `overlord`
 - An already-running container does not rerun setup; run `overlord fresh` before attaching if you need a newly added tool such as `omp`
+- OMP sessions, configuration, skills, and agent databases live in the workspace's `.overlord/omp-agent-data` and survive `overlord fresh` and `overlord purge`. A new empty bind is seeded with image-provided config/models/skills, without overwriting existing state or copying image sessions/auth databases.
+- For containers created before the OMP bind existed, the updated launcher stops the container and rescues `/home/overlord/.omp/agent` before removal. A failed stop or copy refuses deletion. Existing destination state is preserved under `.overlord/.omp-agent-data-backup-*`. The next launch attaches the OMP bind; old containers do not gain a bind merely by restarting. Use the updated `overlord fresh`/`purge`, not direct `docker rm`/`podman rm`, for this migration.
 
 ## Config
 

@@ -114,6 +114,33 @@ class SetupPersistenceTests(unittest.TestCase):
             self.assertIn("api-version", config_toml)
 
 
+    def test_omp_defaults_seed_empty_bind_without_overwriting_state(self):
+        entrypoint = (ROOT / "config/entrypoint.sh").read_text()
+        script = entrypoint.split("# Seed a new OMP bind", 1)[1].split("# --- Fix home directory ownership", 1)[0]
+        script = script[script.index("OMP_DEFAULTS="):]
+        script = script.replace("OMP_DEFAULTS=/usr/local/share/overlord/omp-agent-defaults", 'OMP_DEFAULTS="$TEST_DEFAULTS"')
+        script = script.replace("OMP_AGENT_DIR=/home/overlord/.omp/agent", 'OMP_AGENT_DIR="$TEST_AGENT_DIR"')
+        with tempfile.TemporaryDirectory() as tmp:
+            defaults, agent = Path(tmp) / "defaults", Path(tmp) / "agent"
+            defaults.mkdir()
+            (defaults / "config.yml").write_text("defaultThinkingLevel: medium\n")
+            (defaults / "models.yml").write_text("providers: {}\n")
+            (defaults / "skills/example").mkdir(parents=True)
+            (defaults / "skills/example/SKILL.md").write_text("example skill\n")
+            (defaults / "sessions").mkdir()
+            (defaults / "sessions/unwanted.jsonl").write_text("image session must not be seeded\n")
+            env = dict(os.environ, TEST_DEFAULTS=str(defaults), TEST_AGENT_DIR=str(agent))
+            subprocess.run(["bash", "-e"], input=script, text=True, env=env, check=True)
+            self.assertEqual((agent / "config.yml").read_text(), "defaultThinkingLevel: medium\n")
+            self.assertEqual((agent / "skills/example/SKILL.md").read_text(), "example skill\n")
+            self.assertFalse((agent / "sessions").exists())
+            (agent / "config.yml").write_text("defaultThinkingLevel: high\n")
+            (agent / "sessions").mkdir()
+            (agent / "sessions/saved.jsonl").write_text("saved session\n")
+            subprocess.run(["bash", "-e"], input=script, text=True, env=env, check=True)
+            self.assertEqual((agent / "config.yml").read_text(), "defaultThinkingLevel: high\n")
+            self.assertEqual((agent / "sessions/saved.jsonl").read_text(), "saved session\n")
+
     def test_shared_skills_reach_omp_for_each_user_with_assets(self):
         section = SETUP.split("install_prime_agent_skills() {", 1)[1]
         function = "install_prime_agent_skills() {" + section.split("\nconfigure_prime_agent_tools() {", 1)[0]

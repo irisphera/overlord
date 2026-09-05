@@ -67,6 +67,12 @@ RUN chmod 755 /usr/local/bin/entrypoint.sh /usr/local/share/overlord/setup.sh &&
 RUN bash /usr/local/share/overlord/setup.sh \
   && chown -R overlord:overlord /home/overlord
 
+# Bind mounts hide image content. Keep only authored OMP defaults outside the
+# mounted agent directory; never seed sessions, auth, or runtime databases.
+RUN mkdir -p /usr/local/share/overlord/omp-agent-defaults \
+  && cp -a /home/overlord/.omp/agent/config.yml /home/overlord/.omp/agent/models.yml \
+    /home/overlord/.omp/agent/skills /usr/local/share/overlord/omp-agent-defaults/
+
 # Also ensure zellij config is placed for overlord (setup.sh doesn't copy kdl, we do)
 RUN mkdir -p /home/overlord/.config/zellij && cp /usr/local/share/overlord/zellij-config.kdl /home/overlord/.config/zellij/config.kdl && chown -R overlord:overlord /home/overlord/.config
 

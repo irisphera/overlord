@@ -7,7 +7,7 @@ export DEBIAN_FRONTEND=noninteractive
 # and re-enforce prompt/colors. Installs: zsh, oh-my-zsh, zsh-autosuggestions,
 # zsh-syntax-highlighting, zsh-completions, zellij, lazyvim (neovim + LazyVim starter),
 # codegraph (local code intelligence), prime-agent (256k contextWindow override),
-# DeepSeek Harness (dsh), and Oh My Pi (omp).
+# DeepSeek Harness (dsh), Oh My Pi (omp), and Codex CLI (codex).
 # Safe to run repeatedly via: bash setup.sh  or  ./setup.sh
 # Also used by the overlord container (as /workspace/setup-devcontainer.sh).
 
@@ -507,7 +507,7 @@ find_tool_command() {
 
 publish_tool_commands() {
   local command_name source destination
-  for command_name in node npm npx corepack prime-agent codegraph uv aws dsh omp; do
+  for command_name in node npm npx corepack prime-agent codegraph uv aws dsh omp codex; do
     source="$(find_tool_command "$command_name" || true)"
     if [ -z "$source" ]; then
       continue
@@ -572,7 +572,7 @@ ensure_traversable_chain() {
 
 ensure_cross_user_tool_access() {
   local tool dest target
-  for tool in node npm npx corepack prime-agent codegraph uv aws dsh omp; do
+  for tool in node npm npx corepack prime-agent codegraph uv aws dsh omp codex; do
     dest="/usr/local/bin/$tool"
     [ -L "$dest" ] || continue
     target="$(readlink -f "$dest" 2>/dev/null || true)"
@@ -589,7 +589,7 @@ verify_login_shell_tools() {
   fi
   local command_name target_home
   while IFS= read -r target_home; do
-    for command_name in node npm npx prime-agent git omp; do
+    for command_name in node npm npx prime-agent git omp codex; do
       if env -i HOME="$target_home" USER="$(stat -c '%U' "$target_home" 2>/dev/null || id -un)" TERM="${TERM:-xterm}" \
         PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
         zsh -lic "command -v $command_name" >/dev/null 2>&1; then
@@ -1374,12 +1374,35 @@ install_oh_my_pi() {
     install_dir="/usr/local/bin"
   fi
   local local_binary="${install_dir}/omp"
+  # Always converge on the latest release: a plain skip-if-present check would
+  # pin whatever version happened to be installed first.
+  local current=""
   if omp_is_available "$local_binary"; then
-    info "Oh My Pi already installed"
+    # omp may live on PATH rather than at local_binary; query the one that runs.
+    local omp_binary="omp"
+    if [ -x "$local_binary" ]; then
+      omp_binary="$local_binary"
+    fi
+    current="$("$omp_binary" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true)"
+  fi
+  # OMP_VERSION pins a version when set; otherwise track npm latest.
+  local want="${OMP_VERSION:-}"
+  if [ -z "$want" ] && command -v npm >/dev/null 2>&1; then
+    want="$(npm view @oh-my-pi/pi-coding-agent version 2>/dev/null | tr -d ' \r\n' || true)"
+  fi
+  if [ -n "$current" ] && [ -n "$want" ] && [ "$current" = "$want" ]; then
+    info "Oh My Pi already at latest ($current)"
     return 0
   fi
-
-  info "installing Oh My Pi (omp)..."
+  if [ -n "$current" ] && [ -z "$want" ]; then
+    warn "could not determine latest Oh My Pi version; keeping installed $current"
+    return 0
+  fi
+  if [ -n "$current" ]; then
+    info "upgrading Oh My Pi ($current -> ${want:-latest})..."
+  else
+    info "installing Oh My Pi (omp)..."
+  fi
   # The official installer chooses a matching prebuilt binary when Bun is not
   # available. If Bun is present, force the binary mode so PI_INSTALL_DIR is
   # honored and omp is still available to every package user.
@@ -1401,6 +1424,218 @@ install_oh_my_pi() {
   else
     warn "Oh My Pi installer completed but omp is not available"
   fi
+}
+
+# Codex CLI — OpenAI's coding agent, configured here for the same Azure
+# gpt-6-astra deployment as prime-agent/omp. https://github.com/openai/codex
+CODEX_NPM_PACKAGE="@openai/codex"
+
+codex_want_version() {
+  local want="${CODEX_VERSION:-}"
+  if [ -f "$(dirname "$0")/config/tool-versions.env" ]; then
+    want="$(grep CODEX_VERSION "$(dirname "$0")/config/tool-versions.env" | cut -d= -f2 | tr -d ' ' || echo "$want")"
+  elif [ -f "/workspace/config/tool-versions.env" ]; then
+    want="$(grep CODEX_VERSION /workspace/config/tool-versions.env | cut -d= -f2 | tr -d ' ' || echo "$want")"
+  elif [ -f "/usr/local/share/overlord/config/tool-versions.env" ]; then
+    want="$(grep CODEX_VERSION /usr/local/share/overlord/config/tool-versions.env | cut -d= -f2 | tr -d ' ' || echo "$want")"
+  fi
+  echo "$want"
+}
+
+install_codex() {
+  if ! command -v node >/dev/null 2>&1; then
+    warn "node unavailable; skipping Codex CLI install"
+    return 0
+  fi
+  local cur=""
+  if command -v codex >/dev/null 2>&1; then
+    cur="$(codex --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+[^ ]*' | head -n1 || true)"
+  fi
+  local want
+  want="$(codex_want_version)"
+  if [ -n "$cur" ]; then
+    if [ -z "$want" ] || echo "$cur" | grep -q "^$want"; then
+      info "Codex CLI already installed (codex $cur)"
+      return 0
+    fi
+    info "Codex CLI version mismatch (have: $cur, want: $want), reinstalling..."
+  else
+    info "installing Codex CLI (codex)..."
+  fi
+  local spec="${CODEX_NPM_PACKAGE}"
+  [ -n "$want" ] && spec="@openai/codex@${want}"
+  if npm install -g "$spec" 2>&1 | sed 's/^/[codex] /'; then
+    if command -v codex >/dev/null 2>&1; then
+      info "codex $(codex --version 2>/dev/null | head -n1) installed"
+    else
+      warn "codex not on PATH after install"
+    fi
+  else
+    warn "failed to install $spec via npm"
+  fi
+}
+
+# Oh My Pi models: ensure the Azure gpt-6-astra deployment is listed under a
+# dedicated azure-gpt6 provider (the built-in `azure` provider catalog is left
+# untouched). Additive only: an existing models.yml that already mentions
+# gpt-6-astra is kept; any other existing file is backed up to models.yml.bak.
+configure_omp_models() {
+  info "configuring Oh My Pi Azure models (gpt-6-astra)..."
+  local omp_dirs=()
+  omp_dirs+=("${PI_CODING_AGENT_DIR:-$HOME/.omp/agent}")
+  if [ -d "/home/overlord" ] && { [ "$(id -u)" -eq 0 ] || [ -w /home/overlord/.omp/agent ] || [ -w /home/overlord ]; }; then
+    omp_dirs+=("/home/overlord/.omp/agent")
+  fi
+  if [ -d "/root" ] && { [ "$(id -u)" -eq 0 ] || [ -w /root/.omp/agent ] || [ -w /root ]; }; then
+    omp_dirs+=("/root/.omp/agent")
+  fi
+  local uniq_dirs=()
+  local seen=""
+  local d
+  for d in "${omp_dirs[@]}"; do
+    case " $seen " in
+      *" $d "*) continue ;;
+      *) uniq_dirs+=("$d"); seen="$seen $d" ;;
+    esac
+  done
+  python3 - "${uniq_dirs[@]}" <<'PYEOF_OMP'
+import os
+import sys
+from pathlib import Path
+resource = os.environ.get("AZURE_OPENAI_RESOURCE_NAME", "").strip()
+base = os.environ.get("AZURE_OPENAI_BASE_URL", "").strip().rstrip("/")
+if not base:
+    if resource:
+        base = f"https://{resource}.openai.azure.com/openai/v1"
+    else:
+        base = "https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1"
+models_yml = f"""# Managed by overlord setup.sh (configure_omp_models).
+providers:
+  azure-gpt6:
+    baseUrl: {base}
+    api: azure-openai-responses
+    apiKey: AZURE_OPENAI_API_KEY
+    models:
+      - id: gpt-6-astra
+        name: GPT-6 Astra
+        contextWindow: 256000
+        maxTokens: 16384
+        reasoning: true
+"""
+for raw in sys.argv[1:]:
+    agent_dir = Path(raw)
+    try:
+        agent_dir.mkdir(parents=True, exist_ok=True)
+        target = agent_dir / "models.yml"
+        if target.exists():
+            try:
+                existing = target.read_text()
+            except OSError as e:
+                print(f"skipping unreadable {target}: {e}")
+                continue
+            if "gpt-6-astra" in existing:
+                print(f"keeping existing {target} (already provides gpt-6-astra)")
+                continue
+            backup = target.with_suffix(".yml.bak")
+            try:
+                if not backup.exists():
+                    backup.write_text(existing)
+                    print(f"backed up {target} to {backup}")
+            except OSError as e:
+                print(f"skipping unwritable {target}: {e}")
+                continue
+        target.write_text(models_yml)
+        print(f"wrote {target}")
+    except OSError as e:
+        print(f"skipping unwritable {agent_dir}: {e}")
+PYEOF_OMP
+}
+
+# Codex config: point codex at the same Azure gpt-6-astra deployment.
+# Codex sends `model` verbatim as the Azure deployment name (no
+# deployment-name map support), so resolve AZURE_OPENAI_DEPLOYMENT_NAME_MAP
+# here. Additive only: an existing config.toml that already mentions
+# gpt-6-astra is kept; any other existing file is backed up to config.toml.bak.
+configure_codex() {
+  info "configuring Codex CLI for Azure gpt-6-astra..."
+  local codex_dirs=()
+  codex_dirs+=("${CODEX_HOME:-$HOME/.codex}")
+  if [ -d "/home/overlord" ] && { [ "$(id -u)" -eq 0 ] || [ -w /home/overlord/.codex ] || [ -w /home/overlord ]; }; then
+    codex_dirs+=("/home/overlord/.codex")
+  fi
+  if [ -d "/root" ] && { [ "$(id -u)" -eq 0 ] || [ -w /root/.codex ] || [ -w /root ]; }; then
+    codex_dirs+=("/root/.codex")
+  fi
+  local uniq_dirs=()
+  local seen=""
+  local d
+  for d in "${codex_dirs[@]}"; do
+    case " $seen " in
+      *" $d "*) continue ;;
+      *) uniq_dirs+=("$d"); seen="$seen $d" ;;
+    esac
+  done
+  python3 - "${uniq_dirs[@]}" <<'PYEOF_CODEX'
+import os
+import sys
+from pathlib import Path
+resource = os.environ.get("AZURE_OPENAI_RESOURCE_NAME", "").strip()
+env_base = os.environ.get("AZURE_OPENAI_BASE_URL", "").strip().rstrip("/")
+if resource:
+    base = f"https://{resource}.openai.azure.com/openai"
+elif env_base:
+    # Prime-style base URLs end in /openai/v1; codex appends /responses itself.
+    base = env_base[:-3].rstrip("/") if env_base.endswith("/v1") else env_base
+else:
+    base = "https://YOUR-RESOURCE-NAME.openai.azure.com/openai"
+deployment = "gpt-6-astra"
+for chunk in os.environ.get("AZURE_OPENAI_DEPLOYMENT_NAME_MAP", "").split(","):
+    if "=" in chunk:
+        key, _, value = chunk.partition("=")
+        if key.strip() == "gpt-6-astra" and value.strip():
+            deployment = value.strip()
+api_version = os.environ.get("AZURE_OPENAI_API_VERSION", "").strip() or "2025-04-01-preview"
+config_toml = f"""# Managed by overlord setup.sh (configure_codex).
+model = "{deployment}"
+model_provider = "azure"
+model_reasoning_effort = "high"
+
+[model_providers.azure]
+name = "Azure OpenAI"
+base_url = "{base}"
+env_key = "AZURE_OPENAI_API_KEY"
+wire_api = "responses"
+
+[model_providers.azure.query_params]
+api-version = "{api_version}"
+"""
+for raw in sys.argv[1:]:
+    home_dir = Path(raw)
+    try:
+        home_dir.mkdir(parents=True, exist_ok=True)
+        target = home_dir / "config.toml"
+        if target.exists():
+            try:
+                existing = target.read_text()
+            except OSError as e:
+                print(f"skipping unreadable {target}: {e}")
+                continue
+            if "gpt-6-astra" in existing:
+                print(f"keeping existing {target} (already provides gpt-6-astra)")
+                continue
+            backup = target.with_suffix(".toml.bak")
+            try:
+                if not backup.exists():
+                    backup.write_text(existing)
+                    print(f"backed up {target} to {backup}")
+            except OSError as e:
+                print(f"skipping unwritable {target}: {e}")
+                continue
+        target.write_text(config_toml)
+        print(f"wrote {target}")
+    except OSError as e:
+        print(f"skipping unwritable {home_dir}: {e}")
+PYEOF_CODEX
 }
 
 install_prime_agent_skills() {
@@ -2211,6 +2446,7 @@ ensure_target_tool_access() {
 install_prime_agent
 install_dsh
 install_oh_my_pi
+install_codex
 sync_prime_agent_rc
 # This run created home files as root (omz, plugins, rc blocks); hand them back.
 own_all_provisioned_homes
@@ -2220,6 +2456,8 @@ ensure_target_tool_access
 install_prime_agent_skills
 configure_prime_agent_tools
 configure_prime_agent_models
+configure_omp_models
+configure_codex
 make_zsh_default
 verify_login_shell_tools
 

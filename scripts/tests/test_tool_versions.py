@@ -9,5 +9,6 @@ class ToolVersionsTests(unittest.TestCase):
     def test_load(self):
         tv = load_tool_versions()
         self.assertRegex(tv.zellij_version, r"\d+\.\d+\.\d+")
+        self.assertRegex(tv.codex_version, r"\d+\.\d+\.\d+")
 if __name__ == "__main__":
     unittest.main()

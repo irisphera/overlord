@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -35,6 +36,75 @@ class SetupPersistenceTests(unittest.TestCase):
         self.assertIn("--binary", SETUP)
         calls = SETUP.rsplit("install_prime_agent\n", 1)[1]
         self.assertLess(calls.index("install_oh_my_pi"), calls.index("publish_tool_commands"))
+
+    def test_oh_my_pi_tracks_latest_release(self):
+        self.assertIn("npm view @oh-my-pi/pi-coding-agent version", SETUP)
+        self.assertIn("already at latest", SETUP)
+        self.assertIn("OMP_VERSION", SETUP)
+
+    def test_omp_models_yml_provides_gpt6_astra(self):
+        self.assertIn("configure_omp_models", SETUP)
+        calls = SETUP.rsplit("install_prime_agent\n", 1)[1]
+        self.assertLess(calls.index("configure_prime_agent_models"), calls.index("configure_omp_models"))
+        script = SETUP.split("<<'PYEOF_OMP'\n", 1)[1].split("\nPYEOF_OMP", 1)[0]
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "agent"
+            env = {
+                key: value
+                for key, value in os.environ.items()
+                if not key.startswith("AZURE_OPENAI_")
+            }
+            completed = subprocess.run(
+                [sys.executable, "-", str(target)],
+                input=script,
+                text=True,
+                capture_output=True,
+                check=False,
+                env=env,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            models_yml = (target / "models.yml").read_text()
+            self.assertIn("azure-gpt6", models_yml)
+            self.assertIn("azure-openai-responses", models_yml)
+            self.assertIn("gpt-6-astra", models_yml)
+            self.assertIn("AZURE_OPENAI_API_KEY", models_yml)
+            self.assertIn("https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1", models_yml)
+
+    def test_codex_is_installed_and_configured_for_azure(self):
+        self.assertIn("install_codex", SETUP)
+        self.assertIn("configure_codex", SETUP)
+        self.assertIn("@openai/codex", SETUP)
+        self.assertIn("CODEX_VERSION", SETUP)
+        versions = (ROOT / "config" / "tool-versions.env").read_text()
+        self.assertIn("CODEX_VERSION=", versions)
+        calls = SETUP.rsplit("install_prime_agent\n", 1)[1]
+        self.assertLess(calls.index("install_oh_my_pi"), calls.index("install_codex"))
+        self.assertLess(calls.index("install_codex"), calls.index("publish_tool_commands"))
+        self.assertLess(calls.index("configure_prime_agent_models"), calls.index("configure_codex"))
+        script = SETUP.split("<<'PYEOF_CODEX'\n", 1)[1].split("\nPYEOF_CODEX", 1)[0]
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "codex"
+            env = {
+                key: value
+                for key, value in os.environ.items()
+                if not key.startswith("AZURE_OPENAI_")
+            }
+            completed = subprocess.run(
+                [sys.executable, "-", str(target)],
+                input=script,
+                text=True,
+                capture_output=True,
+                check=False,
+                env=env,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            config_toml = (target / "config.toml").read_text()
+            self.assertIn('model = "gpt-6-astra"', config_toml)
+            self.assertIn('model_provider = "azure"', config_toml)
+            self.assertIn("https://YOUR-RESOURCE-NAME.openai.azure.com/openai", config_toml)
+            self.assertIn('env_key = "AZURE_OPENAI_API_KEY"', config_toml)
+            self.assertIn('wire_api = "responses"', config_toml)
+            self.assertIn("api-version", config_toml)
 
     def test_prime_agent_skills_are_installed_after_prime_agent(self):
         self.assertIn("install_prime_agent_skills", SETUP)
@@ -268,7 +338,7 @@ class SetupPersistenceTests(unittest.TestCase):
     def test_clean_zsh_login_is_verified(self):
         self.assertIn("verify_login_shell_tools", SETUP)
         self.assertIn('zsh -lic "command -v $command_name"', SETUP)
-        self.assertIn("node npm prime-agent omp", SETUP)
+        self.assertIn("node npm npx prime-agent git omp codex", SETUP)
 
     def test_existing_zshrc_gets_oh_my_zsh_bootstrap(self):
         self.assertIn("Overlord: oh-my-zsh", SETUP)

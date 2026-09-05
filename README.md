@@ -5,7 +5,7 @@ Minimal per-workspace dev container launcher + standalone VM setup.
 - **Container**: `overlord` creates a persistent container per workspace and runs `setup.sh` inside.
 - **VM direct**: `bash setup.sh` sets up the current machine (AWS-friendly, non-interactive, fixes sudo password prompts).
 
-A clean dev environment with **zsh + oh-my-zsh (bira theme: colored user@host:path + git) + autosuggestions + syntax-highlighting + completions + zellij + lazyvim**, plus Prime Agent, DeepSeek Harness, and Oh My Pi coding-agent harnesses. Base image is **Debian 13 trixie-slim** (smaller than Ubuntu).
+A clean dev environment with **zsh + oh-my-zsh (bira theme: colored user@host:path + git) + autosuggestions + syntax-highlighting + completions + zellij + lazyvim**, plus Prime Agent, DeepSeek Harness, Oh My Pi, and Codex CLI coding-agent harnesses (all pointed at the Azure `gpt-6-astra` deployment). Base image is **Debian 13 trixie-slim** (smaller than Ubuntu).
 
 ## Quick start (container)
 
@@ -47,7 +47,7 @@ bash setup.sh
 curl -fsSL https://raw.githubusercontent.com/irisphera/overlord/main/setup.sh | bash
 ```
 
-It installs (if missing): `zsh`, `oh-my-zsh` and plugins, `zellij`, `neovim` + **LazyVim**, nvm + **Node.js 24**, `uv`, AWS CLI v2, **codegraph** `1.5.0`, **prime-agent** `0.8.0` with a `256k` context override, **DeepSeek Harness** (`dsh`), and **Oh My Pi** (`omp`). Oh My Pi is installed with its official `curl -fsSL https://omp.sh/install | sh` installer; run it with `omp`. It also installs shared Pi/Prime skills from `mattpocock/skills`, `aws/agent-toolkit-for-aws`, and `cursor/plugins`, then configures Prime Agent's bundled web search plus the public Context7 MCP server. Web search needs a one-time Serper credential through `/login`; Context7 needs no login.
+It installs (if missing): `zsh`, `oh-my-zsh` and plugins, `zellij`, `neovim` + **LazyVim**, nvm + **Node.js 24**, `uv`, AWS CLI v2, **codegraph** `1.5.0`, **prime-agent** `0.8.0` with a `256k` context override, **DeepSeek Harness** (`dsh`), **Oh My Pi** (`omp`, always upgraded to the latest release), and **Codex CLI** (`codex` `0.153.4`). Oh My Pi is installed with its official `curl -fsSL https://omp.sh/install | sh` installer; run it with `omp`. Azure `gpt-6-astra` is registered for omp (`omp -p --model azure-gpt6/gpt-6-astra`) and as the default model for `codex` (`codex exec`), using `AZURE_OPENAI_API_KEY` plus `AZURE_OPENAI_RESOURCE_NAME` (or `AZURE_OPENAI_BASE_URL`). It also installs shared Pi/Prime skills from `mattpocock/skills`, `aws/agent-toolkit-for-aws`, and `cursor/plugins`, then configures Prime Agent's bundled web search plus the public Context7 MCP server. Web search needs a one-time Serper credential through `/login`; Context7 needs no login.
 
 ### AWS sudo password fix
 
@@ -65,7 +65,7 @@ This makes subsequent `sudo` non-interactive without a password. If `sudo` is no
 - `apt-get update` + installs base packages
 - Installs `zellij` v0.43.1 (arch-aware tarball)
 - Installs nvm + Node.js 24, `uv`, and AWS CLI v2
-- Installs `prime-agent`, DeepSeek Harness (`dsh`), and Oh My Pi (`omp`)
+- Installs `prime-agent`, DeepSeek Harness (`dsh`), Oh My Pi (`omp`), and Codex CLI (`codex`), all wired to Azure `gpt-6-astra`
 - Installs shared Pi/Prime skills (including `cursor/plugins`), and Context7 MCP configuration
 - Enables bundled web search (Serper login remains a one-time user step)
 - Installs `oh-my-zsh` unattended

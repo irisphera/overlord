@@ -3,13 +3,13 @@
 Minimal per-workspace dev container launcher + standalone VM setup.
 
 - **Container**: `overlord` runs agents in a per-workspace container, exposing the launched folder and its `.overlord/` state rather than your host home or sibling projects.
-- **VM direct**: `setup.sh` installs the same tools on **Debian 13**, configuring one explicitly selected account.
+- **VM direct**: `setup.sh` installs the same tools on **Debian 13 or Ubuntu 22.04/24.04/26.04 LTS**, configuring one explicitly selected account.
 
 Includes zsh + oh-my-zsh, zellij, LazyVim, Node 24, uv, AWS CLI, CodeGraph, Prime Agent, Oh My Pi, and Codex CLI. DeepSeek Harness is no longer installed or integrated; existing external installations are not uninstalled.
 
 ## Quick start (container)
 
-Requires host **Python >=3.12** and **rootless Podman** (native Linux or a locally managed **Podman Machine on macOS**), or rootful Docker/Docker Desktop with a local Unix-socket context. Run the launcher as a non-root host user. Arbitrary remote servers and rootless/userns-remapped Docker are unsupported. Help and argument errors do not require an engine. The Debian 13 requirement below applies to the container image and direct VM installer, not the Mac host.
+Requires host **Python >=3.12** and **rootless Podman** (native Linux or a locally managed **Podman Machine on macOS**), or rootful Docker/Docker Desktop with a local Unix-socket context. Run the launcher as a non-root host user. Arbitrary remote servers and rootless/userns-remapped Docker are unsupported. Help and argument errors do not require an engine. The container image uses Debian 13; native VM support is listed below. Ubuntu 22.04's system Python is sufficient for native setup but not for the container launcher, which still requires Python >=3.12.
 
 ```bash
 git clone https://github.com/irisphera/overlord.git
@@ -41,7 +41,7 @@ Setup failures report the exit status and both stdout and stderr. Fix the failin
 
 ## Direct VM setup
 
-Supported system: **Debian 13 (trixie), x86_64 or arm64**. Ubuntu and other releases are not supported. Tool installation requires root or existing non-interactive sudo; the installer does not grant privileges or edit VM sudoers.
+Supported systems: **Debian 13 (trixie)** and **Ubuntu 22.04, 24.04, or 26.04 LTS**, on **x86_64 or arm64**, with their standard apt repositories (including Ubuntu universe). Tool installation requires root or existing non-interactive sudo; the installer does not grant privileges or edit VM sudoers.
 
 ```bash
 git clone https://github.com/irisphera/overlord.git
@@ -57,7 +57,9 @@ The target defaults to `SUDO_USER`, then the invoking non-root account. Root mus
 
 npm global installs default to `/usr/local`, keeping workspace-installed executables on PATH across Node upgrades. Explicit npm prefix settings still take precedence; project-local installs stay in the project.
 
-Version precedence: explicit environment variables, then `--versions FILE` or adjacent `config/tool-versions.env`, then embedded standalone defaults. The manifest is parsed as data, not sourced as shell. It pins Node, zellij, CodeGraph, Prime Agent, and Codex. OMP resolves the latest release unless `OMP_VERSION` is set. Required downloads, installs, and executable version checks fail setup; optional skill downloads and LazyVim plugin synchronization report warnings.
+Python environments use **Astral uv**; Conda is not installed or required. The installer uses `/usr/bin/python3` and distro-provided YAML/TOML packages for configuration edits, independently of any activated Python environment. Neovim is installed from a checksum-verified, pinned upstream release because older distro packages do not meet [LazyVim's runtime requirements](https://www.lazyvim.org/).
+
+Version precedence: explicit environment variables, then `--versions FILE` or adjacent `config/tool-versions.env`, then embedded standalone defaults. The manifest is parsed as data, not sourced as shell. It pins Node, Neovim (`NVIM_VERSION`), zellij, CodeGraph, Prime Agent, and Codex. OMP resolves the latest release unless `OMP_VERSION` is set. Required downloads, installs, and executable version checks fail setup; optional skill downloads and LazyVim plugin synchronization report warnings.
 
 Use `--profile native` (default) for VMs. `--profile container` additionally enables Runpod Docs MCP for Prime. The thin `setup-devcontainer.sh` adapter selects the container profile and `overlord` account; it propagates failures from the shared installer.
 
@@ -84,9 +86,10 @@ Host Prime models seed a missing workspace models file without changing the host
 
 ## What setup.sh does (idempotent)
 
-- Validates Debian support, target identity, and existing privileges
+- Validates supported Debian/Ubuntu releases, target identity, and existing privileges
 - `apt-get update` + installs base packages
 - Installs `zellij` v0.43.1 (arch-aware tarball)
+- Installs checksum-verified Neovim from a pinned upstream release for LazyVim
 - Installs a root-owned Node.js 24 distribution, `uv`, and AWS CLI v2
 - Installs `prime-agent`, Oh My Pi (`omp`), and Codex CLI (`codex`) with Azure model support
 - Installs shared Pi/Prime/OMP skills from `mattpocock/skills`, `aws/agent-toolkit-for-aws`, and `cursor/plugins`, plus the AWS setup skill and Context7 routing skill, for the selected account. Restart OMP after installing to refresh discovery. Context7 MCP remains Prime-specific.

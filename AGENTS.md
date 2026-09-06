@@ -3,7 +3,7 @@
 ## OVERVIEW
 
 Overlord is a minimal dev-container launcher + standalone VM setup. The repo has:
-- `setup.sh`: self-contained Debian 13 installer. Root-owned tool distributions; one target account for shell/editor/agent configuration.
+- `setup.sh`: self-contained Debian 13 and Ubuntu 22.04/24.04/26.04 LTS installer. Root-owned tool distributions; one target account for shell/editor/agent configuration.
 - `Dockerfile`: builds Debian 13 with `setup.sh --user overlord --profile container`.
 - `scripts/overlord`: Python >=3.12 launcher; verified workspace lifecycle and persisted-state migration.
 - `config/` : container bootstrap and zellij config
@@ -32,7 +32,7 @@ overlord shell          # shell
 overlord zellij         # open zellij
 overlord fresh          # remove container
 overlord purge          # remove container + image
-bash setup.sh --user NAME # Debian 13; root or existing passwordless sudo
+bash setup.sh --user NAME # Supported Debian/Ubuntu; root or existing passwordless sudo
 ```
 
 ## NOTES

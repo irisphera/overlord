@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Shared, self-contained installer for Debian 13 containers and native VMs.
+# Shared, self-contained installer for Debian 13 and Ubuntu LTS containers/VMs.
 # Sourcing defines functions only; execution is centralized in main below.
 
 info() { printf '[setup] %s\n' "$*"; }
@@ -9,7 +9,7 @@ die() { printf '[setup] ERROR: %s\n' "$*" >&2; return 1; }
 setup_help() {
   cat <<'HELP'
 Usage: bash setup.sh [--user NAME] [--profile native|container] [--versions FILE]
-Install the shared Debian 13 development environment without interactive prompts.
+Install the shared development environment on Debian 13 or Ubuntu 22.04/24.04/26.04 LTS.
 The target defaults to SUDO_USER or the invoking non-root user. Root must select
 an account explicitly. Configuration belongs only to that account; existing
 sessions, authentication and databases are preserved.
@@ -22,13 +22,14 @@ Examples:
 HELP
 }
 
-require_debian() {
-  local ID VERSION_ID
-  [ -r /etc/os-release ] || { die 'cannot identify operating system'; return 1; }
-  . /etc/os-release
-  [ "$ID" = debian ] && [ "$VERSION_ID" = 13 ] || {
-    die 'Debian 13 (trixie) is required'; return 1;
-  }
+require_supported_os() {
+  local release_file="${1:-/etc/os-release}" ID="" VERSION_ID=""
+  [ -r "$release_file" ] || { die 'cannot identify operating system'; return 1; }
+  . "$release_file"
+  case "$ID:$VERSION_ID" in
+    debian:13|ubuntu:22.04|ubuntu:24.04|ubuntu:26.04) return 0 ;;
+    *) die "unsupported system ${ID:-unknown} ${VERSION_ID:-unknown}; Debian 13 or Ubuntu 22.04/24.04/26.04 LTS is required"; return 1 ;;
+  esac
 }
 
 resolve_setup_identity() {
@@ -49,7 +50,7 @@ resolve_setup_identity() {
 load_tool_versions() {
   # Embedded defaults keep curl | bash standalone. A local manifest overrides
   # defaults; explicit environment versions override the manifest.
-  local -A versions=( [ZELLIJ_VERSION]=0.43.1 [NODE_VERSION]=24.20.0
+  local -A versions=( [ZELLIJ_VERSION]=0.43.1 [NODE_VERSION]=24.20.0 [NVIM_VERSION]=0.12.5
     [PRIME_AGENT_VERSION]=0.9.2 [CODEGRAPH_VERSION]=1.6.0 [CODEX_VERSION]=0.153.4 )
   local -A seen=()
   local line name value
@@ -161,7 +162,6 @@ install_base_packages() {
     ca-certificates
     build-essential
     zsh
-    neovim
     ripgrep
     fd-find
     fzf
@@ -181,7 +181,6 @@ install_base_packages() {
     case "${p}" in
       fd-find) command -v fdfind >/dev/null 2>&1 || command -v fd >/dev/null 2>&1 || missing+=("${p}") ;;
       fzf) command -v fzf >/dev/null 2>&1 || missing+=("${p}") ;;
-      neovim) command -v nvim >/dev/null 2>&1 || missing+=("${p}") ;;
       *) dpkg -s "${p}" >/dev/null 2>&1 || missing+=("${p}") ;;
     esac
   done
@@ -226,6 +225,34 @@ install_zellij() (
   fi
   verify_version "$destination/zellij" "$ZELLIJ_VERSION"
   publish_binary "$destination/zellij" zellij
+)
+
+# Ubuntu's packaged Neovim can be too old for the current LazyVim starter.
+install_neovim() (
+  set -euo pipefail
+  local destination="/opt/overlord/nvim-$NVIM_VERSION" stage arch archive checksum
+  if [ ! -x "$destination/bin/nvim" ]; then
+    case "$(uname -m)" in
+      x86_64|amd64) arch=x86_64 ;;
+      aarch64|arm64) arch=arm64 ;;
+      *) die 'unsupported CPU architecture'; exit 1 ;;
+    esac
+    stage="$(mktemp -d /opt/overlord/.nvim.XXXXXXXX)"
+    trap 'rm -rf "$stage"' EXIT
+    archive="nvim-linux-$arch.tar.gz"
+    download "https://api.github.com/repos/neovim/neovim/releases/tags/v$NVIM_VERSION" "$stage/release.json"
+    checksum="$(jq -er --arg name "$archive" '.assets[] | select(.name == $name) | .digest | select(test("^sha256:[0-9a-f]{64}$")) | sub("^sha256:"; "")' "$stage/release.json")"
+    download "https://github.com/neovim/neovim/releases/download/v$NVIM_VERSION/$archive" "$stage/$archive"
+    printf '%s  %s\n' "$checksum" "$stage/$archive" | sha256sum --check --status
+    mkdir "$stage/runtime"
+    tar xzf "$stage/$archive" -C "$stage/runtime" --strip-components=1
+    verify_version "$stage/runtime/bin/nvim" "$NVIM_VERSION"
+    chmod -R a+rX "$stage/runtime"
+    [ ! -e "$destination" ] || { die "incomplete installation exists: $destination"; exit 1; }
+    mv "$stage/runtime" "$destination"
+  fi
+  verify_version "$destination/bin/nvim" "$NVIM_VERSION"
+  publish_binary "$destination/bin/nvim" nvim
 )
 
 # --- One root-owned Node distribution for both deployment targets ---
@@ -315,7 +342,7 @@ PATH_BLOCK
 verify_login_shell_tools() {
   [ "$(id -u)" -eq "$TARGET_UID" ] || { die 'login verification requires the target UID'; return 1; }
   local command
-  for command in node npm npx prime-agent git omp codex; do
+  for command in node npm npx nvim prime-agent git omp codex; do
     env -i HOME="$TARGET_HOME" USER="$TARGET_USER" LOGNAME="$TARGET_USER" \
       TERM=xterm-256color PATH=/usr/local/bin:/usr/bin:/bin \
       zsh -lic "$command --version" >/dev/null || { die "$command does not run as $TARGET_USER"; return 1; }
@@ -1450,6 +1477,7 @@ setup_system() {
     unset PRIME_AGENT_CODING_AGENT_DIR PI_CODING_AGENT_DIR CODEX_HOME
     install_node
     install_zellij
+    install_neovim
     install_codegraph
     install_uv
     install_aws_cli
@@ -1484,7 +1512,7 @@ main() {
     esac
   done
   case "$SETUP_PROFILE" in native|container) ;; *) die 'profile must be native or container'; return 2 ;; esac
-  require_debian
+  require_supported_os
   resolve_setup_identity
   if [ -z "$VERSION_FILE" ] && [ -n "$SETUP_DIR" ] && [ -f "$SETUP_DIR/config/tool-versions.env" ]; then
     VERSION_FILE="$SETUP_DIR/config/tool-versions.env"
@@ -1497,7 +1525,7 @@ main() {
   export CODEX_HOME="${CODEX_HOME:-$TARGET_HOME/.codex}"
   if [ "$(id -u)" -ne 0 ]; then
     sudo -n true || { die 'passwordless sudo is required; run setup as root with --user NAME'; return 1; }
-    { declare -f; printf '\nsetup_system\n'; } | sudo -n --preserve-env=TARGET_USER,TARGET_UID,TARGET_GID,TARGET_HOME,SETUP_DIR,SETUP_PROFILE,ZELLIJ_VERSION,NODE_VERSION,PRIME_AGENT_VERSION,CODEGRAPH_VERSION,CODEX_VERSION,OMP_VERSION,LAZYVIM_REPO,PRIME_AGENT_CODING_AGENT_DIR,PI_CODING_AGENT_DIR,CODEX_HOME,AZURE_OPENAI_BASE_URL,AZURE_OPENAI_RESOURCE_NAME,AZURE_OPENAI_API_VERSION,AZURE_OPENAI_DEPLOYMENT_NAME_MAP bash -s
+    { declare -f; printf '\nsetup_system\n'; } | sudo -n --preserve-env=TARGET_USER,TARGET_UID,TARGET_GID,TARGET_HOME,SETUP_DIR,SETUP_PROFILE,ZELLIJ_VERSION,NODE_VERSION,NVIM_VERSION,PRIME_AGENT_VERSION,CODEGRAPH_VERSION,CODEX_VERSION,OMP_VERSION,LAZYVIM_REPO,PRIME_AGENT_CODING_AGENT_DIR,PI_CODING_AGENT_DIR,CODEX_HOME,AZURE_OPENAI_BASE_URL,AZURE_OPENAI_RESOURCE_NAME,AZURE_OPENAI_API_VERSION,AZURE_OPENAI_DEPLOYMENT_NAME_MAP bash -s
   else
     setup_system
   fi

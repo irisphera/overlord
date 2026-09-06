@@ -27,6 +27,27 @@ class SetupShTests(unittest.TestCase):
                 self.assertIn("Usage:", result.stdout)
             self.assertEqual(list(Path(tmp).iterdir()), [])
 
+    def test_supported_os_accepts_debian_and_ubuntu_lts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            release = Path(tmp) / "os-release"
+            for distro, version in (("debian", "13"), ("ubuntu", "22.04"), ("ubuntu", "24.04"), ("ubuntu", "26.04")):
+                with self.subTest(distro=distro, version=version):
+                    release.write_text(f'ID={distro}\nVERSION_ID="{version}"\n')
+                    result = self.run_shell('require_supported_os "$1"; printf accepted', release)
+                    self.assertEqual((result.returncode, result.stdout), (0, "accepted"), result.stderr)
+
+    def test_unsupported_or_incomplete_os_release_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            release = Path(tmp) / "os-release"
+            env = dict(os.environ, ID="ubuntu", VERSION_ID="24.04")
+            for contents in ('ID=debian\nVERSION_ID=12\n', 'ID=ubuntu\nVERSION_ID=20.04\n',
+                             'ID=ubuntu\nVERSION_ID=26.10\n', 'ID=linuxmint\nID_LIKE=ubuntu\nVERSION_ID=24.04\n',
+                             'ID=ubuntu\n', ''):
+                with self.subTest(contents=contents):
+                    release.write_text(contents)
+                    result = self.run_shell('require_supported_os "$1"', release, env=env)
+                    self.assertNotEqual(result.returncode, 0)
+
     def test_manifest_precedence_and_rejection_of_executable_input(self):
         with tempfile.TemporaryDirectory() as tmp:
             manifest = Path(tmp) / "versions.env"

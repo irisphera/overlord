@@ -88,6 +88,76 @@ class SetupShTests(unittest.TestCase):
             muse_models = {m["id"]: m for m in data["providers"]["opencode-go"]["models"]}
             self.assertEqual(muse_models["muse-spark-1.3-contributor"].get("thinkingLevelMap", {}).get("max"), "max")
 
+    def test_omp_state_ownership_repairs_foreign_descendants(self):
+        content = Path("setup.sh").read_text(encoding="utf-8")
+        start = content.index("own_provisioned_home_files() {")
+        end = content.index("\n}\n", start) + len("\n}")
+        helper = content[start:end]
+        # Mock ownership checks, not the helper. No real chown or sudo is used,
+        # so this covers root-owned leftovers even when tests run unprivileged.
+        mocks = r'''
+stat() { printf '%s\n' testuser; }
+getent() { return 0; }
+id() { printf '%s\n' 1000; }
+find() {
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$@" >> "$FIND_LOG"
+  if [ -n "$FOREIGN_PATH" ] && [[ "$FOREIGN_PATH" == "$1/"* ]]; then
+    printf '%s\n' "$FOREIGN_PATH"
+  fi
+}
+chown() { printf '%s\t%s\t%s\n' "$@" >> "$CHOWN_LOG"; }
+run_sudo() { printf 'unexpected sudo\n' >> "$CHOWN_LOG"; return 1; }
+warn() { printf '%s\n' "$*" >&2; }
+'''
+        for foreign in ("agent/models.json", "natives/addon.node", None):
+            with self.subTest(foreign=foreign), tempfile.TemporaryDirectory() as tmp:
+                home = Path(tmp) / "test home"
+                omp = home / ".omp"
+                (omp / "agent").mkdir(parents=True)
+                (omp / "natives").mkdir()
+                (omp / "agent/models.json").write_text("{}")
+                (omp / "natives/addon.node").touch()
+                find_log = Path(tmp) / "find.log"
+                chown_log = Path(tmp) / "chown.log"
+                find_log.touch()
+                chown_log.touch()
+                env = dict(os.environ)
+                env.update(
+                    TEST_HOME=str(home),
+                    FOREIGN_PATH=str(omp / foreign) if foreign else "",
+                    FIND_LOG=str(find_log),
+                    CHOWN_LOG=str(chown_log),
+                )
+                completed = subprocess.run(
+                    ["bash", "-c", mocks + helper + '\nown_provisioned_home_files "$TEST_HOME"\n'],
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                    env=env,
+                )
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                self.assertEqual(
+                    find_log.read_text().splitlines(),
+                    [f"{omp}\t-not\t-user\ttestuser\t-print\t-quit"],
+                )
+                self.assertEqual(
+                    chown_log.read_text().splitlines(),
+                    [f"-R\ttestuser:testuser\t{omp}"] if foreign else [],
+                )
+
+    def test_final_home_ownership_repair_follows_configuration(self):
+        lines = Path("setup.sh").read_text(encoding="utf-8").splitlines()
+        # Match top-level calls only, not function definitions or comments.
+        repair = max(i for i, line in enumerate(lines) if line == "own_all_provisioned_homes")
+        for configure in (
+            "install_prime_agent_skills",
+            "configure_prime_agent_models",
+            "configure_omp_models",
+            "configure_codex",
+        ):
+            self.assertGreater(repair, lines.index(configure), configure)
+        self.assertLess(repair, lines.index("make_zsh_default"))
+
     def test_setup_sh_executable(self):
         import os, stat
         p = Path("setup.sh")

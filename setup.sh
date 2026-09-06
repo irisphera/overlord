@@ -191,7 +191,7 @@ own_provisioned_home_files() {
   if [ "$uh" = "$home" ] && [ "$(id -u)" -eq 0 ]; then
     chown "$owner:$owner" "$home" 2>/dev/null || true
   fi
-  for p in .oh-my-zsh .zshrc .zshenv .bashrc .bash_profile .profile .zprofile .zsh_history .config .local .cache .nvm .prime .npm .bun .zellij .codegraph; do
+  for p in .oh-my-zsh .zshrc .zshenv .bashrc .bash_profile .profile .zprofile .zsh_history .config .local .cache .nvm .prime .omp .npm .bun .zellij .codegraph; do
     [ -e "${home}/${p}" ] || continue
     # Repair if the top entry OR anything under it belongs to someone else
     # (root-owned leftovers from previous root runs); find stops at the first
@@ -2644,6 +2644,9 @@ configure_prime_agent_tools
 configure_prime_agent_models
 configure_omp_models
 configure_codex
+# Model and skill configuration above can create root-owned user state.
+# OMP also needs to create ~/.omp/natives when extracting its bundled addon.
+own_all_provisioned_homes
 make_zsh_default
 verify_login_shell_tools
 

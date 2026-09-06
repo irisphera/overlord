@@ -2,9 +2,9 @@
   "bundledSkills": {
     "websearch": true
   },
-  "defaultModel": "gpt-5.6-luna",
+  "defaultModel": "gpt-6-astra",
   "defaultProvider": "azure-openai-responses",
-  "defaultThinkingLevel": "max",
+  "defaultThinkingLevel": "medium",
   "enableBuiltinSkills": true,
   "mcpServers": {
     "context7": {
@@ -20,6 +20,7 @@
   },
   "onboardingShown": true,
   "recentModels": [
+    "azure-openai-responses/gpt-6-astra",
     "azure-openai-responses/gpt-5.6-luna",
     "azure-openai-responses/grok-4.6",
     "opencode-go/glm-5.3",

@@ -42,33 +42,6 @@ class SetupPersistenceTests(unittest.TestCase):
         self.assertIn("already at latest", SETUP)
         self.assertIn("OMP_VERSION", SETUP)
 
-    def test_omp_models_yml_provides_gpt6_astra(self):
-        self.assertIn("configure_omp_models", SETUP)
-        calls = SETUP.rsplit("install_prime_agent\n", 1)[1]
-        self.assertLess(calls.index("configure_prime_agent_models"), calls.index("configure_omp_models"))
-        script = SETUP.split("<<'PYEOF_OMP'\n", 1)[1].split("\nPYEOF_OMP", 1)[0]
-        with tempfile.TemporaryDirectory() as tmp:
-            target = Path(tmp) / "agent"
-            env = {
-                key: value
-                for key, value in os.environ.items()
-                if not key.startswith("AZURE_OPENAI_")
-            }
-            completed = subprocess.run(
-                [sys.executable, "-", str(target)],
-                input=script,
-                text=True,
-                capture_output=True,
-                check=False,
-                env=env,
-            )
-            self.assertEqual(completed.returncode, 0, completed.stderr)
-            models_yml = (target / "models.yml").read_text()
-            self.assertIn("azure-gpt6", models_yml)
-            self.assertIn("azure-openai-responses", models_yml)
-            self.assertIn("gpt-6-astra", models_yml)
-            self.assertIn("AZURE_OPENAI_API_KEY", models_yml)
-            self.assertIn("https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1", models_yml)
 
     def test_codex_is_installed_and_configured_for_azure(self):
         self.assertIn("install_codex", SETUP)

@@ -1477,10 +1477,10 @@ install_codex() {
   fi
 }
 
-# Oh My Pi: Luna/max for routine roles, Astra/medium for slow/plan/advisor.
+# Oh My Pi: Astra/medium by default, low for lightweight work, off for exploration.
 # Merge managed models and roles, preserving other settings and first backups.
 configure_omp_models() {
-  info "configuring Oh My Pi model policy (Luna max / Astra medium)..."
+  info "configuring Oh My Pi model policy (Astra medium / low / off)..."
   local omp_dirs=()
   omp_dirs+=("${PI_CODING_AGENT_DIR:-$HOME/.omp/agent}")
   if [ -d "/home/overlord" ] && { [ "$(id -u)" -eq 0 ] || [ -w /home/overlord/.omp/agent ] || [ -w /home/overlord ]; }; then
@@ -1517,8 +1517,7 @@ provider_id = "azure-gpt6"  # Keep the existing provider ID for saved sessions.
 luna = "gpt-5.6-luna"
 astra = "gpt-6-astra"
 roles = {
-    role: f"{provider_id}/{astra if role in ('slow', 'plan', 'advisor') else luna}:"
-          f"{'medium' if role in ('slow', 'plan', 'advisor') else 'max'}"
+    role: f"{provider_id}/{astra}:{'low' if role in ('smol', 'tiny', 'commit') else 'medium'}"
     for role in ("default", "smol", "slow", "vision", "plan", "commit", "tiny", "task", "advisor")
 }
 
@@ -1547,6 +1546,13 @@ def write_config(path, original, data):
     if original is not None and yaml.safe_load(original) == data:
         print(f"unchanged {path}")
         return
+    write_file(path, original, rendered)
+
+
+def write_file(path, original, rendered):
+    if original == rendered:
+        print(f"unchanged {path}")
+        return
     backup = path.with_suffix(path.suffix + ".bak")
     if original is not None and not backup.exists():
         shutil.copy2(path, backup)
@@ -1562,6 +1568,21 @@ def write_config(path, original, data):
         if temporary is not None:
             temporary.unlink(missing_ok=True)
     print(f"wrote {path}")
+
+
+# Azure's OMP adapter encodes off as the model's lowest effort (low for Astra).
+# Preserve low for lightweight work, but send literal none for exploration.
+astra_reasoning_extension = '''import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
+
+export default function (pi: ExtensionAPI) {
+  pi.on("before_provider_request", (event, ctx) => {
+    if (ctx.model?.provider !== "azure-gpt6" || ctx.model.id !== "gpt-6-astra" ||
+        ctx.model.api !== "azure-openai-responses" || pi.getThinkingLevel() !== "off") return;
+    if (!event.payload || typeof event.payload !== "object" || Array.isArray(event.payload)) return;
+    return { ...event.payload, reasoning: { effort: "none" } };
+  });
+}
+'''
 
 
 for raw in sys.argv[1:]:
@@ -1609,10 +1630,18 @@ for raw in sys.argv[1:]:
                 )
         configured_roles = mapping(config, "modelRoles")
         configured_roles.update(roles)
-        config["defaultThinkingLevel"] = "max"
+        config["defaultThinkingLevel"] = "medium"
+        # Explicit effort suffixes override bundled agent thinking defaults.
+        agent_overrides = mapping(mapping(config, "task"), "agentModelOverrides")
+        for agent, effort in (("scout", "off"), ("librarian", "off"), ("sonic", "low")):
+            agent_overrides[agent] = f"{provider_id}/{astra}:{effort}"
         # Parse and merge both files before writing either one.
         write_config(models_path, models_original, models)
         write_config(config_path, config_original, config)
+        extension_path = agent_dir / "extensions" / "overlord-astra-reasoning.ts"
+        extension_original = extension_path.read_text() if extension_path.exists() else None
+        extension_path.parent.mkdir(parents=True, exist_ok=True)
+        write_file(extension_path, extension_original, astra_reasoning_extension)
     except (OSError, ValueError, yaml.YAMLError) as error:
         # Parser errors may contain credentials from user configuration: do not echo them.
         print(f"skipping invalid or unwritable Oh My Pi config in {agent_dir} ({type(error).__name__})")

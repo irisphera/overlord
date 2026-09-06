@@ -1,6 +1,7 @@
-"""Regression tests for the native Oh My Pi two-model setup policy."""
+"""Regression tests for the native Oh My Pi role-specific Astra policy."""
 
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -13,10 +14,8 @@ ROOT = Path(__file__).resolve().parents[2]
 SETUP = (ROOT / "setup.sh").read_text(encoding="utf-8")
 SCRIPT = SETUP.split("<<'PYEOF_OMP'\n", 1)[1].split("\nPYEOF_OMP", 1)[0]
 PYTHON = "/usr/bin/python3"
-LUNA = "azure-gpt6/gpt-5.6-luna:max"
-ASTRA = "azure-gpt6/gpt-6-astra:medium"
-NORMAL_ROLES = ("default", "smol", "vision", "commit", "tiny", "task")
-DEEP_ROLES = ("slow", "plan", "advisor")
+ASTRA = "azure-gpt6/gpt-6-astra"
+MANAGED_ROLES = ("default", "smol", "slow", "vision", "plan", "commit", "tiny", "task", "advisor")
 ASTRA_EFFORTS = ["low", "medium", "high", "xhigh", "max"]
 
 
@@ -40,11 +39,14 @@ class OmpModelPolicyTests(unittest.TestCase):
 
     def assert_policy(self, target):
         settings = self.read_yaml(target, "config.yml")
-        self.assertEqual(settings["defaultThinkingLevel"], "max")
-        for role in NORMAL_ROLES:
-            self.assertEqual(settings["modelRoles"][role], LUNA)
-        for role in DEEP_ROLES:
-            self.assertEqual(settings["modelRoles"][role], ASTRA)
+        self.assertEqual(settings["defaultThinkingLevel"], "medium")
+        for role in MANAGED_ROLES:
+            effort = "low" if role in ("smol", "tiny", "commit") else "medium"
+            self.assertEqual(settings["modelRoles"][role], f"{ASTRA}:{effort}")
+        overrides = settings["task"]["agentModelOverrides"]
+        self.assertEqual(overrides["scout"], f"{ASTRA}:off")
+        self.assertEqual(overrides["librarian"], f"{ASTRA}:off")
+        self.assertEqual(overrides["sonic"], f"{ASTRA}:low")
         provider = self.read_yaml(target, "models.yml")["providers"]["azure-gpt6"]
         self.assertEqual(provider["api"], "azure-openai-responses")
         self.assertEqual(provider["apiKey"], "AZURE_OPENAI_API_KEY")
@@ -97,7 +99,11 @@ modelRoles:
   default: azure/gpt-5.6-luna:max
   slow: azure-gpt6/gpt-6-astra:max
   custom-review: example/custom-model:high
-  custom-astra: azure-gpt6/gpt-6-astra:max
+  custom-astra: azure-gpt6/gpt-6-astra:high
+task:
+  agentModelOverrides:
+    scout: azure-gpt6/gpt-6-astra:max
+    custom-agent: example/custom-model:high
 theme:
   dark: titanium
 tools:
@@ -128,7 +134,8 @@ tools:
             self.assertEqual(settings["theme"]["dark"], "titanium")
             self.assertEqual(settings["tools"]["approvalMode"], "write")
             self.assertEqual(settings["modelRoles"]["custom-review"], "example/custom-model:high")
-            self.assertEqual(settings["modelRoles"]["custom-astra"], "azure-gpt6/gpt-6-astra:max")
+            self.assertEqual(settings["modelRoles"]["custom-astra"], "azure-gpt6/gpt-6-astra:high")
+            self.assertEqual(settings["task"]["agentModelOverrides"]["custom-agent"], "example/custom-model:high")
             self.assertIn("custom-provider", self.read_yaml(target, "models.yml")["providers"])
             self.assertIn("unrelated-deployment", {model["id"] for model in provider["models"]})
             self.assertEqual((target / "config.yml.bak").read_text(), old_config)
@@ -185,6 +192,33 @@ tools:
                 self.assertEqual(override["compat"]["reasoningEffortMap"], {level: level for level in efforts})
                 self.assertTrue(override["compat"]["supportsReasoningParams"])
             self.assertFalse(provider["modelOverrides"]["gpt-6-astra"]["compat"]["supportsStore"])
+
+    @unittest.skipUnless(shutil.which("bun"), "Bun is required to exercise the OMP request hook")
+    def test_exploration_sends_none_without_changing_low_or_other_providers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp)
+            self.run_generator(target)
+            script = '''
+import assert from "node:assert/strict";
+const { default: install } = await import(process.env.EXTENSION_PATH);
+let handler;
+let level = "off";
+install({ on: (_event, callback) => { handler = callback; }, getThinkingLevel: () => level });
+const model = { provider: "azure-gpt6", id: "gpt-6-astra", api: "azure-openai-responses" };
+const payload = { model: model.id, input: "Read a file", reasoning: { effort: "low" }, stream: true };
+const off = handler({ payload }, { model });
+assert.deepEqual(off, { ...payload, reasoning: { effort: "none" } });
+assert.equal(payload.reasoning.effort, "low");
+level = "low";
+assert.equal(handler({ payload }, { model }), undefined);
+level = "off";
+assert.equal(handler({ payload }, { model: { ...model, provider: "other" } }), undefined);
+'''
+            result = subprocess.run(
+                ["bun", "--eval", script], text=True, capture_output=True,
+                env={**os.environ, "EXTENSION_PATH": str(target / "extensions" / "overlord-astra-reasoning.ts")},
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_malformed_yaml_is_preserved(self):
         for filename in ("config.yml", "models.yml"):

@@ -8,7 +8,6 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Final
 
-RESPONSIBILITY: Final = "plan container environment variables"
 CONTAINER_HOME: Final = "/home/overlord"
 OPTIONAL_TERMINAL_ENV_VARS: Final = ("COLORTERM", "TERM_PROGRAM", "TERM_PROGRAM_VERSION", "LANG", "LC_ALL")
 # Azure OpenAI credentials for prime-agent's azure-openai-responses provider.
@@ -38,26 +37,19 @@ class EnvironmentPlan:
     exec_env_flags: tuple[str, ...]
     workspace_name: str
 
-def describe() -> str:
-    return RESPONSIBILITY
 
 def build_environment_plan(host_env: Mapping[str, str], *, home: Path, workspace_name: str) -> EnvironmentPlan:
-    normalized = normalized_host_env(host_env)
-    exec_values = base_exec_env(normalized, workspace_name)
+    exec_values = base_exec_env(host_env, workspace_name)
     for name in OPTIONAL_TERMINAL_ENV_VARS:
-        append_present(exec_values, normalized, name)
-    append_azure_env(exec_values, normalized)
-    append_opencode_env(exec_values, normalized)
+        append_present(exec_values, host_env, name)
+    append_azure_env(exec_values, host_env)
+    append_opencode_env(exec_values, host_env)
     return EnvironmentPlan(
         exec_env_values=tuple(exec_values),
         exec_env_flags=env_flags(exec_values),
         workspace_name=workspace_name,
     )
 
-def normalized_host_env(host_env: Mapping[str, str]) -> dict[str, str]:
-    normalized = dict(host_env)
-    normalized.setdefault("DOCKER_HOST", "unix:///var/run/docker.sock")
-    return normalized
 
 def base_exec_env(host_env: Mapping[str, str], workspace_name: str) -> list[str]:
     return [

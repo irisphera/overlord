@@ -7,14 +7,11 @@ from enum import StrEnum, unique
 import os
 from pathlib import Path
 import stat
-import tempfile
 from typing import Final, assert_never, override
 
 from overlord_py.paths import ManagedStatePaths, StatePaths
 
-RESPONSIBILITY: Final = "create .overlord state"
 MANAGED_GITIGNORE_ENTRIES: Final = (".overlord/", ".omo", ".codegraph")
-GITIGNORE_TEMP_PREFIX: Final = ".gitignore.overlord-"
 
 @unique
 class NodeKind(StrEnum):
@@ -43,7 +40,7 @@ class PairPlan:
     paths: ManagedStatePaths
     action: PairAction
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class ManagedStateError(RuntimeError):
     path: Path
     reason: str
@@ -62,13 +59,9 @@ class StateEnsureResult:
     gitignore_created: bool
     gitignore_appended: bool
 
-def describe() -> str:
-    return RESPONSIBILITY
 
 def ensure_state_dir(paths: StatePaths) -> StateEnsureResult:
-    root_snapshot = classify_node(paths.root)
-    if root_snapshot.kind not in {NodeKind.MISSING, NodeKind.DIRECTORY}:
-        raise ManagedStateError(paths.root, f"expected a real directory or no entry, found {root_snapshot.kind}")
+    validate_state_dirs(paths)
 
     gitignore = paths.root.parent / ".gitignore"
     pair_snapshots = tuple(
@@ -80,9 +73,9 @@ def ensure_state_dir(paths: StatePaths) -> StateEnsureResult:
         raise ManagedStateError(gitignore, f"expected a regular file or no entry, found {gitignore_snapshot.kind}")
     pair_plans = tuple(plan_pair(*snapshot) for snapshot in pair_snapshots)
 
-    zsh_preexisting = paths.zsh_data.is_dir()
-    prime_preexisting = paths.prime_agent_data.is_dir()
-    omp_preexisting = paths.omp_agent_data.is_dir()
+    zsh_preexisting = classify_node(paths.zsh_data).kind is NodeKind.DIRECTORY
+    prime_preexisting = classify_node(paths.prime_agent_data).kind is NodeKind.DIRECTORY
+    omp_preexisting = classify_node(paths.omp_agent_data).kind is NodeKind.DIRECTORY
     gitignore_created = gitignore_snapshot.kind is NodeKind.MISSING
     gitignore_appended = append_state_gitignore(gitignore, gitignore_snapshot)
     create_directory(paths.zsh_data, parents=True, exist_ok=True)
@@ -97,6 +90,13 @@ def ensure_state_dir(paths: StatePaths) -> StateEnsureResult:
         gitignore_created=gitignore_created,
         gitignore_appended=gitignore_appended,
     )
+
+def validate_state_dirs(paths: StatePaths) -> None:
+    for path in (paths.root, paths.zsh_data, paths.prime_agent_data, paths.omp_agent_data,
+                 paths.omo.managed_directory, paths.codegraph.managed_directory):
+        snapshot = classify_node(path)
+        if snapshot.kind not in {NodeKind.MISSING, NodeKind.DIRECTORY}:
+            raise ManagedStateError(path, f"expected a real directory or no entry, found {snapshot.kind}")
 
 def classify_node(path: Path) -> NodeSnapshot:
     try:
@@ -199,16 +199,3 @@ def append_state_gitignore(gitignore: Path, snapshot: NodeSnapshot) -> bool:
         raise ManagedStateError(gitignore, f"could not update .gitignore: {error}") from error
     return True
 
-def clear_persisted_server_state(state: StatePaths) -> None:
-    # Legacy cleanup - remove old server pid/log if present
-    for name in ("overlord-serve.pid", "overlord-serve.log", "web-proxy.pid", "web-proxy.port", "web-proxy.log"):
-        try:
-            (state.root / name).unlink(missing_ok=True)
-        except OSError:
-            pass
-
-def chmod_workspace_for_rootless_podman(workspace: Path) -> None:
-    try:
-        workspace.chmod(0o755)
-    except OSError:
-        pass

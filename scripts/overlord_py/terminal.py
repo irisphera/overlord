@@ -10,12 +10,9 @@ from typing import Final, Literal, assert_never
 from overlord_py.engine import ContainerEngine
 from overlord_py.paths import WorkspacePaths
 
-RESPONSIBILITY: Final = "enter shell or zellij with the existing container exec command shape"
 EXEC_USER: Final = "overlord"
 TerminalCommand = Literal["shell", "zellij"]
 
-def describe() -> str:
-    return RESPONSIBILITY
 
 def terminal_title(workspace_name: str) -> str:
     return f"\033]0;{workspace_name}\007"

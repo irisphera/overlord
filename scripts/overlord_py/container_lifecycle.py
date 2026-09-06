@@ -1,235 +1,233 @@
-"""Container image, create, reuse, fresh, and purge lifecycle seam."""
-
+"""Fail-closed container lifecycle and recoverable workspace initialization."""
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, replace
+import json
 from pathlib import Path
 import shutil
 import stat
 import tempfile
+import time
 import uuid
 from typing import Final
 
-
-
-from overlord_py.container_run_args import build_container_run_args
-from overlord_py.docker_bind_sources import resolve_bind_source_paths
+from overlord_py.container_run_args import build_container_run_args, engine_socket_path
+from overlord_py.docker_bind_sources import bind_source_paths
 from overlord_py.engine import CommandResult, ContainerEngine
 from overlord_py.paths import WorkspacePaths
 from overlord_py.persisted_state_mounts import PersistedStateMounts, verify_persisted_state_mounts
-from overlord_py.progress import StageReporter, noop_stage, report_stage, stage_return_message
-from overlord_py.state import clear_persisted_server_state
+from overlord_py.prime_model_sync import sync_host_prime_models
+from overlord_py.progress import StageReporter, noop_stage
+from overlord_py.runtime_config import inject_initial_runtime_config
+from overlord_py.state import ensure_state_dir, validate_state_dirs
 
-RESPONSIBILITY: Final = "preserve image/container lifecycle, mounts, setup timing, and removal semantics"
-SETUP_SCRIPT_CANDIDATES: Final = ("/workspace/setup-devcontainer.sh", "/workspace/setup.sh")
-ROOT_SETUP_ENV: Final = (
-    "HOME=/root",
-    "USER=root",
-    "LOGNAME=root",
-    "DEBIAN_FRONTEND=noninteractive",
-    "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-)
-
+ENTRYPOINT_LABEL: Final = "io.overlord.entrypoint-ready"
+ENTRYPOINT_READY: Final = "/run/overlord-entrypoint-ready"
+INITIALIZATION_COMPLETE: Final = "/var/lib/overlord/initialization-complete"
 OMP_AGENT_DATA_SOURCE: Final = "/home/overlord/.omp/agent/."
 OMP_AGENT_MIGRATION_PREFIX: Final = ".omp-agent-data-migration-"
 OMP_AGENT_BACKUP_PREFIX: Final = ".omp-agent-data-backup-"
 
-def noop_after_verification() -> None:
-    return None
 
-SETUP_OWNERSHIP_REPAIR_SCRIPT: Final = (
-    "chown -R overlord:overlord /home/overlord/.cache /home/overlord/.config /home/overlord/.local 2>/dev/null || true\n"
-    "chmod -R a+rwX /home/overlord/.cache /home/overlord/.config /home/overlord/.local 2>/dev/null || true\n"
-)
-
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class LifecycleError(Exception):
     message: str
     status: int = 1
+
     def __str__(self) -> str:
         return self.message
+
+
+@dataclass(frozen=True, slots=True)
+class VerifiedContainer:
+    container_id: str
+    name: str
+    state: str
+    mounts: PersistedStateMounts
+    entrypoint_ready_contract: bool
+    image_id: str
+
 
 @dataclass(frozen=True, slots=True)
 class EnsureRunningResult:
     state_before: str
     setup_ran: bool
     messages: tuple[str, ...]
+    container_id: str
+
 
 def local_image_ref(paths: WorkspacePaths) -> str:
     return f"localhost/{paths.identity.image_name}:latest"
 
-def ensure_image(engine: ContainerEngine, paths: WorkspacePaths, *, env: Mapping[str, str], stage: StageReporter = noop_stage) -> tuple[str, ...]:
-    stage("Checking local Overlord image...")
-    image = engine.run(["image", "inspect", local_image_ref(paths)], cwd=paths.workspace, env=env)
-    if image.returncode == 0:
-        return ()
-    message = f"Building overlord image from {paths.repo_root}..."
-    stage(message)
-    build_args = ["build", *(("--load",) if engine.name == "docker" else ()), "-t", local_image_ref(paths), str(paths.repo_root)]
-    build = engine.run(build_args, cwd=paths.workspace, env=env)
-    require_success(build, "build image")
-    return stage_return_message(stage, message)
 
-def container_state(engine: ContainerEngine, paths: WorkspacePaths, *, env: Mapping[str, str]) -> str:
-    result = engine.run(["inspect", "--format", "{{.State.Status}}", paths.identity.container_name], cwd=paths.workspace, env=env)
+def require_success(result: CommandResult, action: str) -> None:
     if result.returncode != 0:
-        return "missing"
-    return result.stdout.strip() or "missing"
+        detail = "\n".join(stream.strip() for stream in (result.stdout, result.stderr) if stream.strip())
+        raise LifecycleError(f"Error: failed to {action} (exit {result.returncode}):\n{detail}", result.returncode)
 
-def ensure_running(
-    engine: ContainerEngine,
-    paths: WorkspacePaths,
-    exec_env_flags: Sequence[str],
-    *,
-    env: Mapping[str, str],
-    home: Path | None = None,
-    stage: StageReporter = noop_stage,
-) -> EnsureRunningResult:
-    stage(f"Checking container state for {paths.identity.container_name}...")
-    state = container_state(engine, paths, env=env)
-    messages: list[str] = []
-    setup_allowed = True
-    match state:
-        case "missing":
-            message = f"Creating container {paths.identity.container_name}..."
-            messages.extend(report_stage(stage, message))
-            host_home = Path.home() if home is None else home
-            bind_sources = resolve_bind_source_paths(engine, paths, env=env, home=host_home)
-            run = engine.run(
-                ["run", *build_container_run_args(paths, exec_env_flags, home=host_home, bind_sources=bind_sources), local_image_ref(paths), "sleep", "infinity"],
-                cwd=paths.workspace,
-                env=env,
-            )
-            require_success(run, "create container")
-        case "exited":
-            message = f"Starting container {paths.identity.container_name}..."
-            messages.extend(report_stage(stage, message))
-            start = engine.run(["start", paths.identity.container_name], cwd=paths.workspace, env=env)
-            require_success(start, "start container")
-        case "running":
-            setup_allowed = False
-        case _:
-            raise LifecycleError(f"Error: Container {paths.identity.container_name} is in unexpected state: {state}\nTry: overlord fresh")
-    if not setup_allowed:
-        # Workspace setup and ad-hoc root commands can leave XDG state files
-        # (notably zsh-autocomplete logs) unwritable by the interactive user.
-        # The entrypoint repair only runs when the container starts, so repair
-        # again before attaching to a container that was already running.
-        engine.run(
-            ["exec", paths.identity.container_name, "sh", "-c", SETUP_OWNERSHIP_REPAIR_SCRIPT],
-            cwd=paths.workspace,
-            env=env,
+
+def _inspect(engine, paths, name, *, env, image=False):
+    args = ["image", "inspect", name] if image else ["container", "inspect", name]
+    result = engine.run(args, cwd=paths.workspace, env=env)
+    if result.returncode:
+        listing = engine.run(
+            ["image", "ls", "--no-trunc", "--format", "{{.Repository}}:{{.Tag}}"] if image else
+            ["container", "ls", "--all", "--format", "{{.Names}}"],
+            cwd=paths.workspace, env=env,
         )
-        return EnsureRunningResult(state_before=state, setup_ran=False, messages=tuple(messages))
-    stage(f"Repairing workspace traversal permissions for {paths.workspace}...")
-    chmod_workspace_for_rootless_podman(paths.workspace)
-    stage("Checking repo setup script...")
-    setup_messages, setup_ran = run_workspace_setup_script(engine, paths, env=env, stage=stage)
-    messages.extend(setup_messages)
-    return EnsureRunningResult(state_before=state, setup_ran=setup_ran, messages=tuple(messages))
+        require_success(listing, "confirm resource absence")
+        if name not in listing.stdout.splitlines():
+            return None
+        require_success(result, f"inspect {name}")
+    try:
+        objects = json.loads(result.stdout)
+        if not isinstance(objects, list) or len(objects) != 1 or not isinstance(objects[0], dict):
+            raise ValueError("expected exactly one object")
+        record = objects[0]
+        if not isinstance(record.get("Id"), str) or not record["Id"]:
+            raise ValueError("missing immutable resource ID")
+        if not isinstance(record.get("Config"), dict):
+            raise ValueError("missing resource configuration")
+        labels = record["Config"].get("Labels")
+        if labels is not None and not isinstance(labels, dict):
+            raise ValueError("invalid resource labels")
+        if not image and (not isinstance(record.get("State"), dict) or not isinstance(record.get("Image"), str)):
+            raise ValueError("missing container state or image ID")
+        return record
+    except (ValueError, TypeError) as error:
+        raise LifecycleError(f"Error: invalid inspect response for {name}: {error}") from error
 
-def fresh(
-    engine: ContainerEngine,
-    paths: WorkspacePaths,
-    *,
-    env: Mapping[str, str],
-    stage: StageReporter = noop_stage,
-    after_verification: Callable[[], None] = noop_after_verification,
-) -> tuple[str, ...]:
-    home = Path(env.get("HOME", str(Path.home())))
-    expected_sources = resolve_bind_source_paths(engine, paths, env=env, home=home)
-    verified_mounts = verify_persisted_state_mounts(
-        engine,
-        paths.identity.container_name,
-        expected_sources=expected_sources,
-        cwd=paths.workspace,
-        env=env,
-        allow_missing_omp=True,
-    )
-    after_verification()
-    return _fresh_verified(engine, paths, verified_mounts, env=env, stage=stage)
 
-def _fresh_verified(
-    engine: ContainerEngine,
-    paths: WorkspacePaths,
-    _verified_mounts: PersistedStateMounts,
-    *,
-    env: Mapping[str, str],
-    stage: StageReporter,
-    require_remove_success: bool = False,
-) -> tuple[str, ...]:
-    messages: list[str] = []
-    migration_needed = _verified_mounts.omp_agent_data is None
+def ensure_image(engine: ContainerEngine, paths: WorkspacePaths, *, env: Mapping[str, str], stage: StageReporter = noop_stage) -> None:
+    image = _inspect(engine, paths, local_image_ref(paths), env=env, image=True)
+    if image is not None and (image.get("Config", {}).get("Labels") or {}).get(ENTRYPOINT_LABEL) == "1":
+        return
+    message = f"Building Overlord image from {paths.repo_root}..."
+    stage(message)
+    result = engine.run(["build", *(("--load",) if engine.name == "docker" else ()), "-t", local_image_ref(paths), str(paths.repo_root)], cwd=paths.workspace, env=env)
+    require_success(result, "build image")
+
+
+def verified_container(engine, paths, *, env) -> VerifiedContainer | None:
+    for name in (paths.identity.container_name, paths.identity.legacy_container_name):
+        record = _inspect(engine, paths, name, env=env)
+        if record is None:
+            continue
+        container_id = record["Id"]
+        mounts = verify_persisted_state_mounts(
+            engine, container_id, expected_sources=bind_source_paths(paths),
+            cwd=paths.workspace, env=env, allow_missing_omp=True, allow_legacy_access=True,
+        )
+        state = record.get("State", {}).get("Status")
+        if not isinstance(state, str) or not state:
+            raise LifecycleError("Error: container inspect omitted lifecycle state")
+        return VerifiedContainer(container_id, name, state, mounts,
+            (record.get("Config", {}).get("Labels") or {}).get(ENTRYPOINT_LABEL) == "1", record["Image"])
+    return None
+
+
+def _target_paths(paths, container_id):
+    return replace(paths, identity=replace(paths.identity, container_name=container_id))
+
+
+def _remove_verified(engine, paths, container, *, env, stage):
+    validate_state_dirs(paths.state)
+    target = _target_paths(paths, container.container_id)
+    migration_needed = container.mounts.omp_agent_data is None
     if migration_needed:
         _validate_omp_migration_target(paths)
-    clear_persisted_server_state(paths.state)
-    stop_message = f"Stopping container {paths.identity.container_name}..."
-    messages.extend(report_stage(stage, stop_message))
-    stop = engine.run(["stop", paths.identity.container_name], cwd=paths.workspace, env=env)
+    stage(f"Stopping container {container.name}...")
+    require_success(engine.run(["stop", container.container_id], cwd=paths.workspace, env=env), "stop container")
     if migration_needed:
-        require_success(stop, "stop container before rescuing OMP agent state")
-        messages.extend(report_stage(stage, "Rescuing OMP agent state from the stopped container..."))
-        _rescue_omp_agent_data(engine, paths, env=env)
-    else:
-        ignore_failure(stop)
-    remove_message = f"Removing container {paths.identity.container_name}..."
-    messages.extend(report_stage(stage, remove_message))
-    remove = engine.run(["rm", paths.identity.container_name], cwd=paths.workspace, env=env)
-    if require_remove_success:
-        require_success(remove, "remove container")
-    else:
-        ignore_failure(remove)
-    return tuple(messages)
+        stage("Rescuing OMP agent state from the stopped container...")
+        _rescue_omp_agent_data(engine, target, env=env)
+    stage(f"Removing container {container.name}...")
+    require_success(engine.run(["rm", container.container_id], cwd=paths.workspace, env=env), "remove container")
 
-def purge(
-    engine: ContainerEngine,
-    paths: WorkspacePaths,
-    *,
-    env: Mapping[str, str],
-    stage: StageReporter = noop_stage,
-    after_verification: Callable[[], None] = noop_after_verification,
-) -> tuple[str, ...]:
-    container_name = paths.identity.container_name
-    if engine.name == "docker":
-        state = container_state(engine, paths, env=env)
-        if state == "missing":
-            existence = engine.run(["container", "ls", "--all", "--filter", f"name={container_name}", "--format", "{{.Names}}"], cwd=paths.workspace, env=env)
-            require_success(existence, "check container existence")
-            container_exists = container_name in existence.stdout.splitlines()
-        else:
-            container_exists = True
-    else:
-        existence = engine.run(["container", "exists", container_name], cwd=paths.workspace, env=env)
-        if existence.returncode not in {0, 1}:
-            require_success(existence, "check container existence")
-        container_exists = existence.returncode == 0
-    if container_exists:
-        home = Path(env.get("HOME", str(Path.home())))
-        expected_sources = resolve_bind_source_paths(engine, paths, env=env, home=home)
-        verified_mounts = verify_persisted_state_mounts(
-            engine,
-            container_name,
-            expected_sources=expected_sources,
-            cwd=paths.workspace,
-            env=env,
-            allow_missing_omp=True,
-        )
-        after_verification()
-        messages = list(_fresh_verified(engine, paths, verified_mounts, env=env, stage=stage, require_remove_success=True))
-    else:
-        after_verification()
-        messages: list[str] = []
-    rmi_message = f"Removing image {local_image_ref(paths)}..."
-    messages.extend(report_stage(stage, rmi_message))
-    rmi = engine.run(["rmi", local_image_ref(paths)], cwd=paths.workspace, env=env)
-    if rmi.returncode != 0:
-        # ignore if image already missing
-        inspect = engine.run(["image", "inspect", local_image_ref(paths)], cwd=paths.workspace, env=env)
-        if inspect.returncode == 0:
-            require_success(rmi, "remove image")
-    messages.append("Done. Run 'overlord' to rebuild.")
-    return tuple(messages)
+
+def fresh(engine: ContainerEngine, paths: WorkspacePaths, *, env: Mapping[str, str], stage: StageReporter = noop_stage) -> tuple[str, ...]:
+    container = verified_container(engine, paths, env=env)
+    if container is not None:
+        _remove_verified(engine, paths, container, env=env, stage=stage)
+    return ("Container removed; persisted workspace state retained.",) if container else ()
+
+
+def purge(engine: ContainerEngine, paths: WorkspacePaths, *, env: Mapping[str, str], stage: StageReporter = noop_stage) -> tuple[str, ...]:
+    container = verified_container(engine, paths, env=env)
+    if container is not None:
+        _remove_verified(engine, paths, container, env=env, stage=stage)
+    # Identical builds can share an image ID across workspaces. Untag only this
+    # workspace; deleting that ID would require force and remove other aliases.
+    reference = local_image_ref(paths)
+    if _inspect(engine, paths, reference, env=env, image=True) is not None:
+        require_success(engine.run(["rmi", reference], cwd=paths.workspace, env=env), "remove workspace image tag")
+    if container is not None:
+        legacy_reference = f"localhost/{paths.identity.legacy_container_name}:latest"
+        legacy_image = _inspect(engine, paths, legacy_reference, env=env, image=True)
+        if legacy_image is not None and legacy_image["Id"] == container.image_id:
+            require_success(engine.run(["rmi", legacy_reference], cwd=paths.workspace, env=env), "remove verified legacy image tag")
+    return ("Done. Run 'overlord' to rebuild.",)
+
+
+def _marker_exists(engine, paths, marker, *, env):
+    result = engine.run(["exec", "-u", "0", paths.identity.container_name, "sh", "-c",
+        'if [ -f "$1" ] && [ ! -L "$1" ]; then printf ready; else printf missing; fi', "sh", marker], cwd=paths.workspace, env=env)
+    require_success(result, f"check {marker}")
+    value = result.stdout.strip()
+    if value not in {"ready", "missing"}:
+        raise LifecycleError(f"Error: invalid readiness response for {marker}")
+    return value == "ready"
+
+
+def wait_for_entrypoint(engine, paths, *, env):
+    deadline = time.monotonic() + 60
+    while not _marker_exists(engine, paths, ENTRYPOINT_READY, env=env):
+        if time.monotonic() >= deadline:
+            raise LifecycleError("Error: entrypoint did not finish initialization within 60 seconds; inspect container logs before retrying.")
+        time.sleep(0.2)
+
+
+def ensure_running(engine: ContainerEngine, paths: WorkspacePaths, exec_env_flags: Sequence[str], *, env: Mapping[str, str], home: Path | None = None, stage: StageReporter = noop_stage) -> EnsureRunningResult:
+    home = Path(env.get("HOME", str(Path.home()))) if home is None else home
+    container = verified_container(engine, paths, env=env)
+    validate_state_dirs(paths.state)
+    engine_socket_path(engine_name=engine.name, env=env)
+    state_before = "missing" if container is None else container.state
+    if container is not None and (container.mounts.omp_agent_data is None or not container.entrypoint_ready_contract or not container.mounts.access_matches):
+        _remove_verified(engine, paths, container, env=env, stage=stage)
+        container = None
+    ensure_state_dir(paths.state)
+    sync_host_prime_models(home=home, prime_agent_data=paths.state.prime_agent_data)
+    messages = []
+    if container is None:
+        run_args = build_container_run_args(paths, exec_env_flags, engine_name=engine.name, env=env)
+        ensure_image(engine, paths, env=env, stage=stage)
+        result = engine.run(["run", *run_args, local_image_ref(paths), "sleep", "infinity"], cwd=paths.workspace, env=env)
+        require_success(result, "create container")
+        container = verified_container(engine, paths, env=env)
+        if container is None:
+            raise LifecycleError("Error: newly created container disappeared")
+        if container.mounts.omp_agent_data is None or not container.mounts.access_matches or not container.entrypoint_ready_contract:
+            raise LifecycleError("Error: newly created container does not satisfy workspace isolation and initialization requirements; use overlord fresh.")
+    elif container.name != paths.identity.container_name:
+        require_success(engine.run(["rename", container.container_id, paths.identity.container_name], cwd=paths.workspace, env=env), "adopt verified legacy container")
+    target = _target_paths(paths, container.container_id)
+    if container.state in {"exited", "created"}:
+        require_success(engine.run(["start", container.container_id], cwd=paths.workspace, env=env), "start container")
+    elif container.state != "running":
+        raise LifecycleError(f"Error: container has unexpected state {container.state!r}; use overlord fresh.")
+    wait_for_entrypoint(engine, target, env=env)
+    setup_ran = False
+    if not _marker_exists(engine, target, INITIALIZATION_COMPLETE, env=env):
+        setup_messages, setup_ran = run_workspace_setup_script(engine, target, env=env, stage=stage)
+        messages.extend(setup_messages)
+        inject_initial_runtime_config(engine, target, env=env)
+        result = engine.run(["exec", "-u", "0", container.container_id, "sh", "-c",
+            'install -d -m 755 /var/lib/overlord && touch /var/lib/overlord/initialization-complete'], cwd=paths.workspace, env=env)
+        require_success(result, "mark initialization complete")
+    return EnsureRunningResult(state_before, setup_ran, tuple(messages), container.container_id)
+
 
 def _lstat_or_none(path: Path):
     try:
@@ -350,30 +348,17 @@ def _rescue_omp_agent_data(engine: ContainerEngine, paths: WorkspacePaths, *, en
 
 
 def run_workspace_setup_script(engine: ContainerEngine, paths: WorkspacePaths, *, env: Mapping[str, str], stage: StageReporter = noop_stage) -> tuple[list[str], bool]:
-    # Detect which setup script exists in workspace
-    check = engine.run(["exec", paths.identity.container_name, "sh", "-c", "for f in /workspace/setup-devcontainer.sh /workspace/setup.sh; do if [ -x \"$f\" ]; then echo \"$f\"; exit 0; fi; if [ -f \"$f\" ]; then echo \"$f\"; exit 0; fi; done; echo none"], cwd=paths.workspace, env=env)
-    script_path = check.stdout.strip()
-    if script_path == "none" or not script_path:
+    candidates = ("/workspace/setup-devcontainer.sh", "/workspace/setup.sh")
+    check = engine.run(["exec", "-u", "0", paths.identity.container_name, "sh", "-c",
+        'for script in /workspace/setup-devcontainer.sh /workspace/setup.sh; do if [ -f "$script" ]; then printf "%s" "$script"; exit 0; fi; done; printf missing'], cwd=paths.workspace, env=env)
+    require_success(check, "discover workspace setup script")
+    script = check.stdout.strip()
+    if script == "missing":
         return ([], False)
-    stage(f"Running setup script {script_path} in {paths.identity.container_name}...")
-    env_flags = [f"-e={v}" for v in ROOT_SETUP_ENV]
-    result = engine.run(["exec", *env_flags, paths.identity.container_name, "bash", script_path], cwd=paths.workspace, env=env)
-    # Run ownership repair after
-    engine.run(["exec", paths.identity.container_name, "sh", "-c", SETUP_OWNERSHIP_REPAIR_SCRIPT], cwd=paths.workspace, env=env)
-    if result.returncode != 0:
-        raise LifecycleError(f"Error: setup script {script_path} failed\n{result.stderr or result.stdout}")
-    return ([f"Setup script {script_path} completed."], True)
-
-def chmod_workspace_for_rootless_podman(workspace: Path) -> None:
-    try:
-        workspace.chmod(0o755)
-    except OSError:
-        pass
-
-def require_success(result: CommandResult, action: str) -> None:
-    if result.returncode != 0:
-        detail = (result.stderr or result.stdout).strip()
-        raise LifecycleError(f"Error: failed to {action}: {detail}")
-
-def ignore_failure(result: CommandResult) -> None:
-    return None
+    if script not in candidates:
+        raise LifecycleError("Error: invalid workspace setup discovery response")
+    stage(f"Running {script}...")
+    result = engine.run(["exec", "-u", "0", "-e", "HOME=/root", "-e", "USER=root", "-e", "LOGNAME=root", "-e", "SUDO_USER=overlord",
+        paths.identity.container_name, "bash", script], cwd=paths.workspace, env=env)
+    require_success(result, f"run {script}")
+    return ([f"Workspace setup {script} completed."], True)

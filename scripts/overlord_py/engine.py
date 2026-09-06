@@ -9,7 +9,6 @@ import shutil
 import subprocess
 from typing import Final
 
-RESPONSIBILITY: Final = "select Podman or Docker and run engine commands without shell interpolation"
 MISSING_ENGINE_MESSAGE: Final = "Error: neither podman nor docker found in PATH"
 
 
@@ -20,10 +19,6 @@ class EngineDetectionError(Exception):
     def __str__(self) -> str:
         return self.message
 
-
-@dataclass(frozen=True, slots=True)
-class EngineCommandPlan:
-    argv: list[str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,8 +36,6 @@ class ContainerEngine:
     def argv(self, args: Sequence[str]) -> list[str]:
         return [self.name, *args]
 
-    def plan(self, args: Sequence[str]) -> EngineCommandPlan:
-        return EngineCommandPlan(argv=self.argv(args))
 
     def run(
         self,
@@ -70,8 +63,6 @@ class ContainerEngine:
         )
 
 
-def describe() -> str:
-    return RESPONSIBILITY
 
 
 def detect_engine(*, path_env: str | None = None) -> ContainerEngine:

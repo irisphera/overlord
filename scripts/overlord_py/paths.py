@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 from pathlib import Path
 import re
 from typing import Final, override
 
-RESPONSIBILITY: Final = "derive repo roots, workspace identity, and .overlord paths"
 SLUG_INVALID_CHARS: Final = re.compile(r"[^a-z0-9._-]")
 GITDIR_FILE: Final = re.compile(r"\Agitdir: (?P<path>[^\r\n]+)\n?\Z")
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class GitdirOutsideWorkspaceError(Exception):
     workspace: Path
     gitdir: Path
@@ -31,6 +31,7 @@ class WorkspaceIdentity:
     image_name: str
     container_name: str
     zellij_session: str
+    legacy_container_name: str
 
 @dataclass(frozen=True, slots=True)
 class ManagedStatePaths:
@@ -56,24 +57,21 @@ class WorkspacePaths:
     identity: WorkspaceIdentity
     state: StatePaths
 
-def describe() -> str:
-    return RESPONSIBILITY
 
-def resolve_script_path(script_path: Path) -> Path:
-    return script_path.resolve()
-
-def repo_root_from_script(script_path: Path) -> Path:
-    return resolve_script_path(script_path).parent.parent
 
 def workspace_identity(workspace: Path) -> WorkspaceIdentity:
-    workspace_name = workspace.resolve().name
-    workspace_slug = SLUG_INVALID_CHARS.sub("-", workspace_name.lower())
+    canonical = workspace.resolve()
+    workspace_name = canonical.name or "workspace"
+    workspace_slug = SLUG_INVALID_CHARS.sub("-", workspace_name.lower()).strip("-.") or "workspace"
+    digest = hashlib.sha256(str(canonical).encode()).hexdigest()[:16]
+    resource_name = f"overlord-{workspace_slug[:48]}-{digest}"
     return WorkspaceIdentity(
         workspace_name=workspace_name,
         workspace_slug=workspace_slug,
-        image_name=f"overlord-{workspace_slug}",
-        container_name=f"overlord-{workspace_slug}",
+        image_name=resource_name,
+        container_name=resource_name,
         zellij_session=workspace_name,
+        legacy_container_name=f"overlord-{SLUG_INVALID_CHARS.sub('-', canonical.name.lower())}",
     )
 
 def state_paths(workspace: Path) -> StatePaths:
@@ -106,7 +104,7 @@ def ensure_gitdir_within_workspace(paths: WorkspacePaths) -> None:
         raise GitdirOutsideWorkspaceError(workspace=paths.workspace, gitdir=gitdir)
 
 def build_workspace_paths(workspace: Path, *, script_path: Path) -> WorkspacePaths:
-    resolved_script = resolve_script_path(script_path)
+    resolved_script = script_path.resolve()
     resolved_workspace = workspace.resolve()
     return WorkspacePaths(
         script_path=resolved_script,

@@ -39,8 +39,6 @@ class OmpStateMountTests(unittest.TestCase):
             zsh_data=self.paths.state.zsh_data,
             prime_agent_data=self.paths.state.prime_agent_data,
             omp_agent_data=self.paths.state.omp_agent_data,
-            gitconfig=Path(self.tempdir.name) / "home" / ".gitconfig",
-            ssh_dir=Path(self.tempdir.name) / "home" / ".ssh",
         )
 
     def tearDown(self):
@@ -145,19 +143,72 @@ class OmpStateMountTests(unittest.TestCase):
                 allow_missing_omp=True,
             )
 
-    def test_parent_omp_mount_does_not_replace_exact_agent_bind(self):
-        mounts = self._mounts()
-        mounts.append(self._mount(self.workspace / "omp-parent", "/home/overlord/.omp"))
+    def test_duplicate_and_descendant_binds_cannot_shadow_persisted_state(self):
+        for destination in ("/workspace", "/home/overlord/.zsh_data", "/home/overlord/.prime/agent"):
+            for suffix in ("", "/shadow"):
+                with self.subTest(destination=destination, suffix=suffix):
+                    mounts = self._mounts()
+                    mounts.append(self._mount(self.workspace / "other", destination + suffix))
+                    with self.assertRaises(MountSafetyFailure):
+                        verify_persisted_state_mounts(
+                            InspectEngine(mounts), "container", expected_sources=self.sources,
+                            cwd=self.workspace, env={},
+                        )
 
-        result = verify_persisted_state_mounts(
-            InspectEngine(mounts),
-            "container",
-            expected_sources=self.sources,
-            cwd=self.workspace,
-            env={},
+    def test_extra_host_access_is_rejected_but_remains_removable(self):
+        for source, destination, writable in (
+            (self.workspace.parent / "home", "/home/overlord", True),
+            (self.workspace.parent / "home" / ".ssh", "/home/overlord/.ssh", False),
+            (self.workspace.parent / "sibling", "/unrelated", False),
+            (self.workspace.parent / "engine.sock", "/var/run/docker.sock", True),
+            (self.workspace / "omp-parent", "/home/overlord/.omp", True),
+        ):
+            with self.subTest(destination=destination):
+                mounts = self._mounts() + [self._mount(source, destination, writable=writable)]
+                with self.assertRaises(MountSafetyFailure):
+                    verify_persisted_state_mounts(
+                        InspectEngine(mounts), "container", expected_sources=self.sources,
+                        cwd=self.workspace, env={},
+                    )
+                removable = verify_persisted_state_mounts(
+                    InspectEngine(mounts), "container", expected_sources=self.sources,
+                    cwd=self.workspace, env={}, allow_legacy_access=True,
+                )
+                self.assertFalse(removable.access_matches)
+                self.assertEqual(removable.omp_agent_data.source, str(self.sources.omp_agent_data))
+
+    def test_legacy_access_does_not_relax_persisted_state_ownership(self):
+        for overrides in ({"Source": str(self.workspace.parent / "other")}, {"RW": False}, {"Type": "volume"}):
+            with self.subTest(overrides=overrides):
+                mounts = self._mounts()
+                mounts[0].update(overrides)
+                mounts.append(self._mount(self.workspace.parent / "home", "/extra", writable=False))
+                with self.assertRaises(MountSafetyFailure):
+                    verify_persisted_state_mounts(
+                        InspectEngine(mounts), "container", expected_sources=self.sources,
+                        cwd=self.workspace, env={}, allow_legacy_access=True,
+                    )
+
+    def test_socket_opt_in_matches_the_complete_mount_set(self):
+        socket = str(self.workspace.parent / "engine.sock")
+        mounts = self._mounts() + [self._mount(socket, "/var/run/docker.sock")]
+        env = {"OVERLORD_ENGINE_SOCKET": socket}
+        verified = verify_persisted_state_mounts(
+            InspectEngine(mounts), "container", expected_sources=self.sources,
+            cwd=self.workspace, env=env,
         )
-
-        self.assertEqual(result.omp_agent_data.destination, OMP_AGENT_DATA_DESTINATION)
+        self.assertTrue(verified.access_matches)
+        for actual in (
+            self._mounts(),
+            mounts + [self._mount(socket, "/extra", writable=False)],
+            self._mounts() + [self._mount(socket + ".old", "/var/run/docker.sock")],
+            self._mounts() + [self._mount(socket, "/var/run/docker.sock", writable=False)],
+        ):
+            with self.subTest(mounts=actual), self.assertRaises(MountSafetyFailure):
+                verify_persisted_state_mounts(
+                    InspectEngine(actual), "container", expected_sources=self.sources,
+                    cwd=self.workspace, env=env,
+                )
 
 
 if __name__ == "__main__":

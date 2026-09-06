@@ -1,463 +1,142 @@
 import json
 import os
+import stat
 import subprocess
-import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-SETUP = (ROOT / "setup.sh").read_text(encoding="utf-8")
-DEV_SETUP = (ROOT / "setup-devcontainer.sh").read_text(encoding="utf-8")
 
 
 class SetupPersistenceTests(unittest.TestCase):
-    def test_node_24_is_installed_with_nvm(self):
-        self.assertIn('NODE_MAJOR="${NODE_MAJOR:-24}"', SETUP)
-        self.assertLess(SETUP.index("install_nvm_node"), SETUP.index("install_prime_agent"))
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.home = Path(self.temp.name) / "selected"
+        self.home.mkdir()
+        self.prime = self.home / ".prime/agent"
+        self.prime.mkdir(parents=True)
+        self.env = {key: value for key, value in os.environ.items() if not key.startswith("AZURE_OPENAI_")}
+        self.env.update(HOME=str(self.home), TARGET_HOME=str(self.home), SETUP_PROFILE="native",
+                        PRIME_AGENT_CODING_AGENT_DIR=str(self.prime), PI_CODING_AGENT_DIR=str(self.home / ".omp/agent"))
 
-    def test_all_login_and_interactive_shell_files_receive_tool_path(self):
-        for filename in (".bashrc", ".bash_profile", ".profile", ".zshrc", ".zprofile"):
-            self.assertIn(filename, SETUP)
-        self.assertIn('export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"', SETUP)
-
-    def test_commands_are_published_to_usr_local_bin(self):
-        self.assertIn("publish_tool_commands", SETUP)
-        self.assertIn("node npm npx corepack prime-agent codegraph uv aws", SETUP)
-        self.assertIn("omp", SETUP)
-        self.assertIn('destination="/usr/local/bin/$command_name"', SETUP)
-
-    def test_oh_my_pi_is_installed_and_called_before_tool_publishing(self):
-        self.assertIn("install_oh_my_pi", SETUP)
-        self.assertIn("curl -fsSL https://omp.sh/install | sh", SETUP)
-        self.assertIn('PI_INSTALL_DIR="$install_dir"', SETUP)
-        self.assertIn('install_dir="/usr/local/bin"', SETUP)
-        self.assertIn('omp_is_available "$local_binary"', SETUP)
-        self.assertIn("--binary", SETUP)
-        calls = SETUP.rsplit("install_prime_agent\n", 1)[1]
-        self.assertLess(calls.index("install_oh_my_pi"), calls.index("publish_tool_commands"))
-
-    def test_oh_my_pi_tracks_latest_release(self):
-        self.assertIn("npm view @oh-my-pi/pi-coding-agent version", SETUP)
-        self.assertIn("already at latest", SETUP)
-        self.assertIn("OMP_VERSION", SETUP)
-
-
-    def test_codex_is_installed_and_configured_for_azure(self):
-        self.assertIn("install_codex", SETUP)
-        self.assertIn("configure_codex", SETUP)
-        self.assertIn("@openai/codex", SETUP)
-        self.assertIn("CODEX_VERSION", SETUP)
-        versions = (ROOT / "config" / "tool-versions.env").read_text()
-        self.assertIn("CODEX_VERSION=", versions)
-        calls = SETUP.rsplit("install_prime_agent\n", 1)[1]
-        self.assertLess(calls.index("install_oh_my_pi"), calls.index("install_codex"))
-        self.assertLess(calls.index("install_codex"), calls.index("publish_tool_commands"))
-        self.assertLess(calls.index("configure_prime_agent_models"), calls.index("configure_codex"))
-        script = SETUP.split("<<'PYEOF_CODEX'\n", 1)[1].split("\nPYEOF_CODEX", 1)[0]
-        with tempfile.TemporaryDirectory() as tmp:
-            target = Path(tmp) / "codex"
-            env = {
-                key: value
-                for key, value in os.environ.items()
-                if not key.startswith("AZURE_OPENAI_")
-            }
-            completed = subprocess.run(
-                [sys.executable, "-", str(target)],
-                input=script,
-                text=True,
-                capture_output=True,
-                check=False,
-                env=env,
-            )
-            self.assertEqual(completed.returncode, 0, completed.stderr)
-            config_toml = (target / "config.toml").read_text()
-            import tomlkit
-            config = tomlkit.parse(config_toml)
-            self.assertEqual(config["model"], "gpt-5.6-luna")
-            self.assertEqual(config["model_reasoning_effort"], "max")
-            self.assertNotIn("profile", config)
-            high_brain = tomlkit.parse((target / "high-brain.config.toml").read_text())
-            self.assertEqual(high_brain["model"], "gpt-6-astra")
-            self.assertEqual(high_brain["model_reasoning_effort"], "medium")
-            self.assertIn('model_provider = "azure"', config_toml)
-            self.assertIn("https://YOUR-RESOURCE-NAME.openai.azure.com/openai", config_toml)
-            self.assertIn('env_key = "AZURE_OPENAI_API_KEY"', config_toml)
-            self.assertIn('wire_api = "responses"', config_toml)
-            self.assertIn("api-version", config_toml)
-
-
-    def test_omp_defaults_seed_empty_bind_without_overwriting_state(self):
-        entrypoint = (ROOT / "config/entrypoint.sh").read_text()
-        script = entrypoint.split("# Seed a new OMP bind", 1)[1].split("# --- Fix home directory ownership", 1)[0]
-        script = script[script.index("OMP_DEFAULTS="):]
-        script = script.replace("OMP_DEFAULTS=/usr/local/share/overlord/omp-agent-defaults", 'OMP_DEFAULTS="$TEST_DEFAULTS"')
-        script = script.replace("OMP_AGENT_DIR=/home/overlord/.omp/agent", 'OMP_AGENT_DIR="$TEST_AGENT_DIR"')
-        with tempfile.TemporaryDirectory() as tmp:
-            defaults, agent = Path(tmp) / "defaults", Path(tmp) / "agent"
-            defaults.mkdir()
-            (defaults / "config.yml").write_text("defaultThinkingLevel: medium\n")
-            (defaults / "models.yml").write_text("providers: {}\n")
-            (defaults / "skills/example").mkdir(parents=True)
-            (defaults / "skills/example/SKILL.md").write_text("example skill\n")
-            (defaults / "sessions").mkdir()
-            (defaults / "sessions/unwanted.jsonl").write_text("image session must not be seeded\n")
-            env = dict(os.environ, TEST_DEFAULTS=str(defaults), TEST_AGENT_DIR=str(agent))
-            subprocess.run(["bash", "-e"], input=script, text=True, env=env, check=True)
-            self.assertEqual((agent / "config.yml").read_text(), "defaultThinkingLevel: medium\n")
-            self.assertEqual((agent / "skills/example/SKILL.md").read_text(), "example skill\n")
-            self.assertFalse((agent / "sessions").exists())
-            (agent / "config.yml").write_text("defaultThinkingLevel: high\n")
-            (agent / "sessions").mkdir()
-            (agent / "sessions/saved.jsonl").write_text("saved session\n")
-            subprocess.run(["bash", "-e"], input=script, text=True, env=env, check=True)
-            self.assertEqual((agent / "config.yml").read_text(), "defaultThinkingLevel: high\n")
-            self.assertEqual((agent / "sessions/saved.jsonl").read_text(), "saved session\n")
-
-    def test_shared_skills_reach_omp_for_each_user_with_assets(self):
-        section = SETUP.split("install_prime_agent_skills() {", 1)[1]
-        function = "install_prime_agent_skills() {" + section.split("\nconfigure_prime_agent_tools() {", 1)[0]
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            installer = root / "installer"
-            user = root / "user"
-            source = installer / ".pi/agent/skills/example"
-            source.mkdir(parents=True)
-            (source / "SKILL.md").write_text("---\nname: example\ndescription: Example skill\n---\n")
-            (source / "reference.txt").write_text("reference content\n")
-            unrelated = user / ".omp/agent/skills/personal/SKILL.md"
-            unrelated.parent.mkdir(parents=True)
-            unrelated.write_text("personal skill\n")
-            upstream = root / "aws-setup.txt"
-            upstream.write_text("AWS login instructions\n")
-            harness = '''set -e
-info() { :; }
-warn() { printf '%s\\n' "$*" >&2; }
-npx() { :; }
-omz_target_homes() { printf '%s\\n' "$HOME" "$TEST_USER_HOME"; }
-curl() { cp "$TEST_AWS_SETUP" "$4"; }
-'''
-            env = dict(os.environ, HOME=str(installer), TEST_USER_HOME=str(user), TEST_AWS_SETUP=str(upstream))
-            for _ in range(2):
-                result = subprocess.run(
-                    ["bash"], input=harness + function + "\ninstall_prime_agent_skills\n",
-                    text=True, capture_output=True, env=env,
-                )
-                self.assertEqual(result.returncode, 0, result.stderr)
-                for home in (installer, user):
-                    for agent in (".prime", ".omp"):
-                        skills = home / agent / "agent/skills"
-                        self.assertEqual((skills / "example/SKILL.md").read_bytes(), (source / "SKILL.md").read_bytes())
-                        self.assertEqual((skills / "example/reference.txt").read_text(), "reference content\n")
-                        self.assertIn("AWS login instructions", (skills / "aws-agent-toolkit-setup/SKILL.md").read_text())
-                self.assertEqual(unrelated.read_text(), "personal skill\n")
-
-    def test_prime_agent_tools_are_configured(self):
-        self.assertIn('bundled["websearch"] = True', SETUP)
-        self.assertIn('"https://mcp.context7.com/mcp"', SETUP)
-        self.assertIn('servers.pop("runpod-docs", None)', SETUP)
-        self.assertNotIn('"https://docs.runpod.io/mcp"', SETUP)
-        self.assertIn("configure_prime_agent_tools", SETUP)
-
-    def test_settings_merge_accepts_prime_jsonc_and_preserves_values(self):
-        section = SETUP.split("configure_prime_agent_tools() {", 1)[1]
-        script = section.split("<<'PYEOF'\n", 1)[1].split("\nPYEOF", 1)[0]
-        with tempfile.TemporaryDirectory() as tmp:
-            settings_path = Path(tmp) / "settings.json"
-            settings_path.write_text(
-                '{\n  // keep this value\n  "defaultModel": "example/model",\n  "recentModels": ["example/model",],\n  "mcpServers": {"runpod-docs": {"type": "http", "url": "old"},},\n}\n'
-            )
-            completed = subprocess.run(
-                [sys.executable, "-", str(settings_path)],
-                input=script,
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-            self.assertEqual(completed.returncode, 0, completed.stderr)
-            settings = json.loads(settings_path.read_text())
-            self.assertEqual(settings["defaultModel"], "example/model")
-            self.assertTrue(settings["bundledSkills"]["websearch"])
-            self.assertEqual(settings["mcpServers"]["context7"]["url"], "https://mcp.context7.com/mcp")
-            self.assertNotIn("runpod-docs", settings["mcpServers"])
-
-    def test_existing_models_patch_removes_opencode_models(self):
-        marker = 'python3 - "$existing_models_json" <<\'PYEOF_PATCH\'\n'
-        start = SETUP.index(marker) + len(marker)
-        script = SETUP[start : SETUP.index("\nPYEOF_PATCH", start)]
-        with tempfile.TemporaryDirectory() as tmp:
-            models_path = Path(tmp) / "models.json"
-            models_path.write_text(
-                json.dumps(
-                    {
-                        "defaults": {},
-                        "providers": {
-                            "opencode": {
-                                "modelOverrides": {
-                                    "*": {},
-                                    "gpt-5.6-sol": {},
-                                },
-                                "models": [{"id": "gpt-5.6-sol"}],
-                            },
-                            "opencode-go": {
-                                "modelOverrides": {
-                                    "*": {},
-                                    "muse-spark-1.2-contributor-free": {},
-                                    "muse-spark-1.2-contributor": {},
-                                },
-                                "models": [
-                                    {"id": "muse-spark-1.2-contributor-free"},
-                                    {"id": "muse-spark-1.2-contributor"},
-                                ],
-                            },
-                        },
-                    }
-                )
-                + "\n"
-            )
-            completed = subprocess.run(
-                [sys.executable, "-", str(models_path)],
-                input=script,
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-            self.assertEqual(completed.returncode, 0, completed.stderr)
-            data = json.loads(models_path.read_text())
-            self.assertNotIn("opencode", data["providers"])
-            serialized = json.dumps(data)
-            self.assertNotIn("muse-spark-1.2", serialized)
-            self.assertEqual(
-                {model["id"] for model in data["providers"]["opencode-go"]["models"]},
-                {"gpt-5.6-luna", "muse-spark-1.3-contributor"},
-            )
-            for mid in ("gpt-5.6-luna", "muse-spark-1.3-contributor"):
-                self.assertEqual(data["providers"]["opencode-go"]["modelOverrides"][mid].get("thinkingLevelMap", {}).get("max"), "max")
-            patched_models = {m["id"]: m for m in data["providers"]["opencode-go"]["models"]}
-            self.assertEqual(patched_models["muse-spark-1.3-contributor"].get("thinkingLevelMap", {}).get("max"), "max")
-
-    def test_migrates_stale_opencode_settings(self):
-        section = SETUP.split("configure_prime_agent_tools() {", 1)[1]
-        script = section.split("<<'PYEOF'\n", 1)[1].split("\nPYEOF", 1)[0]
-        with tempfile.TemporaryDirectory() as tmp:
-            settings_path = Path(tmp) / "settings.json"
-            settings_path.write_text(
-                json.dumps(
-                    {
-                        "defaultProvider": "opencode",
-                        "defaultModel": "muse-spark-1.2-contributor-free",
-                        "recentModels": [
-                            "opencode/gpt-5.6-sol",
-                            "opencode/muse-spark-1.2-contributor-free",
-                            "opencode-go/muse-spark-1.2-contributor",
-                        ],
-                    }
-                )
-                + "\n"
-            )
-            completed = subprocess.run(
-                [sys.executable, "-", str(settings_path)],
-                input=script,
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-            self.assertEqual(completed.returncode, 0, completed.stderr)
-            settings = json.loads(settings_path.read_text())
-            self.assertEqual(settings["defaultProvider"], "opencode-go")
-            self.assertEqual(settings["defaultModel"], "muse-spark-1.3-contributor")
-            self.assertEqual(
-                settings["recentModels"],
-                ["opencode-go/muse-spark-1.3-contributor"],
-            )
-
-    def test_migrates_legacy_muse_spark_default_for_opencode_go(self):
-        section = SETUP.split("configure_prime_agent_tools() {", 1)[1]
-        script = section.split("<<'PYEOF'\n", 1)[1].split("\nPYEOF", 1)[0]
-        with tempfile.TemporaryDirectory() as tmp:
-            settings_path = Path(tmp) / "settings.json"
-            settings_path.write_text(
-                json.dumps(
-                    {
-                        "defaultProvider": "opencode-go",
-                        "defaultModel": "opencode-go/muse-spark-1.2-contributor-free",
-                        "recentModels": [
-                            "muse-spark-1.2-contributor",
-                            "opencode-go/muse-spark-1.2-contributor-free",
-                        ],
-                    }
-                )
-                + "\n"
-            )
-            completed = subprocess.run(
-                [sys.executable, "-", str(settings_path)],
-                input=script,
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-            self.assertEqual(completed.returncode, 0, completed.stderr)
-            settings = json.loads(settings_path.read_text())
-            self.assertEqual(settings["defaultProvider"], "opencode-go")
-            self.assertEqual(settings["defaultModel"], "muse-spark-1.3-contributor")
-            self.assertEqual(
-                settings["recentModels"],
-                ["muse-spark-1.3-contributor"],
-            )
-
-    def test_migrates_legacy_gemini_settings(self):
-        section = SETUP.split("configure_prime_agent_tools() {", 1)[1]
-        script = section.split("<<'PYEOF'\n", 1)[1].split("\nPYEOF", 1)[0]
-        with tempfile.TemporaryDirectory() as tmp:
-            settings_path = Path(tmp) / "settings.json"
-            settings_path.write_text(
-                json.dumps(
-                    {
-                        "defaultProvider": "google-vertex",
-                        "defaultModel": "google-vertex/gemini-3.7-flash",
-                        "recentModels": [
-                            "google-vertex/gemini-3.7-flash",
-                            "gemini-3.7-flash",
-                        ],
-                    }
-                )
-                + "\n"
-            )
-            completed = subprocess.run(
-                [sys.executable, "-", str(settings_path)],
-                input=script,
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-            self.assertEqual(completed.returncode, 0, completed.stderr)
-            settings = json.loads(settings_path.read_text())
-            self.assertEqual(settings["defaultProvider"], "google-vertex")
-            self.assertEqual(settings["defaultModel"], "gemini-3.8-flash")
-            self.assertEqual(
-                settings["recentModels"],
-                ["google-vertex/gemini-3.8-flash", "gemini-3.8-flash"],
-            )
-
-    def test_launcher_prefers_devcontainer_setup(self):
-        lifecycle = (ROOT / "scripts/overlord_py/container_lifecycle.py").read_text()
-        self.assertLess(
-            lifecycle.index("/workspace/setup-devcontainer.sh"),
-            lifecycle.index("/workspace/setup.sh"),
+    def configure(self, function, *, profile="native"):
+        result = subprocess.run(
+            ["bash", "-eu", "-c", 'source "$1"; ' + function, "_", str(ROOT / "setup.sh")],
+            text=True, capture_output=True, env=dict(self.env, SETUP_PROFILE=profile), timeout=10,
         )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result
 
-    def test_runpod_docs_mcp_is_devcontainer_only(self):
-        self.assertNotIn('"https://docs.runpod.io/mcp"', SETUP)
-        self.assertIn('"https://docs.runpod.io/mcp"', DEV_SETUP)
-        self.assertIn("runpod-docs", DEV_SETUP)
+    def test_jsonc_merge_preserves_custom_settings_and_private_mode(self):
+        path = self.prime / "settings.json"
+        original = '{\n// comment\n"defaultModel":"example/custom", "recentModels":["example/custom",], "mcpServers":{"custom":{"url":"https://example.test"}},\n}\n'
+        path.write_text(original)
+        path.chmod(0o640)
+        self.configure("configure_prime_agent_tools")
+        data = json.loads(path.read_text())
+        self.assertEqual(data["defaultModel"], "example/custom")
+        self.assertEqual(data["mcpServers"]["custom"]["url"], "https://example.test")
+        self.assertTrue(data["bundledSkills"]["websearch"])
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o640)
+        self.assertEqual(path.with_suffix(".json.bak").read_text(), original)
+        before = path.read_bytes(), path.stat().st_mtime_ns
+        self.configure("configure_prime_agent_tools")
+        self.assertEqual((path.read_bytes(), path.stat().st_mtime_ns), before)
+        self.assertEqual(path.with_suffix(".json.bak").read_text(), original)
 
-    def test_devcontainer_merges_runpod_docs_settings(self):
-        script = DEV_SETUP.split("<<'PYEOF'\n", 1)[1].split("\nPYEOF", 1)[0]
-        with tempfile.TemporaryDirectory() as tmp:
-            settings_path = Path(tmp) / "settings.json"
-            settings_path.write_text('{"defaultModel": "example/model"}\n')
-            completed = subprocess.run(
-                [sys.executable, "-", str(settings_path)],
-                input=script,
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-            self.assertEqual(completed.returncode, 0, completed.stderr)
-            settings = json.loads(settings_path.read_text())
-            self.assertEqual(settings["defaultModel"], "example/model")
-            self.assertEqual(
-                settings["mcpServers"]["runpod-docs"]["url"],
-                "https://docs.runpod.io/mcp",
-            )
+    def test_profiles_select_runpod_without_copying_other_users_configuration(self):
+        sibling = Path(self.temp.name) / "other/.prime/agent/settings.json"
+        sibling.parent.mkdir(parents=True)
+        sibling.write_text('{"private":"other account"}\n')
+        self.configure("configure_prime_agent_tools", profile="container")
+        path = self.prime / "settings.json"
+        self.assertEqual(json.loads(path.read_text())["mcpServers"]["runpod-docs"]["url"], "https://docs.runpod.io/mcp")
+        self.configure("configure_prime_agent_tools", profile="native")
+        self.assertNotIn("runpod-docs", json.loads(path.read_text())["mcpServers"])
+        self.assertEqual(sibling.read_text(), '{"private":"other account"}\n')
 
-    def test_clean_zsh_login_is_verified(self):
-        self.assertIn("verify_login_shell_tools", SETUP)
-        self.assertIn('zsh -lic "command -v $command_name"', SETUP)
-        self.assertIn("node npm npx prime-agent git omp codex", SETUP)
+    def test_models_merge_preserves_unrelated_providers_and_runtime_state(self):
+        path = self.prime / "models.json"
+        custom = {"models": [{"id": "custom", "contextWindow": 12345}], "apiKey": "private-marker"}
+        existing = {"providers": {"opencode": custom, "azure-openai-responses": {"models": [{"id": "private-deployment", "name": "personal"}]}}}
+        path.write_text(json.dumps(existing))
+        state = self.prime / "sessions/session.jsonl"
+        state.parent.mkdir()
+        state.write_bytes(b"saved session\n")
+        auth = self.prime / "auth.json"
+        auth.write_bytes(b"private credentials\n")
+        database = self.prime / "state.db"
+        database.write_bytes(b"database bytes\x00")
+        result = self.configure("configure_prime_agent_models")
+        data = json.loads(path.read_text())
+        self.assertEqual(data["providers"]["opencode"], custom)
+        entries = {entry["id"]: entry for entry in data["providers"]["azure-openai-responses"]["models"]}
+        self.assertEqual(entries["private-deployment"], {"id": "private-deployment", "name": "personal"})
+        self.assertEqual(entries["grok-4.6"]["contextWindow"], 180000)
+        self.assertEqual(entries["gpt-5.6-luna"]["thinkingLevelMap"]["max"], "max")
+        self.assertEqual(state.read_bytes(), b"saved session\n")
+        self.assertEqual(auth.read_bytes(), b"private credentials\n")
+        self.assertEqual(database.read_bytes(), b"database bytes\x00")
+        self.assertNotIn("private-marker", result.stdout + result.stderr)
 
-    def test_existing_zshrc_gets_oh_my_zsh_bootstrap(self):
-        self.assertIn("Overlord: oh-my-zsh", SETUP)
-        self.assertIn('source $ZSH/oh-my-zsh.sh', SETUP)
+    def test_malformed_config_is_unchanged_without_secret_diagnostics(self):
+        for function, filename in (("configure_prime_agent_models", "models.json"), ("configure_prime_agent_tools", "settings.json")):
+            with self.subTest(filename=filename):
+                path = self.prime / filename
+                original = '{"secret":"private-marker", broken'
+                path.write_text(original)
+                path.chmod(0o600)
+                result = self.configure(function)
+                self.assertEqual(path.read_text(), original)
+                self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+                self.assertFalse(path.with_suffix(".json.bak").exists())
+                self.assertNotIn("private-marker", result.stdout + result.stderr)
+
+    def test_symlink_and_fifo_config_are_preserved_without_following_or_blocking(self):
+        outside = Path(self.temp.name) / "outside.json"
+        outside.write_text('{"private":"untouched"}')
+        path = self.prime / "models.json"
+        path.symlink_to(outside)
+        self.configure("configure_prime_agent_models")
+        self.assertTrue(path.is_symlink())
+        self.assertEqual(outside.read_text(), '{"private":"untouched"}')
+        path.unlink()
+        os.mkfifo(path)
+        self.configure("configure_prime_agent_models")
+        self.assertTrue(stat.S_ISFIFO(path.lstat().st_mode))
+
+    def test_shell_reruns_preserve_user_content_after_legacy_and_managed_blocks(self):
+        path = self.home / ".zshrc"
+        original = '# --- Overlord: persistent tool PATH ---\nexport PATH="$HOME/.local/bin:$PATH"\n\nexport PERSONAL_MARKER=keep-me\n'
+        path.write_text(original)
+        path.chmod(0o600)
+        self.configure("ensure_node_shell_rc")
+        path.write_text(path.read_text() + "export SECOND_MARKER=also-keep\n")
+        self.configure("ensure_node_shell_rc")
+        result = subprocess.run(["bash", "-c", '. "$1"; printf "%s %s" "$PERSONAL_MARKER" "$SECOND_MARKER"', "_", str(path)], text=True, capture_output=True, env=self.env)
+        self.assertEqual((result.returncode, result.stdout), (0, "keep-me also-keep"), result.stderr)
+        self.assertEqual(path.with_suffix(".bak").read_text(), original)
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
 
 
-    def test_zsh_autocomplete_is_sourced_before_oh_my_zsh(self):
-        self.assertIn("skip_global_compinit=1", SETUP)
-        self.assertIn("zsh-autocomplete.plugin.zsh", SETUP)
-        self.assertIn("configure_overlord_zsh_files", SETUP)
-        self.assertIn("upsert_overlord_shell_block", SETUP)
-        first = SETUP.split('export ZSH="$HOME/.oh-my-zsh"', 1)[1]
-        bootstrap = first.split("source $ZSH/oh-my-zsh.sh", 1)[0]
-        self.assertIn("zsh-autocomplete.plugin.zsh", bootstrap)
-        self.assertNotIn(
-            "plugins=(git zsh-autosuggestions zsh-syntax-highlighting zsh-completions zsh-autocomplete)",
-            SETUP,
+    def test_configuration_survives_both_privilege_phase_transfers(self):
+        definitions = subprocess.run(
+            ["bash", "-c", 'source "$1"; declare -f', "_", str(ROOT / "setup.sh")],
+            capture_output=True, text=True, check=True,
+        ).stdout
+        forwarded = subprocess.run(
+            ["bash"], input=definitions + "\ndeclare -f\n",
+            capture_output=True, text=True, check=True,
+        ).stdout
+        result = subprocess.run(
+            ["bash", "-eu"], input=forwarded + "\nconfigure_prime_agent_tools\n",
+            capture_output=True, text=True, env=self.env, timeout=10,
         )
-
-    def test_zellij_autostart_execs_so_detach_closes_shell(self):
-        self.assertIn("exec zellij attach --create", SETUP)
-        self.assertNotIn("zellij attach --create 2>/dev/null || true", SETUP)
-
-    def test_overlord_zsh_rc_helpers_rewrite_existing_files(self):
-        start = SETUP.index("# Replace one Overlord-managed shell block")
-        end = SETUP.index("\n# --- zellij config + autostart on SSH")
-        helpers = SETUP[start:end]
-        with tempfile.TemporaryDirectory() as tmp:
-            home = Path(tmp) / "home"
-            home.mkdir()
-            zshrc = home / ".zshrc"
-            zshrc.write_text(
-                """# path setup
-export PATH="$HOME/.local/bin:$PATH"
-
-# --- Overlord: oh-my-zsh ---
-export ZSH="$HOME/.oh-my-zsh"
-ZSH_THEME="robbyrussell"
-plugins=(git zsh-autosuggestions zsh-syntax-highlighting zsh-completions zsh-autocomplete)
-source $ZSH/oh-my-zsh.sh
-
-# --- Overlord: auto-start zellij on SSH ---
-if [ -z "${ZELLIJ:-}" ] && [ -t 1 ] && command -v zellij >/dev/null 2>&1; then
-  case $- in
-    *i*)
-      zellij attach --create 2>/dev/null || true
-      ;;
-  esac
-fi
-"""
-            )
-            script = f"""
-set -euo pipefail
-info() {{ :; }}
-warn() {{ :; }}
-{helpers}
-configure_overlord_zsh_files '{home}'
-upsert_overlord_shell_block '{zshrc}' 'Overlord: auto-start zellij' <<'EOS'
-# --- Overlord: auto-start zellij on SSH ---
-if [ -z "${{ZELLIJ:-}}" ] && [ -t 1 ] && command -v zellij >/dev/null 2>&1; then
-  case $- in
-    *i*)
-      exec zellij attach --create
-      ;;
-  esac
-fi
-EOS
-"""
-            completed = subprocess.run(["bash", "-c", script], text=True, capture_output=True)
-            self.assertEqual(completed.returncode, 0, completed.stderr + "\n" + completed.stdout)
-            zshenv = (home / ".zshenv").read_text()
-            new_rc = zshrc.read_text()
-            self.assertIn("skip_global_compinit=1", zshenv)
-            self.assertIn("zsh-autocomplete.plugin.zsh", new_rc)
-            self.assertLess(
-                new_rc.index("zsh-autocomplete.plugin.zsh"),
-                new_rc.index("source $ZSH/oh-my-zsh.sh"),
-            )
-            self.assertNotRegex(new_rc, r"^plugins=\(.*zsh-autocomplete")
-            self.assertIn("exec zellij attach --create", new_rc)
-            self.assertNotIn("zellij attach --create 2>/dev/null || true", new_rc)
-            self.assertLess(new_rc.index("export PATH="), new_rc.index("Overlord: oh-my-zsh"))
-
+        self.assertEqual(result.returncode, 0, result.stderr)
+        settings = json.loads((self.prime / "settings.json").read_text())
+        self.assertTrue(settings["bundledSkills"]["websearch"])
 
 if __name__ == "__main__":
     unittest.main()

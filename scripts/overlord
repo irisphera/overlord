@@ -15,8 +15,12 @@ done
 SCRIPT_DIR="$(cd -P "$(dirname "${SOURCE}")" >/dev/null 2>&1 && pwd)"
 
 if ! PYTHON_BIN="$(command -v python3 2>/dev/null)"; then
-	echo "Error: python3 not found in PATH. Install Python 3 to use overlord." >&2
+	echo "Error: Python >=3.12 is required. Install python3 (Debian 13: sudo apt-get install python3)." >&2
 	exit 127
+fi
+if ! "${PYTHON_BIN}" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)'; then
+	echo "Error: Python >=3.12 is required; select a newer python3 in PATH (Debian 13 provides Python 3.13)." >&2
+	exit 1
 fi
 
 PYTHONPATH="${SCRIPT_DIR}${PYTHONPATH:+:${PYTHONPATH}}" exec "${PYTHON_BIN}" -m overlord_py.main "$@"

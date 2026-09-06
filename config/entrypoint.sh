@@ -1,115 +1,237 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
-# --- Docker socket permissions for DinD (socket mounting) ---
-if [ -S /var/run/docker.sock ]; then
-	chmod 666 /var/run/docker.sock 2>/dev/null || true
-fi
+fail() {
+	printf '[entrypoint] %s\n' "$*" >&2
+	return 1
+}
 
-# --- UID/GID remapping for workspace permissions ---
-# Match the container overlord user's UID/GID to the workspace so that:
-#   - UID matches the file owner  (needed to edit existing files with 644 perms)
-#   - GID matches the directory group (needed to create files in 775 dirs)
-#
-# Preferred: pass HOST_UID / HOST_GID from the host at `docker run` time:
-#   docker run -e HOST_UID=$(id -u) -e HOST_GID=$(id -g) ...
-#
-# Fallback: auto-detect from workspace files (less reliable on virtiofs
-# mounts with split ownership).
-OVERLORD_UID=$(id -u overlord)
-OVERLORD_GID=$(id -g overlord)
-AUTO_DETECTED=false
+validate_id() {
+	[[ "$1" =~ ^[1-9][0-9]{0,9}$ ]] && (( 10#$1 < 4294967295 )) || fail "invalid non-root UID/GID: $1"
+}
 
-# --- Resolve target UID/GID ---
-if [ -n "${HOST_UID}" ] && [ -n "${HOST_GID}" ]; then
-	TARGET_UID="${HOST_UID}"
-	TARGET_GID="${HOST_GID}"
-	echo "[entrypoint] using HOST_UID=${TARGET_UID} HOST_GID=${TARGET_GID} (explicit)"
-else
-	AUTO_DETECTED=true
-	# Auto-detect from workspace contents.
-	# GID: from workspace directory (where we need to create new files/dirs)
-	TARGET_GID=$(stat -c '%g' /workspace 2>/dev/null || echo "")
+# usermod normally traverses the home itself. Suppress that implicit traversal;
+# only image-owned paths, never mountpoints or their children, may be remapped.
+remap_image_home() {
+	python3 - "$@" <<'PY'
+import os
+import re
+import stat
+import sys
 
-	# UID: sample from depth >= 2 to skip root-level files that are often
-	# created by the container (owned by root/777) rather than the host.
-	TARGET_UID=""
-	SAMPLE_FILE=$(find /workspace -mindepth 2 -maxdepth 5 \( -path '/workspace/.omo/*' -o -path '/workspace/.overlord/*' -o -name '.DS_Store' \) -prune -o -type f -print -quit 2>/dev/null)
-	if [ -z "${SAMPLE_FILE}" ]; then
-		SAMPLE_FILE=$(find /workspace -maxdepth 3 \( -path '/workspace/.omo/*' -o -path '/workspace/.overlord/*' -o -name '.DS_Store' \) -prune -o -type f -print -quit 2>/dev/null)
+home, old_uid, old_gid, uid, gid, mountinfo = sys.argv[1:]
+old_uid, old_gid, uid, gid = map(int, (old_uid, old_gid, uid, gid))
+with open(mountinfo) as stream:
+    mounts = {
+        re.sub(r"\\([0-7]{3})", lambda m: chr(int(m[1], 8)), line.split()[4])
+        for line in stream
+    }
+flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+
+def visit(parent, name, path):
+    if path in mounts:
+        return
+    st = os.stat(name, dir_fd=parent, follow_symlinks=False)
+    if not (stat.S_ISREG(st.st_mode) or stat.S_ISDIR(st.st_mode)):
+        return
+    fd = os.open(name, flags if stat.S_ISDIR(st.st_mode) else os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent)
+    try:
+        current = os.fstat(fd)
+        if (current.st_dev, current.st_ino) != (st.st_dev, st.st_ino):
+            raise RuntimeError(f"home changed during remap: {path}")
+        new_uid = uid if st.st_uid == old_uid else -1
+        new_gid = gid if st.st_gid == old_gid else -1
+        if new_uid != -1 or new_gid != -1:
+            os.fchown(fd, new_uid, new_gid)
+        if stat.S_ISDIR(st.st_mode):
+            for child in os.listdir(fd):
+                visit(fd, child, path + "/" + child)
+    finally:
+        os.close(fd)
+
+home = os.path.abspath(home)
+if not any(home == mount or home.startswith(mount.rstrip("/") + "/") for mount in mounts if mount != "/"):
+    parent = os.open(os.path.dirname(home), flags)
+    try:
+        visit(parent, os.path.basename(home), home)
+    finally:
+        os.close(parent)
+PY
+}
+
+initialize_identity() {
+	local home="$1" old_uid old_gid target_uid target_gid
+	old_uid=$(id -u overlord)
+	old_gid=$(id -g overlord)
+	if [[ ${HOST_UID+x} != ${HOST_GID+x} ]]; then
+		fail 'HOST_UID and HOST_GID must be supplied together'
 	fi
-	if [ -n "${SAMPLE_FILE}" ]; then
-		TARGET_UID=$(stat -c '%u' "${SAMPLE_FILE}" 2>/dev/null || echo "")
+	target_uid=${HOST_UID-$old_uid}
+	target_gid=${HOST_GID-$old_gid}
+	validate_id "$target_uid"
+	validate_id "$target_gid"
+	if [[ "$old_uid:$old_gid" != "$target_uid:$target_gid" ]]; then
+		remap_image_home "$home" "$old_uid" "$old_gid" "$target_uid" "$target_gid" /proc/self/mountinfo
+		# /nonexistent is not created, and -m is deliberately never used.
+		usermod -d /nonexistent overlord
+		groupmod -o -g "$target_gid" overlord
+		usermod -u "$target_uid" -g "$target_gid" overlord
+		[[ $(id -u overlord):$(id -g overlord) == "$target_uid:$target_gid" ]] || fail 'user remap did not take effect'
 	fi
-	# Final fallback: workspace dir UID (empty workspace)
-	if [ -z "${TARGET_UID}" ]; then
-		TARGET_UID=$(stat -c '%u' /workspace 2>/dev/null || echo "")
-	fi
-	echo "[entrypoint] auto-detected UID=${TARGET_UID:-?} GID=${TARGET_GID:-?} (sample: ${SAMPLE_FILE:-<none>})"
-fi
+	usermod -d "$home" overlord
+}
 
-if [ "${AUTO_DETECTED}" = true ]; then
-	if [ "${TARGET_UID}" = "0" ]; then
-		echo "[entrypoint] ignoring auto-detected root UID=0; keeping overlord UID=${OVERLORD_UID}"
-		TARGET_UID="${OVERLORD_UID}"
-	fi
-	if [ "${TARGET_GID}" = "0" ]; then
-		echo "[entrypoint] ignoring auto-detected root GID=0; keeping overlord GID=${OVERLORD_GID}"
-		TARGET_GID="${OVERLORD_GID}"
-	fi
-fi
+seed_agent_defaults() {
+	# Run writes as the final user, with descriptor-relative no-follow operations.
+	# Existing directories/files retain their owner, mode and contents.
+	gosu overlord python3 - "$@" <<'PY'
+import os
+import stat
+import sys
 
-# --- Apply remap if needed ---
-NEED_REMAP=false
-if [ -n "${TARGET_UID}" ] && [ "${TARGET_UID}" != "${OVERLORD_UID}" ]; then
-	NEED_REMAP=true
-fi
-if [ -n "${TARGET_GID}" ] && [ "${TARGET_GID}" != "${OVERLORD_GID}" ]; then
-	NEED_REMAP=true
-fi
+source, destination, *managed_entries = sys.argv[1:]
+flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 
-if [ "${NEED_REMAP}" = true ]; then
-	groupmod -o -g "${TARGET_GID:-${OVERLORD_GID}}" overlord 2>/dev/null || true
-	usermod -o -u "${TARGET_UID:-${OVERLORD_UID}}" -g "${TARGET_GID:-${OVERLORD_GID}}" overlord 2>/dev/null || true
-	echo "[entrypoint] remapped overlord to $(id overlord)"
-else
-	echo "[entrypoint] no remap needed — overlord is $(id overlord)"
+def directory(path, create):
+    fd = os.open("/", flags)
+    try:
+        for part in os.path.abspath(path).split("/")[1:]:
+            if create:
+                try:
+                    os.mkdir(part, 0o700, dir_fd=fd)
+                except FileExistsError:
+                    pass
+            try:
+                child = os.open(part, flags, dir_fd=fd)
+            except FileNotFoundError:
+                if create:
+                    raise
+                os.close(fd)
+                return None
+            os.close(fd)
+            fd = child
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+def seed(src, parent, name, check_only=False):
+    source_stat = os.lstat(src)
+    if stat.S_ISLNK(source_stat.st_mode):
+        raise RuntimeError(f"symlink in authored defaults: {src}")
+    try:
+        existing = os.stat(name, dir_fd=parent, follow_symlinks=False) if parent is not None else None
+    except FileNotFoundError:
+        existing = None
+    if existing and stat.S_ISLNK(existing.st_mode):
+        raise RuntimeError(f"unsafe symlink state destination: {name}")
+    if stat.S_ISDIR(source_stat.st_mode):
+        if existing is None and not check_only:
+            os.mkdir(name, 0o700, dir_fd=parent)
+        child = os.open(name, flags, dir_fd=parent) if existing or not check_only else None
+        try:
+            for entry in sorted(os.listdir(src)):
+                seed(os.path.join(src, entry), child, entry, check_only)
+        finally:
+            if child is not None:
+                os.close(child)
+    elif stat.S_ISREG(source_stat.st_mode):
+        if existing:
+            if not stat.S_ISREG(existing.st_mode):
+                raise RuntimeError(f"state destination is not a regular file: {name}")
+            return
+        if check_only:
+            return
+        src_fd = os.open(src, os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            dst_fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600 | (source_stat.st_mode & 0o111), dir_fd=parent)
+            try:
+                with os.fdopen(src_fd, "rb", closefd=False) as reader, os.fdopen(dst_fd, "wb", closefd=False) as writer:
+                    while chunk := reader.read(65536):
+                        writer.write(chunk)
+            except BaseException:
+                os.unlink(name, dir_fd=parent)
+                raise
+            finally:
+                os.close(dst_fd)
+        finally:
+            os.close(src_fd)
+    else:
+        raise RuntimeError(f"non-regular authored default: {src}")
+
+entries = [name for name in managed_entries
+           if os.path.lexists(os.path.join(source, name))]
+for check_only in (True, False):
+    parent = directory(destination, create=not check_only)
+    try:
+        for name in entries:
+            seed(os.path.join(source, name), parent, name, check_only)
+    finally:
+        if parent is not None:
+            os.close(parent)
+PY
+}
+
+configure_socket() {
+	local socket="$1" gid group
+	[[ -S "$socket" ]] || return 0
+	# Rootless keep-id maps an opted-in user-owned socket directly to overlord.
+	[[ $(stat -c '%u' "$socket") != $(id -u overlord) ]] || return 0
+	gid=$(stat -c '%g' "$socket")
+	# Use the container-visible group, not an unmapped host GID in rootless mode.
+	group=$(getent group "$gid" | cut -d: -f1) || {
+		group=overlord-engine
+		groupadd -g "$gid" "$group"
+	}
+	usermod -a -G "$group" overlord
+}
+
+configure_git_trust() {
+	local home="$1" output="$2" entries status entry
+	# Remove the old image-wide wildcard, but leave explicit admin entries alone.
+	git -C / config --system --fixed-value --unset-all safe.directory '*' || {
+		status=$?
+		[[ "$status" == 5 ]] || return "$status"
+	}
+	entries=$(GIT_CONFIG_GLOBAL="$home/.gitconfig" git -C / config --get-all safe.directory) || {
+		status=$?
+		[[ "$status" == 1 ]] || return "$status"
+	}
+	[[ ! -L "$output" ]] || fail 'unsafe git configuration destination'
+	# The host config stays read-only, including relative includes. Reset trust
+	# after loading it, then retain explicit admin paths without a legacy '*'.
+	rm -f "$output"
+	git config --file "$output" --add include.path "$home/.gitconfig"
+	git config --file "$output" --add safe.directory ''
+	while IFS= read -r entry; do
+		[[ -z "$entry" || "$entry" == '*' || "$entry" == /workspace ]] && continue
+		git config --file "$output" --add safe.directory "$entry"
+	done <<< "$entries"
+	git config --file "$output" --add safe.directory /workspace
+	chmod 644 "$output"
+	export GIT_CONFIG_GLOBAL="$output"
+}
+
+entrypoint_main() {
+	local home="$1" defaults="$2" socket="$3" ready="$4" git_config="$5"
+	shift 5
+	# Remove stale readiness even when a later validation/remap fails.
+	rm -f "$ready"
+	[[ $(id -u) == 0 ]] || fail 'entrypoint must start as container root'
+	initialize_identity "$home"
+	export HOME="$home" USER=overlord LOGNAME=overlord
+	export XDG_CONFIG_HOME="$home/.config" XDG_CACHE_HOME="$home/.cache"
+	export XDG_DATA_HOME="$home/.local/share" XDG_STATE_HOME="$home/.local/state"
+	seed_agent_defaults "$defaults" "$home/.omp/agent" config.yml models.yml skills extensions
+	seed_agent_defaults "${defaults%/*}/prime-agent-defaults" "$home/.prime/agent" settings.json models.json skills
+	configure_socket "$socket"
+	configure_git_trust "$home" "$git_config"
+	[[ $# -gt 0 ]] || fail 'missing container command'
+	printf 'ready\n' > "$ready"
+	exec gosu overlord "$@"
+}
+
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
+	entrypoint_main /home/overlord /usr/local/share/overlord/omp-agent-defaults \
+		/var/run/docker.sock /run/overlord-entrypoint-ready /run/overlord.gitconfig "$@"
 fi
-
-# Seed a new OMP bind from image defaults without replacing persisted state.
-OMP_DEFAULTS=/usr/local/share/overlord/omp-agent-defaults
-OMP_AGENT_DIR=/home/overlord/.omp/agent
-if [ -d "$OMP_DEFAULTS" ]; then
-	mkdir -p "$OMP_AGENT_DIR"
-	chmod 700 "$OMP_AGENT_DIR"
-	for entry in config.yml models.yml skills; do
-		if [ -e "$OMP_DEFAULTS/$entry" ] && [ ! -e "$OMP_AGENT_DIR/$entry" ]; then
-			cp -a "$OMP_DEFAULTS/$entry" "$OMP_AGENT_DIR/$entry"
-		fi
-	done
-fi
-
-# --- Fix home directory ownership ---
-# Always ensure /home/overlord is owned by the overlord user, regardless of
-# whether UID/GID remapping occurred. This catches:
-#   - Files created as root during docker build (after USER root)
-#   - Bind-mounted config files with mismatched ownership
-#   - New tools/configs added in future Dockerfile layers
-# Errors on read-only mounts (.gitconfig, .ssh) are expected and ignored.
-chown -R "$(id -u overlord):$(id -g overlord)" /home/overlord 2>/dev/null || true
-
-# Trust only the fixed workspace bind mount when its mountpoint ownership differs.
-if ! git -C / config --system --get-all safe.directory | grep -Fqx -- "/workspace"; then
-	git -C / config --system --add safe.directory /workspace
-fi
-
-# Drop privileges to overlord — ensures the process runs with the
-# remapped UID/GID that matches the workspace file ownership.
-export HOME=/home/overlord
-export USER=overlord
-export LOGNAME=overlord
-export XDG_CONFIG_HOME=/home/overlord/.config
-export XDG_CACHE_HOME=/home/overlord/.cache
-export XDG_DATA_HOME=/home/overlord/.local/share
-export XDG_STATE_HOME=/home/overlord/.local/state
-exec gosu overlord "$@"

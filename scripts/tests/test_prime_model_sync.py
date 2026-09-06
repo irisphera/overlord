@@ -1,190 +1,180 @@
+import errno
+import json
+import os
+import stat
 import sys
-from pathlib import Path as _P
-sys.path.insert(0, str(_P(__file__).resolve().parents[1]))
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from overlord_py.prime_model_sync import sync_host_prime_models
-import json
 
-# Helper to create a minimal valid patched models.json (what _ensure_correct_models would produce)
-def _azure_test_baseurl():
-    import os
-    _r = os.environ.get("AZURE_OPENAI_RESOURCE_NAME", "").strip()
-    return f"https://{_r}.openai.azure.com/openai/v1" if _r else "https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1"
-
-def _valid_models_json():
-    # This is what _ensure_correct_models ensures for a fresh valid file
-    _azure_base = _azure_test_baseurl()
-    return json.dumps({
-        "defaults": {"contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "reasoning": True},
-        "providers": {
-            "azure-openai-responses": {
-                "modelOverrides": {"*": {"contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "reasoning": True},
-                                   "gpt-5.6-luna": {"contextWindow": 256000, "thinkingLevelMap": {"max": "max"}}, "gpt-5.6-sol": {"contextWindow": 256000}, "grok-4.6": {"contextWindow": 180000}, "gpt-6-astra": {"contextWindow": 256000}},
-                "models": [
-                    {"id": "gpt-5.6-sol", "name": "GPT-5.6 Sol (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "baseUrl": _azure_base},
-                    {"id": "gpt-5.6-luna", "name": "GPT-5.6 Luna (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "thinkingLevelMap": {"max": "max"}, "baseUrl": _azure_base},
-                    {"id": "grok-4.6", "name": "Grok 4.6 (180k)", "contextWindow": 180000, "maxInputTokens": 180000, "limitTokens": 180000, "maxTokens": 16384, "reasoning": False, "baseUrl": _azure_base},
-                    {"id": "gpt-6-astra", "name": "GPT-6 Astra (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "baseUrl": _azure_base},
-                ]
-            },
-            "google-vertex": {
-                "modelOverrides": {"*": {"contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "reasoning": True}, "gemini-3.8-flash": {"contextWindow": 256000}},
-                "models": [
-                    {"id": "gemini-3.8-flash", "name": "Gemini 3.8 Flash (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "input": ["text", "image"]},
-                ]
-            },
-            "opencode-go": {
-                "modelOverrides": {"*": {"contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "reasoning": True}, "gpt-5.6-luna": {"contextWindow": 256000, "thinkingLevelMap": {"max": "max"}}, "muse-spark-1.3-contributor": {"contextWindow": 256000, "thinkingLevelMap": {"max": "max"}}},
-                "models": [
-                    {"id": "gpt-5.6-luna", "name": "GPT-5.6 Luna (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "thinkingLevelMap": {"max": "max"}},
-                    {"id": "muse-spark-1.3-contributor", "name": "Muse Spark 1.3 Contributor (256k)", "contextWindow": 256000, "maxInputTokens": 256000, "limitTokens": 256000, "maxTokens": 16384, "reasoning": True, "thinkingLevelMap": {"max": "max"}},
-                ]
-            },
-        }
-    }, sort_keys=True)
 
 class PrimeModelSyncTests(unittest.TestCase):
-    def test_copies_host_models_into_persisted_data(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            home = Path(tmp) / "home"
-            target = Path(tmp) / "state" / "prime-agent-data"
-            (home / ".prime" / "agent").mkdir(parents=True)
-            valid = _valid_models_json()
-            (home / ".prime" / "agent" / "models.json").write_text(valid)
-            result = sync_host_prime_models(home=home, prime_agent_data=target)
-            self.assertTrue(result.copied)
-            # Target should be patched to 256k/Grok as well (already valid, so exact copy)
-            self.assertEqual(json.loads((target / "models.json").read_text()), json.loads(valid))
-
-    def test_skips_when_host_file_missing(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            result = sync_host_prime_models(
-                home=Path(tmp) / "home",
-                prime_agent_data=Path(tmp) / "state",
-            )
-            self.assertFalse(result.copied)
-
-    def test_noop_when_already_up_to_date(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            home = Path(tmp) / "home"
-            target = Path(tmp) / "state" / "prime-agent-data"
-            src = home / ".prime" / "agent"
-            src.mkdir(parents=True)
-            valid = _valid_models_json()
-            (src / "models.json").write_text(valid)
-            target.mkdir(parents=True)
-            (target / "models.json").write_text(valid)
-            result = sync_host_prime_models(home=home, prime_agent_data=target)
-            self.assertFalse(result.copied)
-            self.assertEqual(result.reason, "already up to date")
-
-    def test_overwrites_stale_target(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            home = Path(tmp) / "home"
-            target = Path(tmp) / "state" / "prime-agent-data"
-            src = home / ".prime" / "agent"
-            src.mkdir(parents=True)
-            (src / "models.json").write_text("new")
-            target.mkdir(parents=True)
-            (target / "models.json").write_text("old")
-            result = sync_host_prime_models(home=home, prime_agent_data=target)
-            self.assertTrue(result.copied)
-            self.assertEqual((target / "models.json").read_text(), "new")
-
-    def test_patches_old_272k_file_to_256k_and_adds_grok_and_luna(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            home = Path(tmp) / "home"
-            target = Path(tmp) / "state" / "prime-agent-data"
-            (home / ".prime" / "agent").mkdir(parents=True)
-            old = json.dumps({
-                "defaults": {"contextWindow": 272000, "maxInputTokens": 272000, "limitTokens": 272000, "reasoning": True},
-                "providers": {
-                    "azure-openai-responses": {
-                        "modelOverrides": {"*": {"contextWindow": 272000, "maxInputTokens": 272000, "limitTokens": 272000, "reasoning": True}},
-                        "models": [{"id": "gpt-5.6-sol", "name": "GPT-5.6 Sol (272k)", "contextWindow": 272000, "maxInputTokens": 272000, "limitTokens": 272000, "maxTokens": 16384, "reasoning": True}]
-                    },
-                    "opencode-go": {
-                        "modelOverrides": {"*": {"contextWindow": 272000, "maxInputTokens": 272000, "limitTokens": 272000, "reasoning": True}},
-                        "models": [
-                            {"id": "muse-spark-1.2-contributor", "name": "Muse Spark 1.2 Contributor (272k)", "contextWindow": 272000, "maxInputTokens": 272000, "limitTokens": 272000, "maxTokens": 16384, "reasoning": True},
-                            {"id": "gpt-5.6-luna", "name": "GPT-5.6 Luna (272k)", "contextWindow": 272000, "maxInputTokens": 272000, "limitTokens": 272000, "maxTokens": 16384, "reasoning": True}
-                        ]
-                    }
-                }
-            })
-            old_data = json.loads(old)
-            old_data["providers"]["opencode"] = {
-                "modelOverrides": {
-                    "*": {"contextWindow": 272000},
-                    "gpt-5.6-sol": {"contextWindow": 272000},
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.home = Path(self.tmp.name) / "home"
+        self.destination = Path(self.tmp.name) / "state" / "prime-agent-data"
+        self.source = self.home / ".prime" / "agent" / "models.json"
+        self.target = self.destination / "models.json"
+        self.source.parent.mkdir(parents=True)
+        self.content = json.dumps({
+            "defaults": {"contextWindow": 12345},
+            "providers": {
+                "my-private-provider": {
+                    "apiKey": "private-test-credential",
+                    "models": [{"id": "my-model", "contextWindow": 12345}],
+                    "modelOverrides": {"*": {"reasoning": False}},
                 },
-                "models": [{"id": "gpt-5.6-sol", "name": "GPT-5.6 Sol"}],
-            }
-            old = json.dumps(old_data)
-            (home / ".prime" / "agent" / "models.json").write_text(old)
-            result = sync_host_prime_models(home=home, prime_agent_data=target)
-            self.assertTrue(result.copied)
-            data = json.loads((target / "models.json").read_text())
-            # Must have grok 4.6 at 180k (200k hard max)
-            self.assertIn("azure-openai-responses", data["providers"])
-            az_models = {m["id"]: m for m in data["providers"]["azure-openai-responses"].get("models", [])}
-            self.assertIn("grok-4.6", az_models)
-            self.assertNotIn("grok-5.6", az_models)
-            self.assertIn("gpt-5.6-sol", az_models)
-            self.assertIn("gpt-5.6-luna", az_models)
-            self.assertEqual(az_models["grok-4.6"]["contextWindow"], 180000)
-            self.assertEqual(az_models["grok-4.6"]["maxInputTokens"], 180000)
-            self.assertEqual(az_models["grok-4.6"]["limitTokens"], 180000)
-            self.assertEqual(az_models["grok-4.6"]["reasoning"], False)
-            self.assertIn("180k", az_models["grok-4.6"]["name"])
-            self.assertEqual(
-                data["providers"]["azure-openai-responses"]["modelOverrides"]["grok-4.6"]["contextWindow"],
-                180000,
-            )
-            # Defaults stay 256k; Azure Grok 4.6 is the 180k exception
-            self.assertEqual(data["defaults"]["contextWindow"], 256000)
-            for prov in data["providers"].values():
-                for m in prov.get("models", []):
-                    expected = 180000 if m.get("id") == "grok-4.6" else 256000
-                    self.assertEqual(m["contextWindow"], expected)
-                    if m.get("id") in ("gpt-5.6-luna", "muse-spark-1.3-contributor"):
-                        self.assertEqual(m.get("thinkingLevelMap", {}).get("max"), "max")
-            # Must remove x-preview and the unsupported OpenCode provider block.
-            serialized = json.dumps(data)
-            self.assertNotIn("x-preview-f-free", serialized)
-            self.assertNotIn("muse-spark-1.2", serialized)
-            self.assertNotIn("opencode", data["providers"])
-            self.assertIn("gpt-5.6-luna", serialized)
-            luna_overrides = [
-                provider["modelOverrides"]["gpt-5.6-luna"]["contextWindow"]
-                for provider in data["providers"].values()
-                if "gpt-5.6-luna" in provider.get("modelOverrides", {})
-            ]
-            self.assertTrue(luna_overrides)
-            self.assertTrue(all(context == 256000 for context in luna_overrides))
-            luna_thinking_maps = [
-                provider["modelOverrides"]["gpt-5.6-luna"]["thinkingLevelMap"]
-                for provider in data["providers"].values()
-                if "gpt-5.6-luna" in provider.get("modelOverrides", {})
-            ]
-            self.assertTrue(luna_thinking_maps)
-            self.assertTrue(all(mapping.get("max") == "max" for mapping in luna_thinking_maps))
-            muse_thinking_maps = [
-                provider["modelOverrides"]["muse-spark-1.3-contributor"]["thinkingLevelMap"]
-                for provider in data["providers"].values()
-                if "muse-spark-1.3-contributor" in provider.get("modelOverrides", {})
-            ]
-            self.assertTrue(muse_thinking_maps)
-            self.assertTrue(all(mapping.get("max") == "max" for mapping in muse_thinking_maps))
-            self.assertEqual(
-                {m["id"] for m in data["providers"]["opencode-go"]["models"]},
-                {"gpt-5.6-luna", "muse-spark-1.3-contributor"},
-            )
-            # Custom azure models must carry a baseUrl (else prime-agent drops them)
-            for m in data["providers"]["azure-openai-responses"]["models"]:
-                self.assertTrue(m.get("baseUrl"))
+                "opencode": {"models": [{"id": "custom-route"}]},
+            },
+        }, indent=2).encode() + b"\n"
+        self.source.write_bytes(self.content)
+        self.source.chmod(0o600)
+
+    def sync(self):
+        return sync_host_prime_models(home=self.home, prime_agent_data=self.destination)
+
+    def assert_source_unchanged(self, content=None, mode=0o600):
+        self.assertEqual(self.source.read_bytes(), self.content if content is None else content)
+        self.assertEqual(stat.S_IMODE(self.source.stat().st_mode), mode)
+
+    def test_seeds_exact_host_bytes_without_removing_custom_providers(self):
+        result = self.sync()
+        self.assertTrue(result.copied)
+        self.assertEqual(self.target.read_bytes(), self.content)
+        self.assertEqual(stat.S_IMODE(self.target.stat().st_mode), 0o600)
+        self.assert_source_unchanged()
+        self.assertNotIn("private-test-credential", result.reason)
+
+    def test_preserves_source_access_mode_in_seed(self):
+        for mode in (0o400, 0o640):
+            with self.subTest(mode=oct(mode)):
+                self.source.chmod(mode)
+                self.assertTrue(self.sync().copied)
+                self.assertEqual(stat.S_IMODE(self.target.stat().st_mode), mode)
+                self.assert_source_unchanged(mode=mode)
+                self.target.unlink()
+
+    def test_existing_workspace_is_untouched_even_with_invalid_source(self):
+        self.destination.mkdir(parents=True)
+        self.target.write_bytes(b"workspace customization, even if not valid JSON")
+        self.target.chmod(0o400)
+        self.source.write_bytes(b"invalid host JSON")
+        self.assertFalse(self.sync().copied)
+        self.assertEqual(self.target.read_bytes(), b"workspace customization, even if not valid JSON")
+        self.assertEqual(stat.S_IMODE(self.target.stat().st_mode), 0o400)
+        self.assert_source_unchanged(content=b"invalid host JSON")
+
+    def test_missing_source_does_not_create_destination(self):
+        self.source.unlink()
+        self.assertFalse(self.sync().copied)
+        self.assertFalse(self.destination.exists())
+
+    def test_invalid_json_or_container_shapes_do_not_create_destination(self):
+        invalid_documents = [
+            b'{"apiKey": "private-test-credential",',
+            b"\xff",
+            b"null",
+            b"[]",
+            b'{"defaults": []}',
+            b'{"providers": []}',
+            b'{"providers": {"custom": null}}',
+            b'{"providers": {"custom": {"models": {}}}}',
+            b'{"providers": {"custom": {"models": [null]}}}',
+            b'{"providers": {"custom": {"models": [{"id": []}]}}}',
+            b'{"providers": {"custom": {"modelOverrides": []}}}',
+            b'{"providers": {"custom": {"modelOverrides": {"*": null}}}}',
+        ]
+        for document in invalid_documents:
+            with self.subTest(document=document):
+                self.source.write_bytes(document)
+                with self.assertRaises(RuntimeError) as error:
+                    self.sync()
+                self.assertNotIn("private-test-credential", str(error.exception))
+                self.assertFalse(self.destination.exists())
+                self.assert_source_unchanged(content=document)
+
+    def test_source_symlink_is_rejected_without_touching_referent(self):
+        original = self.source.with_name("original.json")
+        self.source.rename(original)
+        self.source.symlink_to(original)
+        with self.assertRaises(RuntimeError):
+            self.sync()
+        self.assertFalse(self.destination.exists())
+        self.assertTrue(self.source.is_symlink())
+        self.assertEqual(original.read_bytes(), self.content)
+        self.assertEqual(stat.S_IMODE(original.stat().st_mode), 0o600)
+
+    def test_target_symlink_is_rejected_without_touching_referent(self):
+        self.destination.mkdir(parents=True)
+        self.target.symlink_to(self.source)
+        with self.assertRaises(RuntimeError):
+            self.sync()
+        self.assertTrue(self.target.is_symlink())
+        self.assert_source_unchanged()
+
+    def test_symlinked_destination_ancestor_is_rejected(self):
+        outside = Path(self.tmp.name) / "outside"
+        outside.mkdir()
+        self.destination.parent.symlink_to(outside, target_is_directory=True)
+        with self.assertRaises(RuntimeError):
+            self.sync()
+        self.assertEqual(list(outside.iterdir()), [])
+        self.assert_source_unchanged()
+
+    def test_symlinked_source_ancestor_is_rejected(self):
+        original = self.source.parent.with_name("original-agent")
+        self.source.parent.rename(original)
+        self.source.parent.symlink_to(original, target_is_directory=True)
+        with self.assertRaises(RuntimeError):
+            self.sync()
+        self.assertFalse(self.destination.exists())
+        self.assert_source_unchanged()
+
+    def test_nonregular_source_is_rejected_without_blocking(self):
+        self.source.unlink()
+        os.mkfifo(self.source)
+        with self.assertRaises(RuntimeError):
+            self.sync()
+        self.assertFalse(self.destination.exists())
+        self.assertTrue(stat.S_ISFIFO(self.source.stat().st_mode))
+
+    def test_failed_publication_leaves_no_partial_target_or_temporary_file(self):
+        with patch("overlord_py.prime_model_sync.os.link", side_effect=OSError(errno.EIO, "publication failed")):
+            with self.assertRaises(RuntimeError):
+                self.sync()
+        self.assertFalse(self.target.exists())
+        self.assertEqual(list(self.destination.iterdir()), [])
+        self.assert_source_unchanged()
+
+    def test_failed_flush_leaves_no_partial_target_or_temporary_file(self):
+        with patch("overlord_py.prime_model_sync.os.fsync", side_effect=OSError(errno.ENOSPC, "disk full")):
+            with self.assertRaises(RuntimeError):
+                self.sync()
+        self.assertFalse(self.target.exists())
+        self.assertEqual(list(self.destination.iterdir()), [])
+        self.assert_source_unchanged()
+
+    def test_atomic_publication_does_not_replace_concurrent_creation(self):
+        real_link = os.link
+
+        def race(source, target, **kwargs):
+            self.assertFalse(self.target.exists())
+            self.target.write_bytes(b"concurrent workspace customization")
+            self.target.chmod(0o400)
+            return real_link(source, target, **kwargs)
+
+        with patch("overlord_py.prime_model_sync.os.link", side_effect=race):
+            self.assertFalse(self.sync().copied)
+        self.assertEqual(self.target.read_bytes(), b"concurrent workspace customization")
+        self.assertEqual(stat.S_IMODE(self.target.stat().st_mode), 0o400)
+        self.assertEqual(list(self.destination.iterdir()), [self.target])
+        self.assert_source_unchanged()
+
 
 if __name__ == "__main__":
     unittest.main()

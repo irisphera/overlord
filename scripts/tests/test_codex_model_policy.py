@@ -8,9 +8,6 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-SETUP = (ROOT / "setup.sh").read_text(encoding="utf-8")
-SCRIPT = SETUP.split("<<'PYEOF_CODEX'\n", 1)[1].split("\nPYEOF_CODEX", 1)[0]
-PYTHON = "/usr/bin/python3"
 
 
 class CodexModelPolicyTests(unittest.TestCase):
@@ -18,8 +15,7 @@ class CodexModelPolicyTests(unittest.TestCase):
         env = {key: value for key, value in os.environ.items() if not key.startswith("AZURE_OPENAI_")}
         env.update(overrides)
         result = subprocess.run(
-            [PYTHON, "-", str(target)],
-            input=SCRIPT,
+            ["bash", "-c", 'source "$1"; CODEX_HOME="$2"; configure_codex', "_", str(ROOT / "setup.sh"), str(target)],
             text=True,
             capture_output=True,
             check=False,

@@ -1,33 +1,17 @@
-"""Seed per-workspace prime-agent data with the host's models.json."""
+"""Seed missing workspace models from the host; setup.sh owns model policy."""
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 import json
 import os
-import shutil
+import secrets
+import stat
 from typing import Final
 
-RESPONSIBILITY: Final = "copy the host ~/.prime/agent/models.json into workspace persisted prime-agent data"
 HOST_MODELS_JSON: Final = Path(".prime/agent/models.json")
-DEFAULT_CONTEXT_WINDOW: Final = 256000
-GROK_46_CONTEXT_WINDOW: Final = 180000
-AZURE_PLACEHOLDER_BASEURL: Final = "https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1"
-
-
-def _azure_baseurl() -> str:
-    """Build the Azure baseUrl from AZURE_OPENAI_RESOURCE_NAME when set.
-
-    prime-agent resolves AZURE_OPENAI_BASE_URL / AZURE_OPENAI_RESOURCE_NAME at
-    request time, but models.json still needs a truthy baseUrl or the custom
-    model is silently dropped. Use the env var value when available so the
-    stored URL tracks the configured resource, falling back to the placeholder.
-    """
-    resource = os.environ.get("AZURE_OPENAI_RESOURCE_NAME", "").strip()
-    if resource:
-        return f"https://{resource}.openai.azure.com/openai/v1"
-    return AZURE_PLACEHOLDER_BASEURL
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,250 +20,130 @@ class SyncResult:
     reason: str
 
 
-def _context_window_for(model_id: str) -> int:
-    """Azure Grok 4.6 is capped at 200k; keep 180k of headroom. Everything else stays at 256k."""
-    return GROK_46_CONTEXT_WINDOW if model_id == "grok-4.6" else DEFAULT_CONTEXT_WINDOW
-
-
-def _context_label(tokens: int) -> str:
-    return f"{tokens // 1000}k"
-
-
-def _wildcard_override() -> dict:
-    return {
-        "contextWindow": DEFAULT_CONTEXT_WINDOW,
-        "maxInputTokens": DEFAULT_CONTEXT_WINDOW,
-        "limitTokens": DEFAULT_CONTEXT_WINDOW,
-        "reasoning": True,
-    }
-
-
-def _token_fields(model_id: str) -> dict:
-    window = _context_window_for(model_id)
-    return {
-        "contextWindow": window,
-        "maxInputTokens": window,
-        "limitTokens": window,
-    }
-
-
 def host_models_path(home: Path) -> Path:
     return home / HOST_MODELS_JSON
 
 
-def _model_entry(model_id: str, name: str, *, reasoning: bool, extra: dict | None = None) -> dict:
-    entry = {
-        "id": model_id,
-        "name": f"{name} ({_context_label(_context_window_for(model_id))})",
-        **_token_fields(model_id),
-        "maxTokens": 16384,
-        "reasoning": reasoning,
-    }
-    if extra:
-        entry.update(extra)
-    return entry
-
-
-def _ensure_correct_models(path: Path) -> bool:
-    """Patch models.json with the supported provider/model routing and context."""
+@contextmanager
+def _directory(path: Path, *, create: bool = False):
+    """Pin each directory component without following symlinks (Linux only)."""
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    fd = os.open(path.anchor or ".", flags)
     try:
-        text = path.read_text()
-        data = json.loads(text)
-    except Exception:
+        for part in (path.parts[1:] if path.is_absolute() else path.parts):
+            if create:
+                try:
+                    os.mkdir(part, mode=0o700, dir_fd=fd)
+                except FileExistsError:
+                    pass
+            next_fd = os.open(part, flags, dir_fd=fd)
+            os.close(fd)
+            fd = next_fd
+        yield fd
+    finally:
+        os.close(fd)
+
+
+def _target_exists(directory_fd: int) -> bool:
+    try:
+        mode = os.stat("models.json", dir_fd=directory_fd, follow_symlinks=False).st_mode
+    except FileNotFoundError:
         return False
-    changed = False
+    if not stat.S_ISREG(mode):
+        raise RuntimeError("Cannot seed workspace models.json: destination is not a regular file")
+    return True
 
-    # Ensure defaults 256k (per-model overrides can still be lower, e.g. Azure Grok 4.6 at 180k)
-    defaults = data.setdefault("defaults", {})
-    for key in ("contextWindow", "maxInputTokens", "limitTokens"):
-        if defaults.get(key) != DEFAULT_CONTEXT_WINDOW:
-            defaults[key] = DEFAULT_CONTEXT_WINDOW
-            changed = True
-    if defaults.get("reasoning") is not True:
-        defaults["reasoning"] = True
-        changed = True
 
-    providers = data.setdefault("providers", {})
+def _validate_models(content: bytes) -> None:
+    try:
+        data = json.loads(content)
+    except (ValueError, UnicodeError, RecursionError):
+        raise RuntimeError("Cannot seed workspace models.json: host file is not valid JSON") from None
 
-    # Desired explicit models (must be present)
-    # Azure custom models need an explicit baseUrl: prime-agent silently drops custom
-    # models whose baseUrl resolves falsy (built-in azure models have baseUrl "").
-    # The URL is built from AZURE_OPENAI_RESOURCE_NAME when set (AZURE_OPENAI_BASE_URL /
-    # AZURE_OPENAI_RESOURCE_NAME env vars still override it at request time).
-    azure_extra = {"baseUrl": _azure_baseurl()}
-    luna_extra = {"thinkingLevelMap": {"max": "max"}}
-    muse_spark_extra = {"thinkingLevelMap": {"max": "max"}}
-    desired_explicit = {
-        "azure-openai-responses": [
-            _model_entry("gpt-5.6-sol", "GPT-5.6 Sol", reasoning=True, extra=azure_extra),
-            _model_entry("gpt-5.6-luna", "GPT-5.6 Luna", reasoning=True, extra={**azure_extra, **luna_extra}),
-            _model_entry("grok-4.6", "Grok 4.6", reasoning=False, extra=azure_extra),
-            _model_entry("gpt-6-astra", "GPT-6 Astra", reasoning=True, extra=azure_extra),
-        ],
-        "google-vertex": [
-            _model_entry("gemini-3.8-flash", "Gemini 3.8 Flash", reasoning=True, extra={"input": ["text", "image"]}),
-        ],
-        "opencode-go": [
-            _model_entry("gpt-5.6-luna", "GPT-5.6 Luna", reasoning=True, extra=luna_extra),
-            _model_entry("muse-spark-1.3-contributor", "Muse Spark 1.3 Contributor", reasoning=True, extra=muse_spark_extra),
-        ],
-    }
-
-    allowed_ids_by_provider = {
-        "azure-openai-responses": {"gpt-5.6-sol", "gpt-5.6-luna", "grok-4.6", "gpt-6-astra"},
-        "google-vertex": {"gemini-3.8-flash"},
-        # OpenCode does not advertise Muse Spark or the configured GPT models.
-        "opencode": set(),
-        "opencode-go": {"gpt-5.6-luna", "muse-spark-1.3-contributor"},
-    }
-    allowed_ids = set().union(*allowed_ids_by_provider.values())
-
-    # Ensure each provider has correct wildcard and explicit models
-    for prov, explicit_models in desired_explicit.items():
-        prov_cfg = providers.setdefault(prov, {})
-        # Ensure modelOverrides
-        overrides = prov_cfg.setdefault("modelOverrides", {})
-        # Wildcard stays at the 256k default; Azure Grok 4.6 uses a per-model 180k override.
-        wildcard = _wildcard_override()
-        if overrides.get("*") != wildcard:
-            overrides["*"] = wildcard
-            changed = True
-        # Ensure per-model overrides for allowed ids use that model's window and max thinking.
-        for m in explicit_models:
-            mid = m["id"]
-            window = _context_window_for(mid)
-            current_override = overrides.get(mid) or {}
-            desired_override = {"contextWindow": window}
-            if mid in ("gpt-5.6-luna", "muse-spark-1.3-contributor"):
-                desired_override["thinkingLevelMap"] = {"max": "max"}
-            current_thinking_map = current_override.get("thinkingLevelMap") or {}
-            needs_max_thinking_map = mid in ("gpt-5.6-luna", "muse-spark-1.3-contributor") and current_thinking_map.get("max") != "max"
-            if current_override.get("contextWindow") != window or needs_max_thinking_map:
-                # Preserve any unrelated per-model settings while applying the max-thinking map.
-                if mid in ("gpt-5.6-luna", "muse-spark-1.3-contributor"):
-                    desired_override["thinkingLevelMap"] = {**current_thinking_map, "max": "max"}
-                overrides[mid] = {**current_override, **desired_override}
-                changed = True
-        # Ensure models list
-        existing_models = prov_cfg.get("models")
-        if not isinstance(existing_models, list):
-            existing_models = []
-        existing_models = [m for m in existing_models if isinstance(m, dict)]
-        existing_ids = {m.get("id") for m in existing_models}
-        for m in explicit_models:
-            if m["id"] not in existing_ids:
-                existing_models.append(m)
-                changed = True
-            else:
-                window = _context_window_for(m["id"])
-                label = _context_label(window)
-                for em in existing_models:
-                    if em.get("id") == m["id"]:
-                        for k in ("contextWindow", "maxInputTokens", "limitTokens"):
-                            if em.get(k) != window:
-                                em[k] = window
-                                changed = True
-                        if label not in em.get("name", ""):
-                            em["name"] = m["name"]
-                            changed = True
-                        if em.get("reasoning") is not m.get("reasoning", False):
-                            # Azure grok-4.6 must be non-reasoning (reasoning.effort rejected);
-                            # other models keep reasoning: True.
-                            em["reasoning"] = m["reasoning"]
-                            changed = True
-                        if m.get("thinkingLevelMap"):
-                            thinking_level_map = {**(em.get("thinkingLevelMap") or {}), **m["thinkingLevelMap"]}
-                            if em.get("thinkingLevelMap") != thinking_level_map:
-                                em["thinkingLevelMap"] = thinking_level_map
-                                changed = True
-                        if prov == "azure-openai-responses":
-                            # When AZURE_OPENAI_RESOURCE_NAME is set, the stored URL
-                            # must track it; otherwise just ensure a truthy baseUrl.
-                            env_resource = os.environ.get("AZURE_OPENAI_RESOURCE_NAME", "").strip()
-                            if env_resource:
-                                env_baseurl = f"https://{env_resource}.openai.azure.com/openai/v1"
-                                if em.get("baseUrl") != env_baseurl:
-                                    em["baseUrl"] = env_baseurl
-                                    changed = True
-                            elif not em.get("baseUrl"):
-                                em["baseUrl"] = m["baseUrl"]
-                                changed = True
-        # Filter models by provider so a valid ID cannot be routed to the wrong endpoint.
-        allowed_for_provider = allowed_ids_by_provider[prov]
-        filtered = [m for m in existing_models if m.get("id") in allowed_for_provider]
-        if len(filtered) != len(existing_models):
-            prov_cfg["models"] = filtered
-            changed = True
-        else:
-            prov_cfg["models"] = filtered
-        # Remove disallowed overrides (keep wildcard and provider-specific allowed IDs)
-        filtered_overrides = {k: v for k, v in overrides.items() if k == "*" or k in allowed_for_provider}
-        if len(filtered_overrides) != len(overrides):
-            prov_cfg["modelOverrides"] = filtered_overrides
-            changed = True
-        else:
-            prov_cfg["modelOverrides"] = filtered_overrides
-
-    # OpenCode has no configured models in this setup. Remove its stale custom
-    # provider block rather than leaving GPT or Muse entries behind.
-    if "opencode" in providers:
-        del providers["opencode"]
-        changed = True
-
-    # Remove other providers that have no allowed model overrides.
-    for prov in list(providers.keys()):
-        if prov not in desired_explicit:
-            allowed_for_provider = allowed_ids_by_provider.get(prov, allowed_ids)
-            has_allowed = any(
-                key in allowed_for_provider
-                for key in providers[prov].get("modelOverrides", {}).keys()
-            )
-            if not has_allowed:
-                del providers[prov]
-                changed = True
-
-    # Remove any provider that became empty
-    for prov in list(providers.keys()):
-        cfg = providers[prov]
-        if not cfg.get("modelOverrides") and not cfg.get("models"):
-            del providers[prov]
-            changed = True
-
-    if changed:
-        try:
-            path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
-            try:
-                path.chmod(0o644)
-            except OSError:
-                pass
-        except OSError:
-            return False
-    return changed
+    valid = isinstance(data, dict)
+    if valid:
+        valid = isinstance(data.get("defaults", {}), dict) and isinstance(data.get("providers", {}), dict)
+    if valid:
+        for provider in data.get("providers", {}).values():
+            if not isinstance(provider, dict):
+                valid = False
+                break
+            models = provider.get("models", [])
+            overrides = provider.get("modelOverrides", {})
+            if (
+                not isinstance(models, list)
+                or any(not isinstance(model, dict) or not isinstance(model.get("id"), str) for model in models)
+                or not isinstance(overrides, dict)
+                or any(not isinstance(override, dict) for override in overrides.values())
+            ):
+                valid = False
+                break
+    if not valid:
+        raise RuntimeError("Cannot seed workspace models.json: host file has invalid model configuration structure")
 
 
 def sync_host_prime_models(*, home: Path, prime_agent_data: Path) -> SyncResult:
+    """Copy valid host bytes only when no workspace models exist.
+
+    Existing files are never opened for writing or chmodded. Invalid inputs and
+    unsafe paths raise RuntimeError without including file contents. Publication
+    uses a same-directory hard link, so even a concurrent creator keeps its file.
+    """
     source = host_models_path(home)
-    if not source.is_file():
-        return SyncResult(copied=False, reason=f"host models.json not found: {source}")
-    # Ensure host file itself is patched to 256k/GPT-5.6 Luna/Grok before syncing
-    _ensure_correct_models(source)
-    target = prime_agent_data / "models.json"
-    if target.is_file():
-        # Ensure target is also patched if it exists (handles old 272k files)
-        patched = _ensure_correct_models(target)
-        if patched:
-            return SyncResult(copied=True, reason=f"patched {target} to 256k/Grok")
-        try:
-            if target.read_bytes() == source.read_bytes():
-                return SyncResult(copied=False, reason="already up to date")
-        except OSError:
-            pass
-    prime_agent_data.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(source, target)
     try:
-        target.chmod(0o644)
-    except OSError:
-        pass
-    # Ensure target after copy is correct (in case source was patched, target already is)
-    _ensure_correct_models(target)
-    return SyncResult(copied=True, reason=f"copied {source} -> {target}")
+        try:
+            with _directory(prime_agent_data) as directory_fd:
+                if _target_exists(directory_fd):
+                    return SyncResult(copied=False, reason="workspace models.json already exists")
+        except FileNotFoundError:
+            pass
+
+        try:
+            with _directory(source.parent) as source_directory_fd:
+                source_fd = os.open(
+                    source.name,
+                    os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
+                    dir_fd=source_directory_fd,
+                )
+                with os.fdopen(source_fd, "rb") as source_file:
+                    source_stat = os.fstat(source_file.fileno())
+                    if not stat.S_ISREG(source_stat.st_mode):
+                        raise RuntimeError("Cannot seed workspace models.json: host file is not a regular file")
+                    content = source_file.read()
+        except FileNotFoundError:
+            return SyncResult(copied=False, reason="host models.json not found")
+
+        _validate_models(content)
+        with _directory(prime_agent_data, create=True) as directory_fd:
+            if _target_exists(directory_fd):
+                return SyncResult(copied=False, reason="workspace models.json already exists")
+            temporary_name = f".models.json.{secrets.token_hex(16)}.tmp"
+            temporary_fd = os.open(
+                temporary_name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                0o600,
+                dir_fd=directory_fd,
+            )
+            try:
+                with os.fdopen(temporary_fd, "wb") as temporary_file:
+                    temporary_file.write(content)
+                    temporary_file.flush()
+                    # Preserve access permissions, not setuid/setgid/sticky bits.
+                    os.fchmod(temporary_file.fileno(), stat.S_IMODE(source_stat.st_mode) & 0o777)
+                    os.fsync(temporary_file.fileno())
+                try:
+                    os.link(
+                        temporary_name,
+                        "models.json",
+                        src_dir_fd=directory_fd,
+                        dst_dir_fd=directory_fd,
+                        follow_symlinks=False,
+                    )
+                except FileExistsError:
+                    _target_exists(directory_fd)
+                    return SyncResult(copied=False, reason="workspace models.json created concurrently")
+            finally:
+                os.unlink(temporary_name, dir_fd=directory_fd)
+        return SyncResult(copied=True, reason="seeded workspace models.json from host")
+    except OSError as error:
+        raise RuntimeError(f"Cannot seed workspace models.json: {error.strerror}") from None

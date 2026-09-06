@@ -3,9 +3,9 @@
 ## OVERVIEW
 
 Overlord is a minimal dev-container launcher + standalone VM setup. The repo has:
-- `setup.sh` : standalone non-interactive installer (shell/editor tools, Node 24, uv, AWS CLI, codegraph, prime-agent 256k, deepseek-harness (dsh), shared skills, Context7 MCP, websearch enablement)
-- `Dockerfile` : builds a container by running `setup.sh`
-- `scripts/overlord` : creates/reuses a per-workspace container and runs setup.sh inside
+- `setup.sh`: self-contained Debian 13 installer. Root-owned tool distributions; one target account for shell/editor/agent configuration.
+- `Dockerfile`: builds Debian 13 with `setup.sh --user overlord --profile container`.
+- `scripts/overlord`: Python >=3.12 launcher; verified workspace lifecycle and persisted-state migration.
 - `config/` : container bootstrap and zellij config
 - `skills/codegraph` + `.prime/agent/skills/codegraph` : CodeGraph skill for prime-agent (local code intelligence, many repos already have `.codegraph`)
 
@@ -17,7 +17,7 @@ CodeGraph is local-first code intelligence (6MB index, daemon auto-syncs). Prime
 overlord/
 ├── Dockerfile      # builds image via setup.sh
 ├── setup.sh        # standalone VM installer (also used in container)
-├── setup-devcontainer.sh # container wrapper: runs setup.sh, then adds Runpod Docs MCP
+├── setup-devcontainer.sh # thin adapter selecting shared container profile
 ├── config/         # entrypoint, zellij config, tool-versions
 ├── scripts/        # overlord launcher (python)
 ├── .overlord/      # per-workspace runtime state (git-ignored)
@@ -32,12 +32,15 @@ overlord shell          # shell
 overlord zellij         # open zellij
 overlord fresh          # remove container
 overlord purge          # remove container + image
-bash setup.sh           # direct VM setup (non-interactive, handles sudo NOPASSWD fix)
+bash setup.sh --user NAME # Debian 13; root or existing passwordless sudo
 ```
 
 ## NOTES
 
-- setup.sh is idempotent and DEBIAN_FRONTEND=noninteractive.
-- It fixes AWS VM sudo password prompt by installing /etc/sudoers.d/99-nopasswd-* with NOPASSWD:ALL and extending timestamp_timeout.
-- Container launch runs setup.sh inside the container on create/start.
-- .overlord/ holds persisted zsh_data and survives fresh/purge.
+- `setup.sh` is sourceable; `main` orchestrates system installation, then privilege-dropped user configuration. It does not alter native VM sudoers.
+- Rootless Podman Machine on macOS is a primary launcher target. Match its selected connection to the locally managed VM; remote transport alone is not grounds for rejection.
+- Container names include a canonical-path hash. Verify mounts before start/reuse/exec/removal; delete containers by immutable ID and serialize lifecycle mutations with the workspace lock. Purge removes workspace-owned image tags while retaining shared aliases.
+- An initialization marker is written only after workspace setup and runtime configuration succeed. Failed initialization is retried.
+- Agent containers bind only the launched workspace and its local `.overlord/` state by default. Legacy containers exposing other host paths are recreated before attachment. `OVERLORD_ENGINE_SOCKET` explicitly opts out of workspace-only isolation; preserve host mount/socket ownership and modes.
+- `.overlord/` persists agent sessions/configuration/databases and zsh state across fresh/purge. Host models seed only missing workspace files.
+- Behavioral tests: `/usr/bin/python3 -m unittest discover -s scripts/tests` (distro YAML/TOML packages required).

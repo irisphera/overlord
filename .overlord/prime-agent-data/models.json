@@ -32,7 +32,7 @@
       },
       "models": [
         {
-          "baseUrl": "https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1",
+          "baseUrl": "https://sergiu-inference-resource.openai.azure.com/openai/v1",
           "contextWindow": 256000,
           "id": "gpt-5.6-sol",
           "limitTokens": 256000,
@@ -42,7 +42,7 @@
           "reasoning": true
         },
         {
-          "baseUrl": "https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1",
+          "baseUrl": "https://sergiu-inference-resource.openai.azure.com/openai/v1",
           "contextWindow": 180000,
           "id": "grok-4.6",
           "limitTokens": 180000,
@@ -52,7 +52,7 @@
           "reasoning": false
         },
         {
-          "baseUrl": "https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1",
+          "baseUrl": "https://sergiu-inference-resource.openai.azure.com/openai/v1",
           "contextWindow": 256000,
           "id": "gpt-5.6-luna",
           "limitTokens": 256000,
@@ -65,7 +65,7 @@
           }
         },
         {
-          "baseUrl": "https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1",
+          "baseUrl": "https://sergiu-inference-resource.openai.azure.com/openai/v1",
           "contextWindow": 256000,
           "id": "gpt-6-astra",
           "limitTokens": 256000,

@@ -32,12 +32,13 @@ class FakeLifecycleEngine:
     name = "docker"
 
     def __init__(self, paths, *, omp_mounted=False, state="exited", stop_returncode=0,
-                 cp_returncode=0, rm_returncode=0, legacy=False, present=True, initialized=False):
+                 cp_returncode=0, cp_stderr="copy denied", rm_returncode=0, legacy=False, present=True, initialized=False):
         self.paths = paths
         self.omp_mounted = omp_mounted
         self.state = state
         self.stop_returncode = stop_returncode
         self.cp_returncode = cp_returncode
+        self.cp_stderr = cp_stderr
         self.rm_returncode = rm_returncode
         self.container_id = "verified-container-id"
         self.image_id = "sha256:verified-image-id"
@@ -103,7 +104,7 @@ class FakeLifecycleEngine:
             return result(self.stop_returncode, stderr="stop failed" if self.stop_returncode else "")
         if argv[0] == "cp":
             if self.cp_returncode:
-                return result(self.cp_returncode, stderr="OMP source is missing")
+                return result(self.cp_returncode, stderr=self.cp_stderr)
             (Path(argv[-1]) / "rescued.txt").write_text("from-container", encoding="utf-8")
             return result()
         if argv[0] == "rm":
@@ -529,6 +530,75 @@ class ContainerLifecycleTests(unittest.TestCase):
             self.assertLess(cp_index, next(index for index, call in enumerate(engine.calls) if call[0] == "rm"))
             self.assertLess(next(index for index, call in enumerate(engine.calls) if call[0] == "rm"), next(index for index, call in enumerate(engine.calls) if call[0] == "rmi"))
 
+    def test_absent_omp_source_allows_removal_and_recreation_without_replacing_host_state(self):
+        source = "/home/overlord/.omp/agent/."
+        container_id = "verified-container-id"
+        diagnostics = (
+            ("podman", 125, f'Error: "{source}" could not be found on container {container_id}: no such file or directory'),
+            ("docker", 1, f"Error response from daemon: Could not find the file {source} in container {container_id}"),
+        )
+        for engine_name, status, diagnostic in diagnostics:
+            for command in (fresh, purge, ensure_running):
+                with self.subTest(engine=engine_name, command=command.__name__), tempfile.TemporaryDirectory() as tmp:
+                    paths = build_workspace_paths(Path(tmp), script_path=ROOT / "scripts/overlord")
+                    ensure_state_dir(paths.state)
+                    marker = paths.state.omp_agent_data / "session.txt"
+                    marker.write_text("keep-existing-session")
+                    engine = FakeLifecycleEngine(paths, legacy=True, cp_returncode=status, cp_stderr=diagnostic)
+                    engine.name = engine_name
+
+                    with patch("overlord_py.container_run_args.os.getuid", return_value=1000), patch("overlord_py.container_run_args.os.getgid", return_value=1000):
+                        if command is ensure_running:
+                            command(engine, paths, (), env={"HOME": tmp})
+                        else:
+                            command(engine, paths, env={"HOME": tmp})
+
+                    self.assertEqual(marker.read_text(), "keep-existing-session")
+                    self.assertEqual(tuple(paths.state.root.glob(".omp-agent-data-*")), ())
+                    if command is ensure_running:
+                        self.assertNotEqual(engine.container_id, container_id)
+                        self.assertTrue(engine.initialized)
+                        self.assertTrue(engine.omp_mounted)
+                    else:
+                        self.assertFalse(engine.present)
+                        if command is purge:
+                            self.assertFalse(engine.image_present)
+
+    def test_ambiguous_missing_copy_errors_still_block_deletion(self):
+        source = "/home/overlord/.omp/agent/."
+        for diagnostic in (
+            "no such file or directory",
+            f'Error: "{source}/sessions" could not be found on container verified-container-id: no such file or directory',
+            f'Error: "{source}" could not be found on container other-container: no such file or directory',
+            f'Error: "{source}" could not be found on container verified-container-id: permission denied',
+            f'Error: "{source}" could not be found on container verified-container-id: no such file or directory\ncopy interrupted',
+        ):
+            with self.subTest(diagnostic=diagnostic), tempfile.TemporaryDirectory() as tmp:
+                paths = build_workspace_paths(Path(tmp), script_path=ROOT / "scripts/overlord")
+                engine = FakeLifecycleEngine(paths, cp_returncode=125, cp_stderr=diagnostic)
+                engine.name = "podman"
+                with self.assertRaises(LifecycleError):
+                    purge(engine, paths, env={})
+                self.assertTrue(engine.present)
+                self.assertTrue(engine.image_present)
+
+    def test_missing_source_error_after_partial_copy_blocks_deletion(self):
+        class PartialCopyEngine(FakeLifecycleEngine):
+            def run(self, args, **kwargs):
+                result = super().run(args, **kwargs)
+                if args[0] == "cp":
+                    (Path(args[-1]) / "partial-session").write_text("incomplete")
+                return result
+
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = build_workspace_paths(Path(tmp), script_path=ROOT / "scripts/overlord")
+            engine = PartialCopyEngine(paths, cp_returncode=125, cp_stderr='Error: "/home/overlord/.omp/agent/." could not be found on container verified-container-id: no such file or directory')
+            engine.name = "podman"
+            with self.assertRaises(LifecycleError):
+                purge(engine, paths, env={})
+            self.assertTrue(engine.present)
+            self.assertTrue(engine.image_present)
+
     def test_copy_failure_preserves_container_and_blocks_purge_image_removal(self):
         with tempfile.TemporaryDirectory() as tmp:
             paths = build_workspace_paths(Path(tmp), script_path=ROOT / "scripts" / "overlord")
@@ -539,7 +609,7 @@ class ContainerLifecycleTests(unittest.TestCase):
             marker.write_text("keep", encoding="utf-8")
             engine = FakeLifecycleEngine(paths, cp_returncode=1)
 
-            with self.assertRaisesRegex(LifecycleError, "OMP source is missing"):
+            with self.assertRaises(LifecycleError):
                 purge(engine, paths, env={})
 
             self.assertEqual(marker.read_text(), "keep")

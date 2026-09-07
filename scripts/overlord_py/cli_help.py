@@ -29,7 +29,8 @@ EXAMPLES:
     Use 'purge' to also remove the image (full rebuild on next launch).
     .overlord/ inside the workspace survives fresh/purge.
     OMP sessions/config live in .overlord/omp-agent-data, mounted at ~/.omp/agent.
-    Old containers' OMP state is rescued before removal; failed rescue blocks deletion.
+    Old containers' OMP state is rescued before removal; confirmed absence is safe.
+    Other rescue failures block deletion; existing host state is retained.
     Docker/Podman must be local; remote bind-mount endpoints are unsupported.
     Host engine credentials/context are preserved for every engine operation.
     No engine socket is shared unless OVERLORD_ENGINE_SOCKET names a local socket.

@@ -340,6 +340,23 @@ def _rescue_omp_agent_data(engine: ContainerEngine, paths: WorkspacePaths, *, en
             copied = engine.run(["cp", source, str(temp_path)], cwd=paths.workspace, env=env)
         except OSError as error:
             raise LifecycleError(f"Error: failed to copy OMP agent state from {source}: {error}") from error
+        if copied.returncode:
+            # Old containers may never have used OMP. Only an exact missing-source
+            # diagnostic is safe to skip; missing children and partial copies are not.
+            missing_source_error = ""
+            if engine.name == "podman":
+                missing_source_error = (
+                    f'Error: "{OMP_AGENT_DATA_SOURCE}" could not be found on container '
+                    f"{paths.identity.container_name}: no such file or directory"
+                )
+            elif engine.name == "docker":
+                missing_source_error = (
+                    f"Error response from daemon: Could not find the file {OMP_AGENT_DATA_SOURCE} "
+                    f"in container {paths.identity.container_name}"
+                )
+            if (missing_source_error and copied.stderr.strip() == missing_source_error
+                    and not copied.stdout.strip() and not any(temp_path.iterdir())):
+                return
         require_success(copied, f"copy OMP agent state from {source}")
         _promote_omp_agent_data(temp_path, destination)
     finally:

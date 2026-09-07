@@ -377,6 +377,8 @@ install_base_packages() {
     util-linux
     passwd
     python3-tomlkit
+    # Pulls the distro's ICU runtime required by Marksman's bundled .NET.
+    libicu-dev
   )
   # Check which are missing
   local missing=()

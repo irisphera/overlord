@@ -97,7 +97,7 @@ Host Prime models seed a missing workspace models file without changing the host
 ## What setup.sh does (idempotent)
 
 - Validates supported Debian/Ubuntu releases, target identity, and existing privileges
-- `apt-get update` + installs base packages
+- `apt-get update` + installs base packages, including `libicu-dev` to provide the distro-matched ICU runtime required by Marksman
 - Installs `zellij` v0.43.1 (arch-aware tarball)
 - Installs checksum-verified Neovim from a pinned upstream release for LazyVim
 - Installs a root-owned Node.js 24 distribution, `uv`, and AWS CLI v2
@@ -123,7 +123,7 @@ Rerunning `setup.sh` is safe.
 - Workspace setup prefers `setup-devcontainer.sh`, then `setup.sh`; it runs as container root with `SUDO_USER=overlord`. The shared installer drops to the selected account for user configuration. Custom project setup scripts are trusted code and receive no forced CLI flags.
 - Use `overlord fresh` for a fresh container, or `overlord purge` to rebuild tools from the updated installer; simply restarting does not rerun completed workspace initialization.
 - Prime and OMP sessions, configuration, skills, and databases live in the workspace's `.overlord` agent directories and survive `fresh`/`purge`. Missing authored configuration and skills seed from image defaults without overwriting existing state or copying image sessions/auth databases.
-- Verified legacy basename containers can be adopted. Containers with extra mounts (including old host SSH/config or engine sockets), a changed socket opt-in, or a missing entrypoint contract/OMP bind are stopped and recreated before attachment. Missing unmounted OMP state is rescued before deletion, with previous destination state retained under `.overlord/.omp-agent-data-backup-*`; failed stop/copy refuses removal, and failed promotion attempts rollback. Missing required Prime/zsh/workspace mounts still refuse deletion. Use `overlord fresh`/`purge`, not direct engine removal, for migration.
+- Verified legacy basename containers can be adopted. Containers with extra mounts (including old host SSH/config or engine sockets), a changed socket opt-in, or a missing entrypoint contract/OMP bind are stopped and recreated before attachment. Unmounted OMP state is rescued before deletion, with previous destination state retained under `.overlord/.omp-agent-data-backup-*`. If Docker/Podman explicitly reports the source directory absent and nothing was copied, removal proceeds without replacing existing host OMP state. Other stop/copy failures refuse removal, and failed promotion attempts rollback. Missing required Prime/zsh/workspace mounts still refuse deletion. Use `overlord fresh`/`purge`, not direct engine removal, for migration.
 
 ### Optional engine socket
 

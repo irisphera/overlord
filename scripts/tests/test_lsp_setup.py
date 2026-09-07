@@ -113,6 +113,52 @@ install_npm_language_server pyright 1.1.413 pyright pyright-langserver
         self.assertEqual(json.loads(metadata.read_text())["version"], "0.0.0")
         self.assertEqual((self.home / "npm-calls").read_text(), "install\n")
 
+    @unittest.skipUnless(os.geteuid() == 0, "archive ownership regression requires root (use rootless Podman)")
+    def test_jdtls_install_ignores_upstream_archive_owners(self):
+        # Eclipse archives use IDs outside rootless Podman's UID/GID map.
+        # Exercise real tar and the real installer, replacing only downloads,
+        # upstream checksums, and system installation/publication paths.
+        import io
+        import tarfile
+
+        fixtures = self.home / "fixtures"
+        fixtures.mkdir()
+        for archive, name, contents, mode in (
+            ("jdtls.tar.gz", "config_linux/config.ini", b"shared-template\n", 0o644),
+            ("java.tar.gz", "jdk/bin/java", b"#!/bin/sh\nexit 0\n", 0o755),
+        ):
+            with tarfile.open(fixtures / archive, "w:gz") as tar:
+                directory = tarfile.TarInfo(str(Path(name).parent))
+                directory.type = tarfile.DIRTYPE
+                directory.mode = 0o755
+                directory.uid = directory.gid = 1001380000
+                tar.addfile(directory)
+                member = tarfile.TarInfo(name)
+                member.size = len(contents)
+                member.mode = mode
+                member.uid = member.gid = 1001380000
+                tar.addfile(member, io.BytesIO(contents))
+        result = self.shell(r'''
+root="$1"
+definition="$(declare -f install_jdtls)"
+eval "${definition//\/opt\/overlord/$root}"
+download() { cp "$root/fixtures/${2##*/}" "$2"; }
+sha256sum() { cat >/dev/null; }
+publish_binary() { ln -sfn "$1" "$root/published-$2"; }
+JDTLS_VERSION=1.60.0
+JDTLS_JAVA_VERSION=21.0.10
+install_jdtls
+install_jdtls
+''', self.home)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        distribution = self.home / "jdtls-1.60.0-java-21.0.10"
+        for path in distribution.rglob("*"):
+            self.assertEqual((path.stat().st_uid, path.stat().st_gid), (0, os.getegid()), str(path))
+        self.assertEqual((distribution / "server/config_linux/config.ini").read_text(), "shared-template\n")
+        self.assertTrue(os.access(distribution / "java/bin/java", os.X_OK))
+        self.assertTrue(os.access(self.home / "published-jdtls", os.X_OK))
+        self.assertEqual(list(self.home.glob(".jdtls.*")), [])
+
     def java_fixture(self):
         result = self.shell("emit_jdtls_launcher")
         self.assertEqual(result.returncode, 0, result.stderr)

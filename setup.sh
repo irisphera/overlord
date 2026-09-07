@@ -285,8 +285,9 @@ install_jdtls() (
     download "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.10%2B7/OpenJDK21U-jdk_${arch}_linux_hotspot_21.0.10_7.tar.gz" "$stage/java.tar.gz"
     printf '%s  %s\n' "$java_sha" "$stage/java.tar.gz" | sha256sum --check --status
     mkdir -p "$stage/runtime/server" "$stage/runtime/java"
-    tar xzf "$stage/jdtls.tar.gz" -C "$stage/runtime/server"
-    tar xzf "$stage/java.tar.gz" -C "$stage/runtime/java" --strip-components=1
+    # Keep root ownership; upstream IDs may be unmapped in rootless builds.
+    tar --no-same-owner -xzf "$stage/jdtls.tar.gz" -C "$stage/runtime/server"
+    tar --no-same-owner -xzf "$stage/java.tar.gz" -C "$stage/runtime/java" --strip-components=1
     emit_jdtls_launcher > "$stage/runtime/jdtls"
     chmod -R a+rX "$stage/runtime"
     chmod 0755 "$stage/runtime/jdtls"
@@ -420,7 +421,7 @@ install_zellij() (
     stage="$(mktemp -d /opt/overlord/.zellij.XXXXXXXX)"
     trap 'rm -rf "$stage"' EXIT
     download "https://github.com/zellij-org/zellij/releases/download/v$ZELLIJ_VERSION/zellij-$arch-unknown-linux-musl.tar.gz" "$stage/archive.tar.gz"
-    tar xzf "$stage/archive.tar.gz" -C "$stage"
+    tar --no-same-owner -xzf "$stage/archive.tar.gz" -C "$stage"
     rm "$stage/archive.tar.gz"
     verify_version "$stage/zellij" "$ZELLIJ_VERSION"
     chmod -R a+rX "$stage"
@@ -449,7 +450,7 @@ install_neovim() (
     download "https://github.com/neovim/neovim/releases/download/v$NVIM_VERSION/$archive" "$stage/$archive"
     printf '%s  %s\n' "$checksum" "$stage/$archive" | sha256sum --check --status
     mkdir "$stage/runtime"
-    tar xzf "$stage/$archive" -C "$stage/runtime" --strip-components=1
+    tar --no-same-owner -xzf "$stage/$archive" -C "$stage/runtime" --strip-components=1
     verify_version "$stage/runtime/bin/nvim" "$NVIM_VERSION"
     chmod -R a+rX "$stage/runtime"
     [ ! -e "$destination" ] || { die "incomplete installation exists: $destination"; exit 1; }
@@ -476,7 +477,7 @@ install_node() (
     download "https://nodejs.org/dist/v$NODE_VERSION/SHASUMS256.txt" "$stage/SHASUMS256.txt"
     (cd "$stage"; grep "  $archive\$" SHASUMS256.txt | sha256sum --check --status)
     mkdir "$stage/runtime"
-    tar xJf "$stage/$archive" -C "$stage/runtime" --strip-components=1
+    tar --no-same-owner -xJf "$stage/$archive" -C "$stage/runtime" --strip-components=1
     verify_version "$stage/runtime/bin/node" "$NODE_VERSION"
     chmod -R a+rX "$stage/runtime"
     [ ! -e "$destination" ] || { die "incomplete installation exists: $destination"; exit 1; }

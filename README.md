@@ -63,6 +63,16 @@ Version precedence: explicit environment variables, then `--versions FILE` or ad
 
 Use `--profile native` (default) for VMs. `--profile container` additionally enables Runpod Docs MCP for Prime. The thin `setup-devcontainer.sh` adapter selects the container profile and `overlord` account; it propagates failures from the shared installer.
 
+### Language servers
+
+Setup installs TypeScript/JavaScript, Python (Pyright), PHP (Intelephense), Java (JDTLS), HTML/CSS/JSON, Bash, YAML, and Markdown (Marksman) servers. npm server versions are pinned in `config/tool-versions.env`; JDTLS, its dedicated Java runtime, and Marksman use checksum-pinned upstream releases. TypeScript 6 stays beside its language server because TypeScript 7 no longer includes `tsserver.js`. The dedicated Java runtime does not change the application's Java installation. JDTLS uses separate writable caches per user/project and picks up Octopus's `/opt/lombok.jar` when present.
+
+OMP discovers servers from the **launch directory**, not a recursively scanned home directory. Start it in the repository, for example `omp --cwd ~/octopus` or `omp --cwd ~/wordpress`. A launch from an unrelated temporary directory can correctly show no servers. Shared defaults include Git-root detection for Python and TypeScript in mixed-language repositories and submodules; processes still start lazily when used.
+
+Setup seeds `~/.omp/agent/lsp.json` only when no JSON/YAML LSP config variant already exists. Container image defaults seed the persisted agent directory under the same rule. Custom servers, disabled servers, and existing config bytes remain authoritative. Project-specific overrides belong in `.omp/lsp.json`; the Shopify repo registers its existing Liquid CLI there, and the web platform registers its Tailwind 4 CSS entrypoint. Existing sessions can refresh discovery using the LSP tool's workspace `reload` action (`file: "*"`), or restart OMP in the project root.
+
+Repository `setup-devcontainer.sh` files install their additional tooling and repair incompatible or inaccessible server installations. They reuse valid `/opt/overlord` distributions and use `/usr/local` for fallback npm installs instead of a user's nvm prefix.
+
 ### Oh My Pi and Codex model policy
 
 | Agent / work | Model | Reasoning effort |
@@ -92,6 +102,7 @@ Host Prime models seed a missing workspace models file without changing the host
 - Installs checksum-verified Neovim from a pinned upstream release for LazyVim
 - Installs a root-owned Node.js 24 distribution, `uv`, and AWS CLI v2
 - Installs `prime-agent`, Oh My Pi (`omp`), and Codex CLI (`codex`) with Azure model support
+- Installs and configures the language servers described above, preserving existing OMP LSP settings
 - Installs shared Pi/Prime/OMP skills from `mattpocock/skills`, `aws/agent-toolkit-for-aws`, and `cursor/plugins`, plus the AWS setup skill and Context7 routing skill, for the selected account. Restart OMP after installing to refresh discovery. Context7 MCP remains Prime-specific.
 - Enables bundled web search (Serper login remains a one-time user step)
 - Installs `oh-my-zsh` unattended

@@ -11,7 +11,6 @@
 | File | Role | Runtime target / note |
 |------|------|------------------------|
 | `entrypoint.sh` | Container bootstrap entrypoint | Root startup, permission repair, privilege drop |
-| `jdtls.sh` | Java LSP wrapper reference | Not installed by shared image |
 | `zellij-config.kdl` | Active zellij config source | Copied to `/home/overlord/.config/zellij/config.kdl` |
 | `tool-versions.env` | Shared version pins | Sourced by Docker; parses ZELLIJ_VERSION |
 

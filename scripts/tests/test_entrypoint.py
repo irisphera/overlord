@@ -61,6 +61,7 @@ class EntrypointTests(unittest.TestCase):
         self.defaults.mkdir()
         (self.defaults / "config.yml").write_text("default config\n")
         (self.defaults / "models.yml").write_text("default models\n")
+        (self.defaults / "lsp.json").write_text('{"servers":{"pyright":{"command":"pyright-langserver"}}}\n')
         (self.defaults / "skills" / "sample").mkdir(parents=True)
         (self.defaults / "skills" / "sample" / "SKILL.md").write_text("authored skill\n")
         (self.defaults / "auth.json").write_text("must never seed")
@@ -248,6 +249,47 @@ class EntrypointTests(unittest.TestCase):
         prime = self.home / ".prime/agent"
         self.assertTrue(json.loads((prime / "settings.json").read_text())["bundledSkills"]["websearch"])
         self.assertFalse((prime / "auth.json").exists())
+
+    def test_fresh_lsp_defaults_survive_recreation(self):
+        result = self.start()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        config = self.agent / "lsp.json"
+        self.assertEqual(config.read_bytes(), (self.defaults / "lsp.json").read_bytes())
+        self.assertEqual(stat.S_IMODE(config.stat().st_mode), 0o600)
+        original = config.read_bytes(), self.snapshot(config)
+        (self.defaults / "lsp.json").write_text('{"servers":{}}\n')
+        result = self.start()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((config.read_bytes(), self.snapshot(config)), original)
+
+    def test_custom_lsp_variants_are_not_shadowed_across_restarts(self):
+        self.agent.mkdir(parents=True)
+        variants = ("lsp.json", ".lsp.json", "lsp.yaml", ".lsp.yaml", "lsp.yml", ".lsp.yml")
+        for name in variants:
+            with self.subTest(name=name):
+                config = self.agent / name
+                config.write_bytes(b'{"servers":{"pyright":{"disabled":true}}}\n' if name.endswith("json")
+                                   else b"# personal LSP settings\nservers:\n  pyright:\n    disabled: true\n")
+                config.chmod(0o640)
+                original = config.read_bytes(), self.snapshot(config)
+                for _ in range(2):
+                    result = self.start()
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual((config.read_bytes(), self.snapshot(config)), original)
+                    self.assertEqual({path.name for path in self.agent.iterdir()} & set(variants), {name})
+                config.unlink()
+
+    def test_symlink_lsp_variant_is_preserved_without_seeding(self):
+        self.agent.mkdir(parents=True)
+        outside = self.root / "outside-lsp.yml"
+        config = self.agent / ".lsp.yml"
+        config.symlink_to(outside)
+        result = self.start()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(config.is_symlink())
+        self.assertEqual(config.readlink(), outside)
+        self.assertFalse(outside.exists())
+        self.assertFalse((self.agent / "lsp.json").exists())
 
     def test_symlink_destination_fails_before_any_seed_write(self):
         outside = self.root / "outside"

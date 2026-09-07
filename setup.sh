@@ -51,7 +51,11 @@ load_tool_versions() {
   # Embedded defaults keep curl | bash standalone. A local manifest overrides
   # defaults; explicit environment versions override the manifest.
   local -A versions=( [ZELLIJ_VERSION]=0.43.1 [NODE_VERSION]=24.20.0 [NVIM_VERSION]=0.12.5
-    [PRIME_AGENT_VERSION]=0.9.2 [CODEGRAPH_VERSION]=1.6.0 [CODEX_VERSION]=0.153.4 )
+    [PRIME_AGENT_VERSION]=0.9.2 [CODEGRAPH_VERSION]=1.6.0 [CODEX_VERSION]=0.153.4
+    [TYPESCRIPT_LANGUAGE_SERVER_VERSION]=6.0.0 [TYPESCRIPT_VERSION]=6.0.3
+    [PYRIGHT_VERSION]=1.1.413 [INTELEPHENSE_VERSION]=1.18.5
+    [VSCODE_LANGSERVERS_VERSION]=4.10.0 [BASH_LANGUAGE_SERVER_VERSION]=5.6.0
+    [YAML_LANGUAGE_SERVER_VERSION]=1.24.0 [JDTLS_VERSION]=1.60.0 [JDTLS_JAVA_VERSION]=21.0.10 )
   local -A seen=()
   local line name value
   if [ -n "${VERSION_FILE:-}" ]; then
@@ -73,6 +77,7 @@ load_tool_versions() {
     export "$name"
   done
   [[ "$NODE_VERSION" == 24.* ]] || { die 'NODE_VERSION must select Node 24'; return 1; }
+  [[ "$TYPESCRIPT_VERSION" == 6.* ]] || { die 'TYPESCRIPT_VERSION must select TypeScript 6 (TLS requires tsserver.js)'; return 1; }
 }
 
 run_sudo() {
@@ -143,6 +148,204 @@ install_npm_tool() (
   verify_version "$destination/bin/$name" "$version"
   publish_binary "$destination/bin/$name" "$name"
 )
+
+# Stdio servers do not universally implement --version. Check installed metadata
+# and executables without starting servers or touching user configuration.
+verify_npm_language_server() {
+  /usr/bin/python3 - "$@" <<'PY_LSP_PACKAGE'
+import json
+import os
+import sys
+from pathlib import Path
+
+prefix, package, version, *commands = sys.argv[1:]
+root = Path(prefix) / "lib/node_modules" / package
+try:
+    metadata = json.loads((root / "package.json").read_text())
+    if metadata["name"] != package or metadata["version"] != version:
+        raise ValueError("package version mismatch")
+    for command in commands:
+        executable = Path(prefix) / "bin" / command
+        if not executable.resolve().is_relative_to(root.resolve()) or not os.access(executable, os.X_OK):
+            raise ValueError("missing package executable")
+except (OSError, ValueError, KeyError):
+    sys.exit(f"invalid language server installation: {package}@{version}")
+PY_LSP_PACKAGE
+}
+
+install_npm_language_server() (
+  set -euo pipefail
+  local package="$1" version="$2"; shift 2
+  local destination="/opt/overlord/$package-$version" stage command
+  local packages=("$package@$version")
+  if [ "$package" = typescript-language-server ]; then
+    destination+="-typescript-$TYPESCRIPT_VERSION"
+    packages+=("typescript@$TYPESCRIPT_VERSION")
+  fi
+  if [ ! -d "$destination" ]; then
+    [ ! -e "$destination" ] && [ ! -L "$destination" ] || { die "incomplete installation exists: $destination"; exit 1; }
+    stage="$(mktemp -d /opt/overlord/.lsp-npm.XXXXXXXX)"
+    trap 'rm -rf "$stage"' EXIT
+    npm install --global --prefix "$stage" --engine-strict --no-audit --no-fund "${packages[@]}"
+    verify_npm_language_server "$stage" "$package" "$version" "$@"
+    if [ "$package" = typescript-language-server ]; then
+      verify_npm_language_server "$stage" typescript "$TYPESCRIPT_VERSION" tsserver tsc
+      [ -f "$stage/lib/node_modules/typescript/lib/tsserver.js" ]
+    fi
+    chmod -R a+rX "$stage"
+    mv "$stage" "$destination"
+  fi
+  verify_npm_language_server "$destination" "$package" "$version" "$@"
+  if [ "$package" = typescript-language-server ]; then
+    verify_npm_language_server "$destination" typescript "$TYPESCRIPT_VERSION" tsserver tsc
+    [ -f "$destination/lib/node_modules/typescript/lib/tsserver.js" ]
+    # Do not publish tsc: OMP's separate typescript-native server expects TS7.
+  fi
+  for command in "$@"; do publish_binary "$destination/bin/$command" "$command"; done
+)
+
+emit_jdtls_launcher() {
+  cat <<'JDTLS_LAUNCHER'
+#!/usr/bin/env bash
+set -euo pipefail
+distribution="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+JDTLS_HOME="${JDTLS_HOME:-$distribution/server}"
+JAVA_HOME="${JAVA_HOME:-$distribution/java}"
+project="$(pwd -P)"
+key="$(printf '%s\0%s' "$project" "$(readlink -f "$JDTLS_HOME")" | sha256sum)"
+cache="${XDG_CACHE_HOME:-$HOME/.cache}/jdtls/${key%% *}"
+data="${JDTLS_DATA_DIR:-$cache/workspace}"
+configuration="${JDTLS_CONFIG_DIR:-$cache/config}"
+# Command-line overrides take precedence, just like the upstream launcher.
+args=()
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -data|-configuration)
+      [ "$#" -ge 2 ] || { printf 'jdtls: %s requires a directory\n' "$1" >&2; exit 2; }
+      if [ "$1" = -data ]; then data="$2"; else configuration="$2"; fi
+      shift 2 ;;
+    *) args+=("$1"); shift ;;
+  esac
+done
+umask 077
+mkdir -p "$data" "$configuration"
+case "$(uname -m)" in
+  x86_64|amd64) platform=config_linux ;;
+  aarch64|arm64) platform=config_linux_arm ;;
+  *) printf 'jdtls: unsupported architecture\n' >&2; exit 1 ;;
+esac
+# Serialize first-use config copying, not the server lifetime. OSGi must not
+# write into the root-owned distribution or share config between projects.
+(
+  flock 9
+  if [ ! -f "$configuration/config.ini" ]; then
+    cp -R "$JDTLS_HOME/$platform/." "$configuration/"
+    chmod -R u+rwX "$configuration"
+  fi
+) 9>"$configuration/.overlord-init.lock"
+shopt -s nullglob
+launchers=("$JDTLS_HOME"/plugins/org.eclipse.equinox.launcher_*.jar)
+[ "${#launchers[@]}" -eq 1 ] || { printf 'jdtls: expected one Eclipse launcher\n' >&2; exit 1; }
+java_args=()
+if [ -n "${LOMBOK_JAR:-}" ]; then
+  java_args+=("-javaagent:$LOMBOK_JAR")
+elif [ -f /opt/lombok.jar ]; then
+  # Octopus provisions Lombok separately from the shared language server.
+  java_args+=("-javaagent:/opt/lombok.jar")
+fi
+exec "$JAVA_HOME/bin/java" "${java_args[@]}" \
+  -Declipse.application=org.eclipse.jdt.ls.core.id1 \
+  -Dosgi.bundles.defaultStartLevel=4 \
+  -Declipse.product=org.eclipse.jdt.ls.core.product \
+  -Dlog.level=ALL -Xmx1G --add-modules=ALL-SYSTEM \
+  --add-opens java.base/java.util=ALL-UNNAMED \
+  --add-opens java.base/java.lang=ALL-UNNAMED \
+  -jar "${launchers[0]}" -configuration "$configuration" -data "$data" "${args[@]}"
+JDTLS_LAUNCHER
+}
+
+install_jdtls() (
+  set -euo pipefail
+  local destination="/opt/overlord/jdtls-$JDTLS_VERSION-java-$JDTLS_JAVA_VERSION" stage arch java_sha
+  # Exact milestone/build pairs and upstream SHA256s; no moving latest URLs.
+  [ "$JDTLS_VERSION" = 1.60.0 ] && [ "$JDTLS_JAVA_VERSION" = 21.0.10 ] || {
+    die 'unsupported JDTLS/Java pin; add the upstream archive and checksum pair first'; exit 1;
+  }
+  case "$(uname -m)" in
+    x86_64|amd64) arch=x64; java_sha=ea3b9bd464d6dd253e9a7accf59f7ccd2a36e4aa69640b7251e3370caef896a4 ;;
+    aarch64|arm64) arch=aarch64; java_sha=357fee29fb0d5c079f6730db98b28942df13a6eed426f6c61cd4ad703ab27b9a ;;
+    *) die 'unsupported CPU architecture'; exit 1 ;;
+  esac
+  if [ ! -d "$destination" ]; then
+    [ ! -e "$destination" ] && [ ! -L "$destination" ] || { die "incomplete installation exists: $destination"; exit 1; }
+    stage="$(mktemp -d /opt/overlord/.jdtls.XXXXXXXX)"
+    trap 'rm -rf "$stage"' EXIT
+    download 'https://download.eclipse.org/jdtls/milestones/1.60.0/jdt-language-server-1.60.0-202606262232.tar.gz' "$stage/jdtls.tar.gz"
+    printf '%s  %s\n' e94c303d8198f977930803582738771fd18c52c5492878410bf222b1aa81ef1d "$stage/jdtls.tar.gz" | sha256sum --check --status
+    download "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.10%2B7/OpenJDK21U-jdk_${arch}_linux_hotspot_21.0.10_7.tar.gz" "$stage/java.tar.gz"
+    printf '%s  %s\n' "$java_sha" "$stage/java.tar.gz" | sha256sum --check --status
+    mkdir -p "$stage/runtime/server" "$stage/runtime/java"
+    tar xzf "$stage/jdtls.tar.gz" -C "$stage/runtime/server"
+    tar xzf "$stage/java.tar.gz" -C "$stage/runtime/java" --strip-components=1
+    emit_jdtls_launcher > "$stage/runtime/jdtls"
+    chmod -R a+rX "$stage/runtime"
+    chmod 0755 "$stage/runtime/jdtls"
+    "$stage/runtime/java/bin/java" -version
+    [ -f "$stage/runtime/server/config_linux/config.ini" ]
+    mv "$stage/runtime" "$destination"
+  fi
+  [ -x "$destination/jdtls" ] && [ -x "$destination/java/bin/java" ] && [ -f "$destination/server/config_linux/config.ini" ] || {
+    die "incomplete installation exists: $destination"; exit 1;
+  }
+  # Refresh installer-owned launcher logic without re-downloading the runtime.
+  local launcher
+  launcher="$(mktemp "$destination/.launcher.XXXXXXXX")"
+  emit_jdtls_launcher > "$launcher"
+  chmod 0755 "$launcher"
+  if cmp -s "$launcher" "$destination/jdtls"; then
+    rm "$launcher"
+  else
+    mv -Tf "$launcher" "$destination/jdtls"
+  fi
+  publish_binary "$destination/jdtls" jdtls
+)
+
+install_marksman() (
+  set -euo pipefail
+  local release=2026-02-08 arch checksum stage
+  local destination="/opt/overlord/marksman-$release"
+  case "$(uname -m)" in
+    x86_64|amd64) arch=x64; checksum=be5098e8213219269c47fc0d916a66fa31ce0602ec967475c722260aabf26087 ;;
+    aarch64|arm64) arch=arm64; checksum=db8e124527f7f8048e3e6c91821b9c52ef173d92c01e47d221bf1337afd962fb ;;
+    *) die 'unsupported CPU architecture'; exit 1 ;;
+  esac
+  if [ ! -d "$destination" ]; then
+    [ ! -e "$destination" ] && [ ! -L "$destination" ] || { die "incomplete installation exists: $destination"; exit 1; }
+    stage="$(mktemp -d /opt/overlord/.marksman.XXXXXXXX)"
+    trap 'rm -rf "$stage"' EXIT
+    download "https://github.com/artempyanykh/marksman/releases/download/$release/marksman-linux-$arch" "$stage/marksman"
+    printf '%s  %s\n' "$checksum" "$stage/marksman" | sha256sum --check --status
+    chmod 0755 "$stage" "$stage/marksman"
+    "$stage/marksman" --version
+    mv "$stage" "$destination"
+  fi
+  printf '%s  %s\n' "$checksum" "$destination/marksman" | sha256sum --check --status
+  publish_binary "$destination/marksman" marksman
+)
+
+install_language_servers() {
+  [ "$(id -u)" -eq 0 ] || { die 'language server installation requires root'; return 1; }
+  mkdir -p /opt/overlord /usr/local/bin
+  install_npm_language_server typescript-language-server "$TYPESCRIPT_LANGUAGE_SERVER_VERSION" typescript-language-server
+  install_npm_language_server pyright "$PYRIGHT_VERSION" pyright pyright-langserver
+  install_npm_language_server intelephense "$INTELEPHENSE_VERSION" intelephense
+  install_npm_language_server vscode-langservers-extracted "$VSCODE_LANGSERVERS_VERSION" \
+    vscode-html-language-server vscode-css-language-server vscode-json-language-server vscode-eslint-language-server vscode-markdown-language-server
+  install_npm_language_server bash-language-server "$BASH_LANGUAGE_SERVER_VERSION" bash-language-server
+  install_npm_language_server yaml-language-server "$YAML_LANGUAGE_SERVER_VERSION" yaml-language-server
+  install_jdtls
+  install_marksman
+}
 
 APT_UPDATED=0
 apt_update_once() {
@@ -834,6 +1037,28 @@ def write_file(path, original, rendered):
 PY_HELPERS
 }
 
+# Preserve all supported variants, including disabled/custom servers and dangling
+# symlinks. OMP built-ins supply commands, arguments, settings and file types.
+configure_omp_lsp() {
+  python_config <<'PY_OMP_LSP'
+import json
+
+try:
+    directory = Path(os.environ.get("PI_CODING_AGENT_DIR", str(Path.home() / ".omp/agent")))
+    ensure_directory(directory)
+    variants = ("lsp.json", ".lsp.json", "lsp.yaml", ".lsp.yaml", "lsp.yml", ".lsp.yml")
+    if not any(os.path.lexists(directory / name) for name in variants):
+        defaults = {"servers": {
+            "typescript-language-server": {"rootMarkers": ["package.json", "tsconfig.json", "jsconfig.json", ".git"]},
+            "pyright": {"rootMarkers": ["pyproject.toml", "pyrightconfig.json", "setup.py", "setup.cfg", "requirements.txt", "Pipfile", "scripts/overlord_py", "*.py", ".git"]},
+            "jdtls": {"warmupTimeoutMs": 120000},
+        }}
+        write_file(directory / "lsp.json", None, json.dumps(defaults, indent=2) + "\n")
+except (OSError, ValueError):
+    sys.exit("cannot configure OMP language servers; existing configuration was preserved")
+PY_OMP_LSP
+}
+
 configure_omp_models() {
   info "configuring Oh My Pi model policy (Astra medium / low / off)..."
   python_config "${PI_CODING_AGENT_DIR:-$TARGET_HOME/.omp/agent}" <<'PYEOF_OMP'
@@ -1450,6 +1675,7 @@ configure_user() {
   configure_prime_agent_tools
   configure_prime_agent_models
   configure_omp_models
+  configure_omp_lsp
   configure_codex
   verify_login_shell_tools
 }
@@ -1476,6 +1702,7 @@ setup_system() {
     unset XDG_CONFIG_HOME XDG_CACHE_HOME XDG_DATA_HOME XDG_STATE_HOME
     unset PRIME_AGENT_CODING_AGENT_DIR PI_CODING_AGENT_DIR CODEX_HOME
     install_node
+    install_language_servers
     install_zellij
     install_neovim
     install_codegraph
@@ -1525,7 +1752,7 @@ main() {
   export CODEX_HOME="${CODEX_HOME:-$TARGET_HOME/.codex}"
   if [ "$(id -u)" -ne 0 ]; then
     sudo -n true || { die 'passwordless sudo is required; run setup as root with --user NAME'; return 1; }
-    { declare -f; printf '\nsetup_system\n'; } | sudo -n --preserve-env=TARGET_USER,TARGET_UID,TARGET_GID,TARGET_HOME,SETUP_DIR,SETUP_PROFILE,ZELLIJ_VERSION,NODE_VERSION,NVIM_VERSION,PRIME_AGENT_VERSION,CODEGRAPH_VERSION,CODEX_VERSION,OMP_VERSION,LAZYVIM_REPO,PRIME_AGENT_CODING_AGENT_DIR,PI_CODING_AGENT_DIR,CODEX_HOME,AZURE_OPENAI_BASE_URL,AZURE_OPENAI_RESOURCE_NAME,AZURE_OPENAI_API_VERSION,AZURE_OPENAI_DEPLOYMENT_NAME_MAP bash -s
+    { declare -f; printf '\nsetup_system\n'; } | sudo -n --preserve-env=TARGET_USER,TARGET_UID,TARGET_GID,TARGET_HOME,SETUP_DIR,SETUP_PROFILE,ZELLIJ_VERSION,NODE_VERSION,NVIM_VERSION,PRIME_AGENT_VERSION,CODEGRAPH_VERSION,CODEX_VERSION,TYPESCRIPT_LANGUAGE_SERVER_VERSION,TYPESCRIPT_VERSION,PYRIGHT_VERSION,INTELEPHENSE_VERSION,VSCODE_LANGSERVERS_VERSION,BASH_LANGUAGE_SERVER_VERSION,YAML_LANGUAGE_SERVER_VERSION,JDTLS_VERSION,JDTLS_JAVA_VERSION,OMP_VERSION,LAZYVIM_REPO,PRIME_AGENT_CODING_AGENT_DIR,PI_CODING_AGENT_DIR,CODEX_HOME,AZURE_OPENAI_BASE_URL,AZURE_OPENAI_RESOURCE_NAME,AZURE_OPENAI_API_VERSION,AZURE_OPENAI_DEPLOYMENT_NAME_MAP bash -s
   else
     setup_system
   fi

@@ -50,6 +50,7 @@ RUN bash /usr/local/share/overlord/setup.sh --user overlord --profile container
 # mounted agent directory; never seed sessions, auth, or runtime databases.
 RUN mkdir -p /usr/local/share/overlord/omp-agent-defaults \
   && cp -a /home/overlord/.omp/agent/config.yml /home/overlord/.omp/agent/models.yml \
+    /home/overlord/.omp/agent/lsp.json \
     /home/overlord/.omp/agent/skills /usr/local/share/overlord/omp-agent-defaults/ \
   && if [ -d /home/overlord/.omp/agent/extensions ]; then \
     cp -a /home/overlord/.omp/agent/extensions /usr/local/share/overlord/omp-agent-defaults/; \

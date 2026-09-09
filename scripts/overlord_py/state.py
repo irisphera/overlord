@@ -55,7 +55,6 @@ class ManagedStateError(RuntimeError):
 class StateEnsureResult:
     zsh_data_created: bool
     prime_agent_data_created: bool
-    omp_agent_data_created: bool
     gitignore_created: bool
     gitignore_appended: bool
 
@@ -75,24 +74,21 @@ def ensure_state_dir(paths: StatePaths) -> StateEnsureResult:
 
     zsh_preexisting = classify_node(paths.zsh_data).kind is NodeKind.DIRECTORY
     prime_preexisting = classify_node(paths.prime_agent_data).kind is NodeKind.DIRECTORY
-    omp_preexisting = classify_node(paths.omp_agent_data).kind is NodeKind.DIRECTORY
     gitignore_created = gitignore_snapshot.kind is NodeKind.MISSING
     gitignore_appended = append_state_gitignore(gitignore, gitignore_snapshot)
     create_directory(paths.zsh_data, parents=True, exist_ok=True)
     create_directory(paths.prime_agent_data, parents=True, exist_ok=True)
-    create_directory(paths.omp_agent_data, parents=True, exist_ok=True)
     for plan in pair_plans:
         apply_pair_plan(plan)
     return StateEnsureResult(
         zsh_data_created=not zsh_preexisting,
         prime_agent_data_created=not prime_preexisting,
-        omp_agent_data_created=not omp_preexisting,
         gitignore_created=gitignore_created,
         gitignore_appended=gitignore_appended,
     )
 
 def validate_state_dirs(paths: StatePaths) -> None:
-    for path in (paths.root, paths.zsh_data, paths.prime_agent_data, paths.omp_agent_data,
+    for path in (paths.root, paths.zsh_data, paths.prime_agent_data,
                  paths.omo.managed_directory, paths.codegraph.managed_directory):
         snapshot = classify_node(path)
         if snapshot.kind not in {NodeKind.MISSING, NodeKind.DIRECTORY}:

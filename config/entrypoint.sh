@@ -159,27 +159,12 @@ def seed(src, parent, name, check_only=False):
     else:
         raise RuntimeError(f"non-regular authored default: {src}")
 
-def has_lsp_config(parent):
-    if parent is None:
-        return False
-    for name in ("lsp.json", ".lsp.json", "lsp.yaml", ".lsp.yaml", "lsp.yml", ".lsp.yml"):
-        try:
-            os.stat(name, dir_fd=parent, follow_symlinks=False)
-        except FileNotFoundError:
-            continue
-        return True
-    return False
-
 entries = [name for name in managed_entries
            if os.path.lexists(os.path.join(source, name))]
 for check_only in (True, False):
     parent = directory(destination, create=not check_only)
     try:
         for name in entries:
-            # OMP accepts these variants as user configuration. Never shadow
-            # one with a seeded JSON file, or follow a user-owned symlink.
-            if name == "lsp.json" and has_lsp_config(parent):
-                continue
             seed(os.path.join(source, name), parent, name, check_only)
     finally:
         if parent is not None:
@@ -237,8 +222,7 @@ entrypoint_main() {
 	export HOME="$home" USER=overlord LOGNAME=overlord
 	export XDG_CONFIG_HOME="$home/.config" XDG_CACHE_HOME="$home/.cache"
 	export XDG_DATA_HOME="$home/.local/share" XDG_STATE_HOME="$home/.local/state"
-	seed_agent_defaults "$defaults" "$home/.omp/agent" config.yml models.yml lsp.json skills extensions
-	seed_agent_defaults "${defaults%/*}/prime-agent-defaults" "$home/.prime/agent" settings.json models.json skills
+	seed_agent_defaults "$defaults" "$home/.prime/agent" settings.json models.json skills
 	configure_socket "$socket"
 	configure_git_trust "$home" "$git_config"
 	[[ $# -gt 0 ]] || fail 'missing container command'
@@ -247,6 +231,6 @@ entrypoint_main() {
 }
 
 if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
-	entrypoint_main /home/overlord /usr/local/share/overlord/omp-agent-defaults \
+	entrypoint_main /home/overlord /usr/local/share/overlord/prime-agent-defaults \
 		/var/run/docker.sock /run/overlord-entrypoint-ready /run/overlord.gitconfig "$@"
 fi

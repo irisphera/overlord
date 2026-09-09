@@ -57,22 +57,17 @@ class EntrypointTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.home = self.root / "home"
         self.home.mkdir()
-        self.defaults = self.root / "defaults"
+        self.defaults = self.root / "prime-agent-defaults"
         self.defaults.mkdir()
-        (self.defaults / "config.yml").write_text("default config\n")
-        (self.defaults / "models.yml").write_text("default models\n")
-        (self.defaults / "lsp.json").write_text('{"servers":{"pyright":{"command":"pyright-langserver"}}}\n')
+        (self.defaults / "settings.json").write_text('{"bundledSkills":{"websearch":true}}\n')
+        (self.defaults / "models.json").write_text('{"providers":{}}\n')
         (self.defaults / "skills" / "sample").mkdir(parents=True)
         (self.defaults / "skills" / "sample" / "SKILL.md").write_text("authored skill\n")
         (self.defaults / "auth.json").write_text("must never seed")
         (self.defaults / "sessions").mkdir()
         (self.defaults / "sessions" / "session.json").write_text("must never seed")
-        prime_defaults = self.root / "prime-agent-defaults"
-        prime_defaults.mkdir()
-        (prime_defaults / "settings.json").write_text('{"bundledSkills":{"websearch":true}}\n')
-        (prime_defaults / "models.json").write_text('{"providers":{}}\n')
-        (prime_defaults / "auth.json").write_text("must never seed")
-        self.agent = self.home / ".omp" / "agent"
+        (self.defaults / "runtime.db").write_text("must never seed")
+        self.agent = self.home / ".prime" / "agent"
         self.ready = self.root / "ready"
         self.git_config = self.root / "gitconfig"
         self.system_config = self.root / "system.gitconfig"
@@ -222,12 +217,11 @@ class EntrypointTests(unittest.TestCase):
         session.write_text("private session")
         auth = self.agent / "auth.json"
         auth.write_text("private auth")
-        config = self.agent / "config.yml"
-        config.write_text("my config")
+        config = self.agent / "settings.json"
+        config.write_text('{"bundledSkills":{"websearch":false}}\n')
         config.chmod(0o640)
         originals = {path: (path.read_bytes(), self.snapshot(path)) for path in (session, auth, config)}
-        prime_models = self.home / ".prime/agent/models.json"
-        prime_models.parent.mkdir(parents=True)
+        prime_models = self.agent / "models.json"
         prime_models.write_text('{"providers":{"personal":{}}}\n')
         originals[prime_models] = (prime_models.read_bytes(), self.snapshot(prime_models))
         directory_mode = stat.S_IMODE(self.agent.stat().st_mode)
@@ -237,7 +231,6 @@ class EntrypointTests(unittest.TestCase):
             for path, expected in originals.items():
                 self.assertEqual((path.read_bytes(), self.snapshot(path)), expected)
             self.assertEqual(stat.S_IMODE(self.agent.stat().st_mode), directory_mode)
-        self.assertEqual((self.agent / "models.yml").read_text(), "default models\n")
         self.assertEqual((self.agent / "skills" / "sample" / "SKILL.md").read_text(), "authored skill\n")
         self.assertFalse((session.parent / "session.json").exists())
 
@@ -246,50 +239,22 @@ class EntrypointTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse((self.agent / "auth.json").exists())
         self.assertFalse((self.agent / "sessions").exists())
-        prime = self.home / ".prime/agent"
-        self.assertTrue(json.loads((prime / "settings.json").read_text())["bundledSkills"]["websearch"])
-        self.assertFalse((prime / "auth.json").exists())
+        self.assertFalse((self.agent / "runtime.db").exists())
+        self.assertTrue(json.loads((self.agent / "settings.json").read_text())["bundledSkills"]["websearch"])
+        self.assertEqual(json.loads((self.agent / "models.json").read_text()), {"providers": {}})
+        self.assertEqual((self.agent / "skills" / "sample" / "SKILL.md").read_text(), "authored skill\n")
 
-    def test_fresh_lsp_defaults_survive_recreation(self):
+    def test_fresh_settings_defaults_survive_recreation(self):
         result = self.start()
         self.assertEqual(result.returncode, 0, result.stderr)
-        config = self.agent / "lsp.json"
-        self.assertEqual(config.read_bytes(), (self.defaults / "lsp.json").read_bytes())
+        config = self.agent / "settings.json"
+        self.assertEqual(config.read_bytes(), (self.defaults / "settings.json").read_bytes())
         self.assertEqual(stat.S_IMODE(config.stat().st_mode), 0o600)
         original = config.read_bytes(), self.snapshot(config)
-        (self.defaults / "lsp.json").write_text('{"servers":{}}\n')
+        (self.defaults / "settings.json").write_text('{"bundledSkills":{}}\n')
         result = self.start()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((config.read_bytes(), self.snapshot(config)), original)
-
-    def test_custom_lsp_variants_are_not_shadowed_across_restarts(self):
-        self.agent.mkdir(parents=True)
-        variants = ("lsp.json", ".lsp.json", "lsp.yaml", ".lsp.yaml", "lsp.yml", ".lsp.yml")
-        for name in variants:
-            with self.subTest(name=name):
-                config = self.agent / name
-                config.write_bytes(b'{"servers":{"pyright":{"disabled":true}}}\n' if name.endswith("json")
-                                   else b"# personal LSP settings\nservers:\n  pyright:\n    disabled: true\n")
-                config.chmod(0o640)
-                original = config.read_bytes(), self.snapshot(config)
-                for _ in range(2):
-                    result = self.start()
-                    self.assertEqual(result.returncode, 0, result.stderr)
-                    self.assertEqual((config.read_bytes(), self.snapshot(config)), original)
-                    self.assertEqual({path.name for path in self.agent.iterdir()} & set(variants), {name})
-                config.unlink()
-
-    def test_symlink_lsp_variant_is_preserved_without_seeding(self):
-        self.agent.mkdir(parents=True)
-        outside = self.root / "outside-lsp.yml"
-        config = self.agent / ".lsp.yml"
-        config.symlink_to(outside)
-        result = self.start()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertTrue(config.is_symlink())
-        self.assertEqual(config.readlink(), outside)
-        self.assertFalse(outside.exists())
-        self.assertFalse((self.agent / "lsp.json").exists())
 
     def test_symlink_destination_fails_before_any_seed_write(self):
         outside = self.root / "outside"
@@ -300,13 +265,13 @@ class EntrypointTests(unittest.TestCase):
         result = self.start()
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(self.ready.exists())
-        self.assertFalse((self.agent / "config.yml").exists())
+        self.assertFalse((self.agent / "settings.json").exists())
         self.assertEqual(list(outside.iterdir()), [])
 
     def test_symlink_parent_cannot_redirect_seed_writes(self):
         outside = self.root / "outside"
         outside.mkdir()
-        (self.home / ".omp").symlink_to(outside, target_is_directory=True)
+        (self.home / ".prime").symlink_to(outside, target_is_directory=True)
         result = self.start()
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(self.ready.exists())

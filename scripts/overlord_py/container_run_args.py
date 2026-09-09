@@ -48,7 +48,6 @@ def build_container_run_args(
         "-v", f"{sources.workspace}:/workspace:rw",
         "-v", f"{sources.zsh_data}:/home/overlord/.zsh_data",
         "-v", f"{sources.prime_agent_data}:/home/overlord/.prime/agent",
-        "-v", f"{sources.omp_agent_data}:/home/overlord/.omp/agent",
         *exec_env_flags,
     ]
     socket_path = engine_socket_path(engine_name=engine_name, env=env)

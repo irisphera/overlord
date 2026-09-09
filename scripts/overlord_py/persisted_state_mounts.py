@@ -15,7 +15,6 @@ from .engine import CommandResult
 WORKSPACE_DESTINATION: Final = "/workspace"
 ZSH_DATA_DESTINATION: Final = "/home/overlord/.zsh_data"
 PRIME_AGENT_DATA_DESTINATION: Final = "/home/overlord/.prime/agent"
-OMP_AGENT_DATA_DESTINATION: Final = "/home/overlord/.omp/agent"
 
 @dataclass(slots=True)
 class MountSafetyFailure(Exception):
@@ -41,7 +40,6 @@ class PersistedStateMounts:
     workspace: VerifiedMount
     zsh_data: VerifiedMount
     prime_agent_data: VerifiedMount
-    omp_agent_data: VerifiedMount | None
     access_matches: bool
 
 class EngineRunner(Protocol):
@@ -54,7 +52,6 @@ def verify_persisted_state_mounts(
     expected_sources: BindSourcePaths,
     cwd: Path,
     env: Mapping[str, str],
-    allow_missing_omp: bool = False,
     allow_legacy_access: bool = False,
 ) -> PersistedStateMounts:
     result = engine.run(["container", "inspect", container], cwd=cwd, env=env)
@@ -66,12 +63,9 @@ def verify_persisted_state_mounts(
     workspace = _required_mount(mounts, WORKSPACE_DESTINATION)
     zsh_data = _required_mount(mounts, ZSH_DATA_DESTINATION)
     prime_agent_data = _required_mount(mounts, PRIME_AGENT_DATA_DESTINATION)
-    omp_agent_data = _optional_mount(mounts, OMP_AGENT_DATA_DESTINATION) if allow_missing_omp else _required_mount(mounts, OMP_AGENT_DATA_DESTINATION)
     _require_mount(workspace, _normalize_absolute_posix(str(expected_sources.workspace), "expected Source"))
     _require_mount(zsh_data, _normalize_absolute_posix(str(expected_sources.zsh_data), "expected Source"))
     _require_mount(prime_agent_data, _normalize_absolute_posix(str(expected_sources.prime_agent_data), "expected Source"))
-    if omp_agent_data is not None:
-        _require_mount(omp_agent_data, _normalize_absolute_posix(str(expected_sources.omp_agent_data), "expected Source"))
     access_matches = _access_matches(mounts, env.get("OVERLORD_ENGINE_SOCKET"))
     if not access_matches and not allow_legacy_access:
         raise MountSafetyFailure("Container mounts expose host paths outside the requested workspace/state/socket access; use overlord fresh.")
@@ -79,7 +73,6 @@ def verify_persisted_state_mounts(
         workspace=_verified(workspace),
         zsh_data=_verified(zsh_data),
         prime_agent_data=_verified(prime_agent_data),
-        omp_agent_data=None if omp_agent_data is None else _verified(omp_agent_data),
         access_matches=access_matches,
     )
 
@@ -114,7 +107,7 @@ def _optional_mount(mounts: tuple[InspectedMount, ...], destination: str) -> Ins
     return matching[0] if matching else None
 
 def _reject_shadowing_mounts(mounts: tuple[InspectedMount, ...]) -> None:
-    destinations = (WORKSPACE_DESTINATION, ZSH_DATA_DESTINATION, PRIME_AGENT_DATA_DESTINATION, OMP_AGENT_DATA_DESTINATION)
+    destinations = (WORKSPACE_DESTINATION, ZSH_DATA_DESTINATION, PRIME_AGENT_DATA_DESTINATION)
     for mount in mounts:
         normalized = _normalize_absolute_posix(mount.destination, "mount Destination")
         if normalized != mount.destination:
@@ -124,7 +117,7 @@ def _reject_shadowing_mounts(mounts: tuple[InspectedMount, ...]) -> None:
                 raise MountSafetyFailure(f"Mount beneath {destination} would shadow persisted state: {mount.destination}")
 
 def _access_matches(mounts: tuple[InspectedMount, ...], socket: str | None) -> bool:
-    destinations = (WORKSPACE_DESTINATION, ZSH_DATA_DESTINATION, PRIME_AGENT_DATA_DESTINATION, OMP_AGENT_DATA_DESTINATION)
+    destinations = (WORKSPACE_DESTINATION, ZSH_DATA_DESTINATION, PRIME_AGENT_DATA_DESTINATION)
     extra = tuple(mount for mount in mounts if mount.destination not in destinations)
     if not socket:
         return not extra

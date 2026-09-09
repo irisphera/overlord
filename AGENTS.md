@@ -7,9 +7,9 @@ Overlord is a minimal dev-container launcher + standalone VM setup. The repo has
 - `Dockerfile`: builds Debian 13 with `setup.sh --user overlord --profile container`.
 - `scripts/overlord`: Python >=3.12 launcher; verified workspace lifecycle and persisted-state migration.
 - `config/` : container bootstrap and zellij config
-- `skills/codegraph` + `.prime/agent/skills/codegraph` : CodeGraph skill for prime-agent (local code intelligence, many repos already have `.codegraph`)
+- `skills/codegraph` + `.prime/agent/skills/codegraph`: shared CodeGraph CLI guidance for coding agents; `.prime/agent/skills/codegraph` is the Prime Agent discovery copy.
 
-CodeGraph is local-first code intelligence (6MB index, daemon auto-syncs). Prime-agent uses it via `codegraph query/explore/node` CLI — faster and more accurate than grep, opt-in fallback to grep when `.codegraph` missing.
+For symbol lookup, call graphs, or impact analysis, read `skills/codegraph/SKILL.md`. Check for a usable CodeGraph index before querying it. Use text search when the index is missing or does not cover the task.
 
 ## STRUCTURE
 
@@ -43,4 +43,4 @@ bash setup.sh --user NAME # Supported Debian/Ubuntu; root or existing passwordle
 - An initialization marker is written only after workspace setup and runtime configuration succeed. Failed initialization is retried.
 - Agent containers bind only the launched workspace and its local `.overlord/` state by default. Legacy containers exposing other host paths are recreated before attachment. `OVERLORD_ENGINE_SOCKET` explicitly opts out of workspace-only isolation; preserve host mount/socket ownership and modes.
 - `.overlord/` persists agent sessions/configuration/databases and zsh state across fresh/purge. Host models seed only missing workspace files.
-- Behavioral tests: `/usr/bin/python3 -m unittest discover -s scripts/tests` (distro YAML/TOML packages required).
+- Behavioral tests: `/usr/bin/python3 -m unittest discover -s scripts/tests` (distro `python3-tomlkit` required).

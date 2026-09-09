@@ -5,11 +5,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 import json
 from pathlib import Path
-import shutil
-import stat
-import tempfile
 import time
-import uuid
 from typing import Final
 
 from overlord_py.container_run_args import build_container_run_args, engine_socket_path
@@ -25,9 +21,6 @@ from overlord_py.state import ensure_state_dir, validate_state_dirs
 ENTRYPOINT_LABEL: Final = "io.overlord.entrypoint-ready"
 ENTRYPOINT_READY: Final = "/run/overlord-entrypoint-ready"
 INITIALIZATION_COMPLETE: Final = "/var/lib/overlord/initialization-complete"
-OMP_AGENT_DATA_SOURCE: Final = "/home/overlord/.omp/agent/."
-OMP_AGENT_MIGRATION_PREFIX: Final = ".omp-agent-data-migration-"
-OMP_AGENT_BACKUP_PREFIX: Final = ".omp-agent-data-backup-"
 
 
 @dataclass(slots=True)
@@ -117,7 +110,7 @@ def verified_container(engine, paths, *, env) -> VerifiedContainer | None:
         container_id = record["Id"]
         mounts = verify_persisted_state_mounts(
             engine, container_id, expected_sources=bind_source_paths(paths),
-            cwd=paths.workspace, env=env, allow_missing_omp=True, allow_legacy_access=True,
+            cwd=paths.workspace, env=env, allow_legacy_access=True,
         )
         state = record.get("State", {}).get("Status")
         if not isinstance(state, str) or not state:
@@ -133,15 +126,8 @@ def _target_paths(paths, container_id):
 
 def _remove_verified(engine, paths, container, *, env, stage):
     validate_state_dirs(paths.state)
-    target = _target_paths(paths, container.container_id)
-    migration_needed = container.mounts.omp_agent_data is None
-    if migration_needed:
-        _validate_omp_migration_target(paths)
     stage(f"Stopping container {container.name}...")
     require_success(engine.run(["stop", container.container_id], cwd=paths.workspace, env=env), "stop container")
-    if migration_needed:
-        stage("Rescuing OMP agent state from the stopped container...")
-        _rescue_omp_agent_data(engine, target, env=env)
     stage(f"Removing container {container.name}...")
     require_success(engine.run(["rm", container.container_id], cwd=paths.workspace, env=env), "remove container")
 
@@ -194,7 +180,7 @@ def ensure_running(engine: ContainerEngine, paths: WorkspacePaths, exec_env_flag
     validate_state_dirs(paths.state)
     engine_socket_path(engine_name=engine.name, env=env)
     state_before = "missing" if container is None else container.state
-    if container is not None and (container.mounts.omp_agent_data is None or not container.entrypoint_ready_contract or not container.mounts.access_matches):
+    if container is not None and (not container.entrypoint_ready_contract or not container.mounts.access_matches):
         _remove_verified(engine, paths, container, env=env, stage=stage)
         container = None
     ensure_state_dir(paths.state)
@@ -208,7 +194,7 @@ def ensure_running(engine: ContainerEngine, paths: WorkspacePaths, exec_env_flag
         container = verified_container(engine, paths, env=env)
         if container is None:
             raise LifecycleError("Error: newly created container disappeared")
-        if container.mounts.omp_agent_data is None or not container.mounts.access_matches or not container.entrypoint_ready_contract:
+        if not container.mounts.access_matches or not container.entrypoint_ready_contract:
             raise LifecycleError("Error: newly created container does not satisfy workspace isolation and initialization requirements; use overlord fresh.")
     elif container.name != paths.identity.container_name:
         require_success(engine.run(["rename", container.container_id, paths.identity.container_name], cwd=paths.workspace, env=env), "adopt verified legacy container")
@@ -227,141 +213,6 @@ def ensure_running(engine: ContainerEngine, paths: WorkspacePaths, exec_env_flag
             'install -d -m 755 /var/lib/overlord && touch /var/lib/overlord/initialization-complete'], cwd=paths.workspace, env=env)
         require_success(result, "mark initialization complete")
     return EnsureRunningResult(state_before, setup_ran, tuple(messages), container.container_id)
-
-
-def _lstat_or_none(path: Path):
-    try:
-        return path.lstat()
-    except FileNotFoundError:
-        return None
-    except OSError as error:
-        raise LifecycleError(f"Error: could not inspect OMP agent state path {path}: {error}") from error
-
-
-def _require_real_directory(path: Path, label: str) -> None:
-    snapshot = _lstat_or_none(path)
-    if snapshot is None:
-        raise LifecycleError(f"Error: {label} {path} is missing")
-    if stat.S_ISLNK(snapshot.st_mode):
-        raise LifecycleError(f"Error: unsafe {label} {path}: symbolic links are not allowed")
-    if not stat.S_ISDIR(snapshot.st_mode):
-        raise LifecycleError(f"Error: unsafe {label} {path}: expected a real directory")
-
-
-def _validate_omp_migration_target(paths: WorkspacePaths) -> None:
-    root = paths.state.root
-    destination = paths.state.omp_agent_data
-    if destination.parent != root:
-        raise LifecycleError(f"Error: unsafe OMP agent state target {destination}: it must be directly under {root}")
-    root_snapshot = _lstat_or_none(root)
-    if root_snapshot is None:
-        try:
-            root.mkdir(parents=True)
-        except OSError as error:
-            raise LifecycleError(f"Error: could not create OMP agent state root {root}: {error}") from error
-        root_snapshot = _lstat_or_none(root)
-    if root_snapshot is None:
-        raise LifecycleError(f"Error: OMP agent state root {root} disappeared during validation")
-    if stat.S_ISLNK(root_snapshot.st_mode):
-        raise LifecycleError(f"Error: unsafe OMP agent state root {root}: symbolic links are not allowed")
-    if not stat.S_ISDIR(root_snapshot.st_mode):
-        raise LifecycleError(f"Error: unsafe OMP agent state root {root}: expected a real directory")
-    destination_snapshot = _lstat_or_none(destination)
-    if destination_snapshot is None:
-        return
-    if stat.S_ISLNK(destination_snapshot.st_mode):
-        raise LifecycleError(f"Error: unsafe OMP agent state target {destination}: symbolic links are not allowed")
-    if not stat.S_ISDIR(destination_snapshot.st_mode):
-        raise LifecycleError(f"Error: unsafe OMP agent state target {destination}: expected a real directory")
-
-
-def _new_omp_backup_path(root: Path) -> Path:
-    for _ in range(100):
-        candidate = root / f"{OMP_AGENT_BACKUP_PREFIX}{uuid.uuid4().hex}"
-        if _lstat_or_none(candidate) is None:
-            return candidate
-    raise LifecycleError(f"Error: could not allocate a backup path under {root}")
-
-
-def _promote_omp_agent_data(temp_path: Path, destination: Path) -> None:
-    _require_real_directory(temp_path, "temporary OMP agent state")
-    destination_snapshot = _lstat_or_none(destination)
-    backup_path: Path | None = None
-    if destination_snapshot is not None:
-        if stat.S_ISLNK(destination_snapshot.st_mode):
-            raise LifecycleError(f"Error: unsafe OMP agent state target {destination}: symbolic links are not allowed")
-        if not stat.S_ISDIR(destination_snapshot.st_mode):
-            raise LifecycleError(f"Error: unsafe OMP agent state target {destination}: expected a real directory")
-        backup_path = _new_omp_backup_path(destination.parent)
-        try:
-            destination.rename(backup_path)
-        except OSError as error:
-            raise LifecycleError(f"Error: could not preserve existing OMP agent state at {destination}: {error}") from error
-    try:
-        temp_path.replace(destination)
-    except OSError as error:
-        if backup_path is not None and _lstat_or_none(destination) is None:
-            try:
-                backup_path.rename(destination)
-            except OSError as restore_error:
-                raise LifecycleError(
-                    f"Error: could not promote rescued OMP agent state to {destination}: {error}; "
-                    f"original state remains at {backup_path}, but restore failed: {restore_error}"
-                ) from error
-        detail = f"; original state remains at {backup_path}" if backup_path is not None else ""
-        raise LifecycleError(f"Error: could not promote rescued OMP agent state to {destination}: {error}{detail}") from error
-
-
-def _cleanup_omp_migration_temp(temp_path: Path) -> None:
-    try:
-        snapshot = temp_path.lstat()
-    except (FileNotFoundError, OSError):
-        return
-    try:
-        if stat.S_ISDIR(snapshot.st_mode) and not stat.S_ISLNK(snapshot.st_mode):
-            shutil.rmtree(temp_path)
-        else:
-            temp_path.unlink(missing_ok=True)
-    except OSError:
-        return
-
-
-def _rescue_omp_agent_data(engine: ContainerEngine, paths: WorkspacePaths, *, env: Mapping[str, str]) -> None:
-    root = paths.state.root
-    destination = paths.state.omp_agent_data
-    temp_path: Path | None = None
-    try:
-        try:
-            temp_path = Path(tempfile.mkdtemp(prefix=OMP_AGENT_MIGRATION_PREFIX, dir=root))
-        except OSError as error:
-            raise LifecycleError(f"Error: could not create temporary OMP agent state under {root}: {error}") from error
-        source = f"{paths.identity.container_name}:{OMP_AGENT_DATA_SOURCE}"
-        try:
-            copied = engine.run(["cp", source, str(temp_path)], cwd=paths.workspace, env=env)
-        except OSError as error:
-            raise LifecycleError(f"Error: failed to copy OMP agent state from {source}: {error}") from error
-        if copied.returncode:
-            # Old containers may never have used OMP. Only an exact missing-source
-            # diagnostic is safe to skip; missing children and partial copies are not.
-            missing_source_error = ""
-            if engine.name == "podman":
-                missing_source_error = (
-                    f'Error: "{OMP_AGENT_DATA_SOURCE}" could not be found on container '
-                    f"{paths.identity.container_name}: no such file or directory"
-                )
-            elif engine.name == "docker":
-                missing_source_error = (
-                    f"Error response from daemon: Could not find the file {OMP_AGENT_DATA_SOURCE} "
-                    f"in container {paths.identity.container_name}"
-                )
-            if (missing_source_error and copied.stderr.strip() == missing_source_error
-                    and not copied.stdout.strip() and not any(temp_path.iterdir())):
-                return
-        require_success(copied, f"copy OMP agent state from {source}")
-        _promote_omp_agent_data(temp_path, destination)
-    finally:
-        if temp_path is not None:
-            _cleanup_omp_migration_temp(temp_path)
 
 
 def run_workspace_setup_script(engine: ContainerEngine, paths: WorkspacePaths, *, env: Mapping[str, str], stage: StageReporter = noop_stage) -> tuple[list[str], bool]:

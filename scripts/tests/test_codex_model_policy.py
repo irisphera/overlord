@@ -41,6 +41,8 @@ class CodexModelPolicyTests(unittest.TestCase):
             self.assertEqual(layer["model_provider"], "azure")
             self.assertEqual(layer["model_reasoning_effort"], effort)
             self.assertEqual(layer["plan_mode_reasoning_effort"], effort)
+            if model == astra:
+                self.assertEqual(layer["model_context_window"], 272000)
 
     def test_fresh_configuration(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -65,6 +67,7 @@ profile = "legacy-astra"
 approval_policy = "on-request"
 [profiles.legacy-astra]
 model = "gpt-6-astra"
+model_context_window = 256000
 model_reasoning_effort = "high"
 sandbox_mode = "read-only"
 [profiles.custom]
@@ -94,6 +97,7 @@ trust_level = "trusted"
             legacy = config["profiles"]["legacy-astra"]
             self.assertEqual(legacy["model_reasoning_effort"], "medium")
             self.assertEqual(legacy["plan_mode_reasoning_effort"], "medium")
+            self.assertEqual(legacy["model_context_window"], 272000)
             self.assertEqual(legacy["sandbox_mode"], "read-only")
             self.assertEqual(config["profiles"]["custom"]["model_reasoning_effort"], "low")
             self.assertNotIn("high-brain", config["profiles"])

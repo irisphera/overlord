@@ -17,6 +17,7 @@
 .env.*
 **/.env
 **/.env.*
+# Keep legacy agent credentials and sessions out of build contexts.
 **/.omp
 **/.ssh
 **/.aws

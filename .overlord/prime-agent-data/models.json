@@ -30,10 +30,19 @@
           "reasoning": true
         },
         "gpt-6-astra": {
-          "contextWindow": 256000,
-          "limitTokens": 256000,
-          "maxInputTokens": 256000,
-          "reasoning": true
+          "contextWindow": 272000,
+          "limitTokens": 272000,
+          "maxInputTokens": 272000,
+          "reasoning": true,
+          "thinkingLevelMap": {
+            "high": "high",
+            "low": "low",
+            "max": "max",
+            "medium": "medium",
+            "minimal": null,
+            "off": "none",
+            "xhigh": "xhigh"
+          }
         },
         "grok-4.6": {
           "contextWindow": 180000,
@@ -78,13 +87,22 @@
         },
         {
           "baseUrl": "https://sergiu-inference-resource.openai.azure.com/openai/v1",
-          "contextWindow": 256000,
+          "contextWindow": 272000,
           "id": "gpt-6-astra",
-          "limitTokens": 256000,
-          "maxInputTokens": 256000,
+          "limitTokens": 272000,
+          "maxInputTokens": 272000,
           "maxTokens": 16384,
-          "name": "GPT-6 Astra (256k)",
-          "reasoning": true
+          "name": "GPT-6 Astra (272k)",
+          "reasoning": true,
+          "thinkingLevelMap": {
+            "high": "high",
+            "low": "low",
+            "max": "max",
+            "medium": "medium",
+            "minimal": null,
+            "off": "none",
+            "xhigh": "xhigh"
+          }
         }
       ]
     },

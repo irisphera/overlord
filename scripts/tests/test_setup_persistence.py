@@ -19,7 +19,7 @@ class SetupPersistenceTests(unittest.TestCase):
         self.prime.mkdir(parents=True)
         self.env = {key: value for key, value in os.environ.items() if not key.startswith("AZURE_OPENAI_")}
         self.env.update(HOME=str(self.home), TARGET_HOME=str(self.home), SETUP_PROFILE="native",
-                        PRIME_AGENT_CODING_AGENT_DIR=str(self.prime), PI_CODING_AGENT_DIR=str(self.home / ".omp/agent"))
+                        PRIME_AGENT_CODING_AGENT_DIR=str(self.prime))
 
     def configure(self, function, *, profile="native"):
         result = subprocess.run(
@@ -45,6 +45,19 @@ class SetupPersistenceTests(unittest.TestCase):
         self.configure("configure_prime_agent_tools")
         self.assertEqual((path.read_bytes(), path.stat().st_mtime_ns), before)
         self.assertEqual(path.with_suffix(".json.bak").read_text(), original)
+
+    def test_prime_tools_do_not_create_or_modify_legacy_omp_state(self):
+        legacy = self.home / ".omp/agent"
+        self.env["PI_CODING_AGENT_DIR"] = str(legacy)
+        self.configure("configure_prime_agent_tools")
+        self.assertFalse(legacy.exists())
+        legacy.mkdir(parents=True)
+        config = legacy / "config.yml"
+        config.write_text("custom: keep\n")
+        self.configure("configure_prime_agent_tools")
+        self.assertEqual(config.read_text(), "custom: keep\n")
+        self.assertEqual(list(legacy.iterdir()), [config])
+        self.assertTrue((self.prime / "skills/context7/SKILL.md").is_file())
 
     def test_profiles_select_runpod_without_copying_other_users_configuration(self):
         sibling = Path(self.temp.name) / "other/.prime/agent/settings.json"
@@ -75,11 +88,68 @@ class SetupPersistenceTests(unittest.TestCase):
         entries = {entry["id"]: entry for entry in data["providers"]["azure-openai-responses"]["models"]}
         self.assertEqual(entries["private-deployment"], {"id": "private-deployment", "name": "personal"})
         self.assertEqual(entries["grok-4.6"]["contextWindow"], 180000)
+        self.assertEqual(entries["gpt-6-astra"]["thinkingLevelMap"], {
+            "off": "none", "minimal": None, "low": "low", "medium": "medium",
+            "high": "high", "xhigh": "xhigh", "max": "max",
+        })
         self.assertEqual(entries["gpt-5.6-luna"]["thinkingLevelMap"]["max"], "max")
         self.assertEqual(state.read_bytes(), b"saved session\n")
         self.assertEqual(auth.read_bytes(), b"private credentials\n")
         self.assertEqual(database.read_bytes(), b"database bytes\x00")
         self.assertNotIn("private-marker", result.stdout + result.stderr)
+
+    def test_astra_context_window_is_created_and_migrated_idempotently(self):
+        path = self.prime / "models.json"
+        for existing_window in (None, 256000):
+            with self.subTest(existing_window=existing_window):
+                if existing_window is not None:
+                    fields = dict(contextWindow=existing_window, maxInputTokens=existing_window, limitTokens=existing_window)
+                    path.write_text(json.dumps({"providers": {"azure-openai-responses": {
+                        "models": [dict(id="gpt-6-astra", name="GPT-6 Astra (256k)", **fields)],
+                        "modelOverrides": {"*": fields, "gpt-6-astra": fields},
+                    }}}))
+                self.configure("configure_prime_agent_models")
+                data = json.loads(path.read_text())
+                provider = data["providers"]["azure-openai-responses"]
+                entries = {entry["id"]: entry for entry in provider["models"]}
+                for field in ("contextWindow", "maxInputTokens", "limitTokens"):
+                    self.assertEqual(entries["gpt-6-astra"][field], 272000)
+                    self.assertEqual(provider["modelOverrides"]["gpt-6-astra"][field], 272000)
+                    self.assertEqual(entries["gpt-5.6-luna"][field], 256000)
+                self.assertEqual(entries["gpt-6-astra"]["name"], "GPT-6 Astra (272k)")
+                before = path.read_bytes(), path.stat().st_mtime_ns
+                self.configure("configure_prime_agent_models")
+                self.assertEqual((path.read_bytes(), path.stat().st_mtime_ns), before)
+
+    def test_astra_reasoning_modes_are_created_and_migrated_idempotently(self):
+        path = self.prime / "models.json"
+        expected = {"off": "none", "minimal": None, "low": "low", "medium": "medium",
+                    "high": "high", "xhigh": "xhigh", "max": "max"}
+        for stale in (None, {}, {"off": None, "minimal": "minimal", "xhigh": "high", "max": "high"}):
+            with self.subTest(stale=stale):
+                unrelated = {"id": "custom", "thinkingLevelMap": {"max": "custom-effort"}}
+                astra = {"id": "gpt-6-astra", "baseUrl": "https://custom.example/openai/v1"}
+                if stale is not None:
+                    astra["thinkingLevelMap"] = stale
+                original = json.dumps({"providers": {"azure-openai-responses": {
+                    "models": [astra, dict(astra), unrelated],
+                    "modelOverrides": {"gpt-6-astra": {"thinkingLevelMap": stale or {}},
+                                       "custom": {"thinkingLevelMap": {"off": None}}},
+                }}})
+                path.write_text(original)
+                self.configure("configure_prime_agent_models")
+                provider = json.loads(path.read_text())["providers"]["azure-openai-responses"]
+                entries = [entry for entry in provider["models"] if entry["id"] == "gpt-6-astra"]
+                for entry in [*entries, provider["modelOverrides"]["gpt-6-astra"]]:
+                    self.assertTrue(entry["reasoning"])
+                    self.assertEqual(entry["thinkingLevelMap"], expected)
+                    self.assertEqual(entry["contextWindow"], 272000)
+                self.assertEqual(entries[0]["baseUrl"], astra["baseUrl"])
+                self.assertIn(unrelated, provider["models"])
+                self.assertEqual(provider["modelOverrides"]["custom"], {"thinkingLevelMap": {"off": None}})
+                before = path.read_bytes(), path.stat().st_mtime_ns
+                self.configure("configure_prime_agent_models")
+                self.assertEqual((path.read_bytes(), path.stat().st_mtime_ns), before)
 
     def test_malformed_config_is_unchanged_without_secret_diagnostics(self):
         for function, filename in (("configure_prime_agent_models", "models.json"), ("configure_prime_agent_tools", "settings.json")):

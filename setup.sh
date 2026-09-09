@@ -51,7 +51,7 @@ load_tool_versions() {
   # Embedded defaults keep curl | bash standalone. A local manifest overrides
   # defaults; explicit environment versions override the manifest.
   local -A versions=( [ZELLIJ_VERSION]=0.43.1 [NODE_VERSION]=24.20.0 [NVIM_VERSION]=0.12.5
-    [PRIME_AGENT_VERSION]=0.9.2 [CODEGRAPH_VERSION]=1.6.0 [CODEX_VERSION]=0.153.4
+    [PRIME_AGENT_VERSION]=0.9.4 [CODEGRAPH_VERSION]=1.6.0 [CODEX_VERSION]=0.153.4
     [TYPESCRIPT_LANGUAGE_SERVER_VERSION]=6.0.0 [TYPESCRIPT_VERSION]=6.0.3
     [PYRIGHT_VERSION]=1.1.413 [INTELEPHENSE_VERSION]=1.18.5
     [VSCODE_LANGSERVERS_VERSION]=4.10.0 [BASH_LANGUAGE_SERVER_VERSION]=5.6.0
@@ -199,7 +199,7 @@ install_npm_language_server() (
   if [ "$package" = typescript-language-server ]; then
     verify_npm_language_server "$destination" typescript "$TYPESCRIPT_VERSION" tsserver tsc
     [ -f "$destination/lib/node_modules/typescript/lib/tsserver.js" ]
-    # Do not publish tsc: OMP's separate typescript-native server expects TS7.
+    # Publish the language-server entry point, not a global TypeScript compiler.
   fi
   for command in "$@"; do publish_binary "$destination/bin/$command" "$command"; done
 )
@@ -372,7 +372,6 @@ install_base_packages() {
     locales
     jq
     xdg-utils
-    python3-yaml
     xz-utils
     util-linux
     passwd
@@ -547,7 +546,7 @@ PATH_BLOCK
 verify_login_shell_tools() {
   [ "$(id -u)" -eq "$TARGET_UID" ] || { die 'login verification requires the target UID'; return 1; }
   local command
-  for command in node npm npx nvim prime-agent git omp codex; do
+  for command in node npm npx nvim prime-agent git codex; do
     env -i HOME="$TARGET_HOME" USER="$TARGET_USER" LOGNAME="$TARGET_USER" \
       TERM=xterm-256color PATH=/usr/local/bin:/usr/bin:/bin \
       zsh -lic "$command --version" >/dev/null || { die "$command does not run as $TARGET_USER"; return 1; }
@@ -851,12 +850,12 @@ EOS
 }
 
 
-# --- codegraph skill for prime-agent ---
+# --- shared CodeGraph skill for coding agents ---
 ensure_codegraph_skill() {
   local source destination
   for source in "${SETUP_DIR:-}/skills/codegraph" /usr/local/share/overlord/skills/codegraph; do
     if [ -r "$source/SKILL.md" ]; then
-      for destination in "$PRIME_AGENT_CODING_AGENT_DIR/skills/codegraph" "$PI_CODING_AGENT_DIR/skills/codegraph"; do
+      for destination in "$PRIME_AGENT_CODING_AGENT_DIR/skills/codegraph"; do
         mkdir -p "$destination"
         cp -R "$source/." "$destination/"
       done
@@ -922,7 +921,7 @@ install_lazyvim() {
 
 # --- make zsh default shell (non-interactive) ---
 
-# --- prime-agent + models.json (256k contextWindow override for every model) ---
+# --- Prime Agent installation ---
 install_prime_agent() (
   set -euo pipefail
   local destination="/opt/overlord/prime-agent-$PRIME_AGENT_VERSION" stage
@@ -943,30 +942,9 @@ install_prime_agent() (
 )
 
 
-install_oh_my_pi() (
-  set -euo pipefail
-  local want="${OMP_VERSION:-}" stage destination
-  if [ -z "$want" ]; then want="$(npm view @oh-my-pi/pi-coding-agent version)"; fi
-  [[ "$want" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$ ]] || { die 'cannot resolve OMP release'; exit 1; }
-  destination="/opt/overlord/omp-$want"
-  if [ ! -x "$destination/omp" ]; then
-    stage="$(mktemp -d /opt/overlord/.omp.XXXXXXXX)"
-    trap 'rm -rf "$stage"' EXIT
-    download https://omp.sh/install "$stage/install.sh"
-    PI_INSTALL_DIR="$stage/bin" sh "$stage/install.sh" --binary --ref "v$want"
-    verify_version "$stage/bin/omp" "$want"
-    chmod -R a+rX "$stage/bin"
-    [ ! -e "$destination" ] || { die "incomplete installation exists: $destination"; exit 1; }
-    mv "$stage/bin" "$destination"
-  fi
-  verify_version "$destination/omp" "$want"
-  publish_binary "$destination/omp" omp
-)
 
 install_codex() { install_npm_tool codex @openai/codex "$CODEX_VERSION"; }
 
-# Oh My Pi: Astra/medium by default, low for lightweight work, off for exploration.
-# Merge managed models and roles, preserving other settings and first backups.
 # Shared Python I/O keeps managed formats atomic and preserves permissions.
 python_config() {
   { config_python_helpers; cat; } | /usr/bin/python3 - "$@"
@@ -1039,156 +1017,6 @@ def write_file(path, original, rendered):
 PY_HELPERS
 }
 
-# Preserve all supported variants, including disabled/custom servers and dangling
-# symlinks. OMP built-ins supply commands, arguments, settings and file types.
-configure_omp_lsp() {
-  python_config <<'PY_OMP_LSP'
-import json
-
-try:
-    directory = Path(os.environ.get("PI_CODING_AGENT_DIR", str(Path.home() / ".omp/agent")))
-    ensure_directory(directory)
-    variants = ("lsp.json", ".lsp.json", "lsp.yaml", ".lsp.yaml", "lsp.yml", ".lsp.yml")
-    if not any(os.path.lexists(directory / name) for name in variants):
-        defaults = {"servers": {
-            "typescript-language-server": {"rootMarkers": ["package.json", "tsconfig.json", "jsconfig.json", ".git"]},
-            "pyright": {"rootMarkers": ["pyproject.toml", "pyrightconfig.json", "setup.py", "setup.cfg", "requirements.txt", "Pipfile", "scripts/overlord_py", "*.py", ".git"]},
-            "jdtls": {"warmupTimeoutMs": 120000},
-        }}
-        write_file(directory / "lsp.json", None, json.dumps(defaults, indent=2) + "\n")
-except (OSError, ValueError):
-    sys.exit("cannot configure OMP language servers; existing configuration was preserved")
-PY_OMP_LSP
-}
-
-configure_omp_models() {
-  info "configuring Oh My Pi model policy (Astra medium / low / off)..."
-  python_config "${PI_CODING_AGENT_DIR:-$TARGET_HOME/.omp/agent}" <<'PYEOF_OMP'
-import copy
-import os
-import shutil
-import stat
-import sys
-import tempfile
-from pathlib import Path
-
-import yaml
-
-resource = os.environ.get("AZURE_OPENAI_RESOURCE_NAME", "").strip()
-base = os.environ.get("AZURE_OPENAI_BASE_URL", "").strip().rstrip("/")
-if not base and resource:
-    base = f"https://{resource}.openai.azure.com/openai/v1"
-provider_id = "azure-gpt6"  # Keep the existing provider ID for saved sessions.
-luna = "gpt-5.6-luna"
-astra = "gpt-6-astra"
-roles = {
-    role: f"{provider_id}/{astra}:{'low' if role in ('smol', 'tiny', 'commit') else 'medium'}"
-    for role in ("default", "smol", "slow", "vision", "plan", "commit", "tiny", "task", "advisor")
-}
-
-
-
-
-def read_config(path):
-    existing = read_text(path)
-    data = yaml.safe_load(existing) if existing is not None else {}
-    if data is None:
-        data = {}
-    if not isinstance(data, dict):
-        raise ValueError("configuration must be a mapping")
-    return existing, data
-
-
-def write_config(path, original, data):
-    rendered = "# Managed model policy by overlord setup.sh. Other settings are preserved.\n"
-    rendered += yaml.safe_dump(data, sort_keys=False, allow_unicode=True)
-    # Keep comments/formatting and mtime on an already-correct config.
-    if original is not None and yaml.safe_load(original) == data:
-        print(f"unchanged {path}")
-        return
-    write_file(path, original, rendered)
-
-
-
-
-# Azure's OMP adapter encodes off as the model's lowest effort (low for Astra).
-# Preserve low for lightweight work, but send literal none for exploration.
-astra_reasoning_extension = '''import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
-
-export default function (pi: ExtensionAPI) {
-  pi.on("before_provider_request", (event, ctx) => {
-    if (ctx.model?.provider !== "azure-gpt6" || ctx.model.id !== "gpt-6-astra" ||
-        ctx.model.api !== "azure-openai-responses" || pi.getThinkingLevel() !== "off") return;
-    if (!event.payload || typeof event.payload !== "object" || Array.isArray(event.payload)) return;
-    return { ...event.payload, reasoning: { effort: "none" } };
-  });
-}
-'''
-
-
-for raw in sys.argv[1:]:
-    agent_dir = Path(raw)
-    try:
-        ensure_directory(agent_dir)
-        models_path, config_path = agent_dir / "models.yml", agent_dir / "config.yml"
-        models_original, models = read_config(models_path)
-        config_original, config = read_config(config_path)
-        provider = mapping(mapping(models, "providers"), provider_id)
-        provider.update(
-            baseUrl=base or provider.get("baseUrl") or "https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1",
-            api="azure-openai-responses", apiKey="AZURE_OPENAI_API_KEY",
-        )
-        entries = provider.setdefault("models", [])
-        if not isinstance(entries, list) or any(not isinstance(entry, dict) for entry in entries):
-            raise ValueError("models must be a list of mappings")
-        for model_id, name, effort in ((luna, "GPT-5.6 Luna", "max"), (astra, "GPT-6 Astra", "medium")):
-            efforts = ["low", "medium", "high", "xhigh", "max"] if model_id == astra else [effort]
-            effort_map = {level: level for level in efforts}
-            thinking = {
-                "mode": "effort", "efforts": efforts, "defaultLevel": effort,
-                "effortMap": effort_map, "requiresEffort": model_id != astra,
-            }
-            matching = [entry for entry in entries if entry.get("id") == model_id]
-            if not matching:
-                matching = [{"id": model_id}]
-                entries.extend(matching)
-            for entry in matching:
-                entry.update(name=name, reasoning=True, thinking=copy.deepcopy(thinking))
-                # Compat maps take precedence over thinking metadata on the wire.
-                mapping(entry, "compat").update(
-                    reasoningEffortMap=effort_map.copy(), supportsReasoningParams=True,
-                )
-                entry.setdefault("input", ["text", "image"])
-                entry.setdefault("contextWindow", 256000)
-                entry.setdefault("maxTokens", 16384)
-            # Existing wildcard/model overrides must not undo the effort policy.
-            if "modelOverrides" in provider:
-                overrides = mapping(provider, "modelOverrides")
-                mapping(overrides, model_id)["thinking"] = copy.deepcopy(thinking)
-                overrides[model_id]["reasoning"] = True
-                mapping(overrides[model_id], "compat").update(
-                    reasoningEffortMap=effort_map.copy(), supportsReasoningParams=True,
-                )
-        configured_roles = mapping(config, "modelRoles")
-        configured_roles.update(roles)
-        config["defaultThinkingLevel"] = "medium"
-        # Explicit effort suffixes override bundled agent thinking defaults.
-        agent_overrides = mapping(mapping(config, "task"), "agentModelOverrides")
-        for agent, effort in (("scout", "off"), ("librarian", "off"), ("sonic", "low")):
-            agent_overrides[agent] = f"{provider_id}/{astra}:{effort}"
-        # Parse and merge both files before writing either one.
-        write_config(models_path, models_original, models)
-        write_config(config_path, config_original, config)
-        extension_path = agent_dir / "extensions" / "overlord-astra-reasoning.ts"
-        extension_original = read_text(extension_path)
-        ensure_directory(extension_path.parent)
-        write_file(extension_path, extension_original, astra_reasoning_extension)
-    except (OSError, ValueError, yaml.YAMLError) as error:
-        # Parser errors may contain credentials from user configuration: do not echo them.
-        print(f"skipping invalid or unwritable Oh My Pi config in {agent_dir} ({type(error).__name__})")
-PYEOF_OMP
-}
-
 # Codex: Luna/max by default, explicit high-brain profile for Astra/medium.
 # Merge config instead of skipping old Astra defaults; preserve unrelated settings.
 # Resolve deployment mappings here because Codex sends model names verbatim.
@@ -1209,7 +1037,7 @@ resource = os.environ.get("AZURE_OPENAI_RESOURCE_NAME", "").strip()
 env_base = os.environ.get("AZURE_OPENAI_BASE_URL", "").strip().rstrip("/")
 if env_base:
     # Azure's versioned Responses endpoint is /openai/responses?api-version=...
-    # Codex appends /responses; Prime/OMP bases may include the /v1 suffix.
+    # Codex appends /responses; Prime bases may include the /v1 suffix.
     configured_base = env_base[:-3].rstrip("/") if env_base.endswith("/v1") else env_base
 elif resource:
     configured_base = f"https://{resource}.openai.azure.com/openai"
@@ -1240,6 +1068,8 @@ def apply_model_policy(config, model, effort):
     config["model_provider"] = "azure"
     config["model_reasoning_effort"] = effort
     config["plan_mode_reasoning_effort"] = effort
+    if model == "gpt-6-astra":
+        config["model_context_window"] = 272000
     # Reviews inherit the current effort. Do not leave an Astra-only model
     # override that could send Luna's max effort to Astra.
     if config.get("review_model") in {"gpt-6-astra", deployments["gpt-6-astra"]}:
@@ -1254,6 +1084,7 @@ def apply_policy(config, model, effort, is_base):
             if isinstance(profile, MutableMapping) and profile.get("model") in {"gpt-6-astra", deployments["gpt-6-astra"]}:
                 profile["model_reasoning_effort"] = "medium"
                 profile["plan_mode_reasoning_effort"] = "medium"
+                profile["model_context_window"] = 272000
     if is_base:
         azure = table(table(config, "model_providers"), "azure")
         azure["name"] = "Azure OpenAI"
@@ -1326,7 +1157,7 @@ install_prime_agent_skills() {
     warn "npx unavailable; skipping Prime Agent skill installation"
     return 0
   fi
-  info "installing shared skills for Pi, Prime Agent, and Oh My Pi..."
+  info "installing shared skills for Prime Agent..."
   local skill_source
   for skill_source in mattpocock/skills aws/agent-toolkit-for-aws cursor/plugins; do
     if npx --yes skills add "$skill_source" --global --agent pi --yes --copy --full-depth \
@@ -1341,7 +1172,7 @@ install_prime_agent_skills() {
   local pi_skills="$HOME/.pi/agent/skills"
   local agent_skills
   if [ -d "$pi_skills" ]; then
-      for agent_skills in "$PRIME_AGENT_CODING_AGENT_DIR/skills" "$PI_CODING_AGENT_DIR/skills"; do
+      for agent_skills in "$PRIME_AGENT_CODING_AGENT_DIR/skills"; do
         mkdir -p "$agent_skills"
         cp -a "$pi_skills/." "$agent_skills/"
         info "synced Pi skills to $agent_skills"
@@ -1357,7 +1188,7 @@ install_prime_agent_skills() {
   aws_setup_tmp="$(mktemp)"
   if curl -fsSL "$aws_setup_url" -o "$aws_setup_tmp"; then
     local skill_dir
-      for agent_skills in "$pi_skills" "$PRIME_AGENT_CODING_AGENT_DIR/skills" "$PI_CODING_AGENT_DIR/skills"; do
+      for agent_skills in "$pi_skills" "$PRIME_AGENT_CODING_AGENT_DIR/skills"; do
         skill_dir="$agent_skills/aws-agent-toolkit-setup"
         mkdir -p "$skill_dir"
         {
@@ -1557,8 +1388,8 @@ for raw_path in sys.argv[1:]:
         continue
 PYEOF
 
-  # Add the Context7 routing skill to both Prime and OMP native roots.
-  local agent_dirs=("$PRIME_AGENT_CODING_AGENT_DIR" "$PI_CODING_AGENT_DIR")
+  # Add the Context7 routing skill to the Prime native root.
+  local agent_dirs=("$PRIME_AGENT_CODING_AGENT_DIR")
   local agent_dir
   for agent_dir in "${agent_dirs[@]}"; do
     if ! mkdir -p "$agent_dir/skills/context7" 2>/dev/null; then
@@ -1629,14 +1460,22 @@ for raw in sys.argv[1:]:
                 raise ValueError("models must be a list of mappings")
             overrides = mapping(provider, "modelOverrides")
             for model_id, name in models:
-                window = 180000 if model_id == "grok-4.6" else 256000
+                window = {"grok-4.6": 180000, "gpt-6-astra": 272000}.get(model_id, 256000)
                 fields = dict(contextWindow=window, maxInputTokens=window, limitTokens=window, reasoning=model_id != "grok-4.6")
                 matching = [entry for entry in entries if entry.get("id") == model_id]
                 if not matching:
                     matching = [{"id": model_id}]
                     entries.extend(matching)
+                if model_id == "gpt-6-astra":
+                    # Custom definitions replace Prime's built-ins. Keep every
+                    # Astra effort explicit; Prime's off selector sends Azure none.
+                    # Astra does not support the generic minimal effort.
+                    fields["thinkingLevelMap"] = {
+                        "off": "none", "minimal": None, "low": "low",
+                        "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max",
+                    }
                 override = mapping(overrides, model_id)
-                override.update(fields)
+                override.update(copy.deepcopy(fields))
                 for entry in matching:
                     entry.update(fields, name=f"{name} ({window // 1000}k)")
                     entry.setdefault("maxTokens", 16384)
@@ -1676,8 +1515,6 @@ configure_user() {
   install_prime_agent_skills
   configure_prime_agent_tools
   configure_prime_agent_models
-  configure_omp_models
-  configure_omp_lsp
   configure_codex
   verify_login_shell_tools
 }
@@ -1702,7 +1539,7 @@ setup_system() {
     # files in the selected account's existing agent directories.
     export HOME=/root USER=root LOGNAME=root
     unset XDG_CONFIG_HOME XDG_CACHE_HOME XDG_DATA_HOME XDG_STATE_HOME
-    unset PRIME_AGENT_CODING_AGENT_DIR PI_CODING_AGENT_DIR CODEX_HOME
+    unset PRIME_AGENT_CODING_AGENT_DIR CODEX_HOME
     install_node
     install_language_servers
     install_zellij
@@ -1711,7 +1548,6 @@ setup_system() {
     install_uv
     install_aws_cli
     install_prime_agent
-    install_oh_my_pi
     install_codex
   )
   make_zsh_default
@@ -1750,11 +1586,10 @@ main() {
   export SETUP_PROFILE SETUP_DIR
   export LAZYVIM_REPO="${LAZYVIM_REPO:-https://github.com/LazyVim/starter}"
   export PRIME_AGENT_CODING_AGENT_DIR="${PRIME_AGENT_CODING_AGENT_DIR:-$TARGET_HOME/.prime/agent}"
-  export PI_CODING_AGENT_DIR="${PI_CODING_AGENT_DIR:-$TARGET_HOME/.omp/agent}"
   export CODEX_HOME="${CODEX_HOME:-$TARGET_HOME/.codex}"
   if [ "$(id -u)" -ne 0 ]; then
     sudo -n true || { die 'passwordless sudo is required; run setup as root with --user NAME'; return 1; }
-    { declare -f; printf '\nsetup_system\n'; } | sudo -n --preserve-env=TARGET_USER,TARGET_UID,TARGET_GID,TARGET_HOME,SETUP_DIR,SETUP_PROFILE,ZELLIJ_VERSION,NODE_VERSION,NVIM_VERSION,PRIME_AGENT_VERSION,CODEGRAPH_VERSION,CODEX_VERSION,TYPESCRIPT_LANGUAGE_SERVER_VERSION,TYPESCRIPT_VERSION,PYRIGHT_VERSION,INTELEPHENSE_VERSION,VSCODE_LANGSERVERS_VERSION,BASH_LANGUAGE_SERVER_VERSION,YAML_LANGUAGE_SERVER_VERSION,JDTLS_VERSION,JDTLS_JAVA_VERSION,OMP_VERSION,LAZYVIM_REPO,PRIME_AGENT_CODING_AGENT_DIR,PI_CODING_AGENT_DIR,CODEX_HOME,AZURE_OPENAI_BASE_URL,AZURE_OPENAI_RESOURCE_NAME,AZURE_OPENAI_API_VERSION,AZURE_OPENAI_DEPLOYMENT_NAME_MAP bash -s
+    { declare -f; printf '\nsetup_system\n'; } | sudo -n --preserve-env=TARGET_USER,TARGET_UID,TARGET_GID,TARGET_HOME,SETUP_DIR,SETUP_PROFILE,ZELLIJ_VERSION,NODE_VERSION,NVIM_VERSION,PRIME_AGENT_VERSION,CODEGRAPH_VERSION,CODEX_VERSION,TYPESCRIPT_LANGUAGE_SERVER_VERSION,TYPESCRIPT_VERSION,PYRIGHT_VERSION,INTELEPHENSE_VERSION,VSCODE_LANGSERVERS_VERSION,BASH_LANGUAGE_SERVER_VERSION,YAML_LANGUAGE_SERVER_VERSION,JDTLS_VERSION,JDTLS_JAVA_VERSION,LAZYVIM_REPO,PRIME_AGENT_CODING_AGENT_DIR,CODEX_HOME,AZURE_OPENAI_BASE_URL,AZURE_OPENAI_RESOURCE_NAME,AZURE_OPENAI_API_VERSION,AZURE_OPENAI_DEPLOYMENT_NAME_MAP bash -s
   else
     setup_system
   fi

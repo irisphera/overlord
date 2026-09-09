@@ -1,6 +1,5 @@
 import json
 import os
-import stat
 import subprocess
 import tempfile
 import unittest
@@ -15,8 +14,7 @@ class LspSetupTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.home = Path(self.temp.name)
-        self.agent = self.home / ".omp/agent"
-        self.env = dict(os.environ, HOME=str(self.home), PI_CODING_AGENT_DIR=str(self.agent))
+        self.env = dict(os.environ, HOME=str(self.home))
         for name in ("JAVA_HOME", "JDTLS_HOME", "JDTLS_DATA_DIR", "JDTLS_CONFIG_DIR", "LOMBOK_JAR", "XDG_CACHE_HOME"):
             self.env.pop(name, None)
 
@@ -25,60 +23,6 @@ class LspSetupTests(unittest.TestCase):
             ["bash", "-eu", "-c", 'source "$1"; shift; ' + code, "_", str(SETUP), *map(str, args)],
             env=env or self.env, text=True, capture_output=True, timeout=15,
         )
-
-    def test_missing_config_is_private_and_rerun_preserves_customized_servers(self):
-        result = self.shell("configure_omp_lsp")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        path = self.agent / "lsp.json"
-        defaults = json.loads(path.read_text())["servers"]
-        self.assertIn("scripts/overlord_py", defaults["pyright"]["rootMarkers"])
-        self.assertNotIn(".", defaults["pyright"]["rootMarkers"])
-        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
-        original = '{"servers":{"pyright":{"disabled":true},"custom":{"command":"private-server"}}}\n'
-        path.write_text(original)
-        path.chmod(0o640)
-        result = self.shell("configure_omp_lsp")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(path.read_text(), original)
-        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o640)
-        self.assertFalse(path.with_suffix(".json.bak").exists())
-
-    def test_all_existing_variants_prevent_seeding_even_when_malformed(self):
-        self.agent.mkdir(parents=True)
-        for name in ("lsp.json", ".lsp.json", "lsp.yaml", ".lsp.yaml", "lsp.yml", ".lsp.yml"):
-            with self.subTest(name=name):
-                path = self.agent / name
-                path.write_text("not valid config: private-marker [")
-                result = self.shell("configure_omp_lsp")
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(path.read_text(), "not valid config: private-marker [")
-                self.assertEqual(set(self.agent.iterdir()), {path})
-                self.assertNotIn("private-marker", result.stdout + result.stderr)
-                path.unlink()
-
-    def test_special_files_are_preserved_without_following_or_blocking(self):
-        self.agent.mkdir(parents=True)
-        path = self.agent / ".lsp.yml"
-        path.symlink_to(self.home / "missing")
-        result = self.shell("configure_omp_lsp")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertTrue(path.is_symlink())
-        self.assertFalse((self.agent / "lsp.json").exists())
-        path.unlink()
-        os.mkfifo(path)
-        result = self.shell("configure_omp_lsp")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertTrue(stat.S_ISFIFO(path.lstat().st_mode))
-        self.assertFalse((self.agent / "lsp.json").exists())
-
-    def test_symlinked_agent_directory_is_not_written(self):
-        self.agent.parent.mkdir(parents=True)
-        outside = self.home / "outside"
-        outside.mkdir()
-        self.agent.symlink_to(outside)
-        result = self.shell("configure_omp_lsp")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(list(outside.iterdir()), [])
 
     def test_typescript_seven_pin_is_rejected_before_installation(self):
         env = dict(self.env, TYPESCRIPT_VERSION="7.0.0")

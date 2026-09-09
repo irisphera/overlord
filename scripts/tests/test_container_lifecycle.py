@@ -26,19 +26,14 @@ from overlord_py.docker_bind_sources import validate_local_endpoint
 from overlord_py.main import run_container_command, workspace_lock
 from overlord_py.state import ensure_state_dir
 
-
-
 class FakeLifecycleEngine:
     name = "docker"
 
-    def __init__(self, paths, *, omp_mounted=False, state="exited", stop_returncode=0,
-                 cp_returncode=0, cp_stderr="copy denied", rm_returncode=0, legacy=False, present=True, initialized=False):
+    def __init__(self, paths, *, state="exited", stop_returncode=0,
+                 rm_returncode=0, legacy=False, present=True, initialized=False):
         self.paths = paths
-        self.omp_mounted = omp_mounted
         self.state = state
         self.stop_returncode = stop_returncode
-        self.cp_returncode = cp_returncode
-        self.cp_stderr = cp_stderr
         self.rm_returncode = rm_returncode
         self.container_id = "verified-container-id"
         self.image_id = "sha256:verified-image-id"
@@ -70,8 +65,6 @@ class FakeLifecycleEngine:
             {"Type": "bind", "Source": str(sources.zsh_data), "Destination": "/home/overlord/.zsh_data", "RW": True},
             {"Type": "bind", "Source": str(sources.prime_agent_data), "Destination": "/home/overlord/.prime/agent", "RW": True},
         ]
-        if self.omp_mounted:
-            mounts.append({"Type": "bind", "Source": str(sources.omp_agent_data), "Destination": "/home/overlord/.omp/agent", "RW": True})
         mounts = mounts + self.extra_mounts if self.created_mounts is None else self.created_mounts
         return json.dumps([{"Id": self.container_id, "Image": self.image_id, "State": {"Status": self.state},
                             "Config": {"Labels": {ENTRYPOINT_LABEL: "1"} if self.contract else {}}, "Mounts": mounts}])
@@ -102,11 +95,6 @@ class FakeLifecycleEngine:
             if not self.stop_returncode:
                 self.state = "exited"
             return result(self.stop_returncode, stderr="stop failed" if self.stop_returncode else "")
-        if argv[0] == "cp":
-            if self.cp_returncode:
-                return result(self.cp_returncode, stderr=self.cp_stderr)
-            (Path(argv[-1]) / "rescued.txt").write_text("from-container", encoding="utf-8")
-            return result()
         if argv[0] == "rm":
             if not self.rm_returncode:
                 self.present = False
@@ -129,7 +117,6 @@ class FakeLifecycleEngine:
                         source, destination, *options = argv[index + 1].split(":")
                         self.created_mounts.append({"Type": "bind", "Source": source, "Destination": destination, "RW": "ro" not in options})
                 self.container_name = self.paths.identity.container_name
-                self.omp_mounted = True
                 self.contract = True
                 self.initialized = False
             return result(stdout=self.container_id)
@@ -176,7 +163,7 @@ class ContainerLifecycleTests(unittest.TestCase):
                 mounts = json.loads(engine._inspect_mounts())[0]["Mounts"]
                 self.assertEqual({mount["Source"] for mount in mounts}, {
                     str(paths.workspace), str(paths.state.zsh_data),
-                    str(paths.state.prime_agent_data), str(paths.state.omp_agent_data),
+                    str(paths.state.prime_agent_data),
                 })
                 self.assertEqual([(path.stat().st_mode, path.stat().st_uid, path.stat().st_gid) for path in (home, home / ".ssh", home / ".gitconfig")], before)
 
@@ -186,15 +173,16 @@ class ContainerLifecycleTests(unittest.TestCase):
             ("home/.ssh", "/home/overlord/.ssh", False),
             ("sibling", "/unrelated", False),
             ("engine.sock", "/var/run/docker.sock", True),
+            ("omp-agent-data", "/home/overlord/.omp/agent", True),
         ):
             with self.subTest(destination=destination), tempfile.TemporaryDirectory() as tmp:
                 paths = build_workspace_paths(Path(tmp), script_path=ROOT / "scripts/overlord")
                 ensure_state_dir(paths.state)
-                session = paths.state.omp_agent_data / "session.json"
+                session = paths.state.prime_agent_data / "session.json"
                 session.write_text("saved session")
                 session.chmod(0o600)
                 before = session.stat()
-                engine = FakeLifecycleEngine(paths, omp_mounted=True, state="running", initialized=True)
+                engine = FakeLifecycleEngine(paths, state="running", initialized=True)
                 old_id = engine.container_id
                 engine.extra_mounts.append({"Type": "bind", "Source": str(Path(tmp).parent / source), "Destination": destination, "RW": writable})
                 with patch("overlord_py.container_run_args.os.getuid", return_value=1000), patch("overlord_py.container_run_args.os.getgid", return_value=1000):
@@ -204,30 +192,32 @@ class ContainerLifecycleTests(unittest.TestCase):
                 self.assertEqual(session.read_text(), "saved session")
                 self.assertEqual((session.stat().st_mode, session.stat().st_uid, session.stat().st_gid), (before.st_mode, before.st_uid, before.st_gid))
                 self.assertEqual({mount["Source"] for mount in json.loads(engine._inspect_mounts())[0]["Mounts"]}, {
-                    str(paths.workspace), str(paths.state.zsh_data), str(paths.state.prime_agent_data), str(paths.state.omp_agent_data),
+                    str(paths.workspace), str(paths.state.zsh_data), str(paths.state.prime_agent_data),
                 })
 
-    def test_fresh_and_purge_rescue_legacy_state_despite_extra_access(self):
+    def test_fresh_and_purge_preserve_host_state_despite_extra_access(self):
         for command in (fresh, purge):
             with self.subTest(command=command.__name__), tempfile.TemporaryDirectory() as tmp:
                 paths = build_workspace_paths(Path(tmp), script_path=ROOT / "scripts/overlord")
-                paths.state.root.mkdir()
+                ensure_state_dir(paths.state)
+                session = paths.state.prime_agent_data / "session.json"
+                session.write_text("keep")
                 engine = FakeLifecycleEngine(paths)
                 engine.extra_mounts.append({"Type": "bind", "Source": str(Path(tmp).parent / "home"), "Destination": "/home/overlord", "RW": False})
                 command(engine, paths, env={})
                 self.assertFalse(engine.present)
-                self.assertEqual((paths.state.omp_agent_data / "rescued.txt").read_text(), "from-container")
-
+                self.assertEqual(session.read_text(), "keep")
+                self.assertFalse(any(call[0] == "cp" for call in engine.calls))
     def test_socket_access_tracks_current_opt_in_on_reuse(self):
         with tempfile.TemporaryDirectory() as tmp, socket.socket(socket.AF_UNIX) as first, socket.socket(socket.AF_UNIX) as second:
             paths = build_workspace_paths(Path(tmp), script_path=ROOT / "scripts/overlord")
             ensure_state_dir(paths.state)
-            session = paths.state.omp_agent_data / "session.json"
+            session = paths.state.prime_agent_data / "session.json"
             session.write_text("saved session")
             first_path, second_path = Path(tmp) / "first.sock", Path(tmp) / "second.sock"
             first.bind(str(first_path))
             second.bind(str(second_path))
-            engine = FakeLifecycleEngine(paths, omp_mounted=True, state="running", initialized=True)
+            engine = FakeLifecycleEngine(paths, state="running", initialized=True)
             engine.extra_mounts.append({"Type": "bind", "Source": str(first_path), "Destination": "/var/run/docker.sock", "RW": True})
             original_id = engine.container_id
             result = ensure_running(engine, paths, (), env={"HOME": tmp, "OVERLORD_ENGINE_SOCKET": str(first_path)})
@@ -264,7 +254,7 @@ class ContainerLifecycleTests(unittest.TestCase):
             paths = build_workspace_paths(Path(tmp), script_path=ROOT / "scripts/overlord")
             regular_file = Path(tmp) / "not-a-socket"
             regular_file.write_text("keep")
-            engine = FakeLifecycleEngine(paths, omp_mounted=True, state="running", initialized=True)
+            engine = FakeLifecycleEngine(paths, state="running", initialized=True)
             with self.assertRaises(RuntimeError):
                 ensure_running(engine, paths, (), env={"HOME": tmp, "OVERLORD_ENGINE_SOCKET": str(regular_file)})
             self.assertTrue(engine.present)
@@ -274,7 +264,7 @@ class ContainerLifecycleTests(unittest.TestCase):
     def test_concurrent_launchers_initialize_once_and_release_before_terminal(self):
         with tempfile.TemporaryDirectory() as tmp:
             paths = build_workspace_paths(Path(tmp), script_path=ROOT / "scripts/overlord")
-            engine = FakeLifecycleEngine(paths, omp_mounted=True, state="running")
+            engine = FakeLifecycleEngine(paths, state="running")
             terminals = Barrier(2)
             def terminal(*args):
                 terminals.wait(timeout=5)
@@ -333,7 +323,7 @@ class ContainerLifecycleTests(unittest.TestCase):
             self.assertEqual(engine.calls, [])
 
     def test_state_directory_symlinks_are_rejected_before_any_write(self):
-        for name in ("root", "zsh_data", "prime_agent_data", "omp_agent_data", "omo", "codegraph"):
+        for name in ("root", "zsh_data", "prime_agent_data", "omo", "codegraph"):
             with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
                 paths = build_workspace_paths(Path(tmp), script_path=ROOT / "scripts/overlord")
                 outside = Path(tmp) / "outside"
@@ -354,11 +344,11 @@ class ContainerLifecycleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             paths = build_workspace_paths(Path(tmp), script_path=ROOT / "scripts/overlord")
             ensure_state_dir(paths.state)
-            directories = (paths.workspace, paths.state.root, paths.state.zsh_data, paths.state.prime_agent_data, paths.state.omp_agent_data)
+            directories = (paths.workspace, paths.state.root, paths.state.zsh_data, paths.state.prime_agent_data)
             for directory in directories:
                 directory.chmod(0o700)
             before = [(directory.stat().st_mode, directory.stat().st_uid, directory.stat().st_gid) for directory in directories]
-            engine = FakeLifecycleEngine(paths, omp_mounted=True, state="exited")
+            engine = FakeLifecycleEngine(paths, state="exited")
             ensure_running(engine, paths, (), env={"HOME": tmp})
             self.assertEqual([(directory.stat().st_mode, directory.stat().st_uid, directory.stat().st_gid) for directory in directories], before)
 
@@ -390,7 +380,7 @@ class ContainerLifecycleTests(unittest.TestCase):
     def test_verified_legacy_container_is_adopted_without_setup_or_data_loss(self):
         with tempfile.TemporaryDirectory() as tmp:
             paths = build_workspace_paths(Path(tmp), script_path=ROOT / "scripts/overlord")
-            engine = FakeLifecycleEngine(paths, legacy=True, omp_mounted=True, state="running", initialized=True)
+            engine = FakeLifecycleEngine(paths, legacy=True, state="running", initialized=True)
             result = ensure_running(engine, paths, (), env={"HOME": tmp})
             self.assertEqual(result.container_id, engine.container_id)
             self.assertEqual(engine.container_name, paths.identity.container_name)
@@ -401,28 +391,19 @@ class ContainerLifecycleTests(unittest.TestCase):
         for legacy in (False, True):
             with self.subTest(legacy=legacy), tempfile.TemporaryDirectory() as tmp:
                 paths = build_workspace_paths(Path(tmp), script_path=ROOT / "scripts/overlord")
-                engine = FakeLifecycleEngine(paths, legacy=legacy, omp_mounted=True, state="running", initialized=True)
+                engine = FakeLifecycleEngine(paths, legacy=legacy, state="running", initialized=True)
                 engine.mount_workspace = Path(tmp) / "other-project"
                 with self.assertRaises(MountSafetyFailure):
                     ensure_running(engine, paths, (), env={"HOME": tmp})
                 self.assertFalse(paths.state.root.exists())
                 self.assertFalse(any(call[0] in {"exec", "start", "rename", "stop", "rm"} for call in engine.calls))
 
-    def test_legacy_missing_omp_is_rescued_before_normal_attachment(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            paths = build_workspace_paths(Path(tmp), script_path=ROOT / "scripts/overlord")
-            engine = FakeLifecycleEngine(paths, legacy=True, state="running")
-            with patch("overlord_py.container_run_args.os.getuid", return_value=1000), patch("overlord_py.container_run_args.os.getgid", return_value=1000):
-                ensure_running(engine, paths, (), env={"HOME": tmp})
-            self.assertEqual((paths.state.omp_agent_data / "rescued.txt").read_text(), "from-container")
-            self.assertTrue(engine.omp_mounted)
-            self.assertTrue(engine.initialized)
 
     def test_failed_initialization_retries_setup_and_config_before_completion(self):
         for failure in ("setup_failure", "config_failure", "discovery_failure"):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as tmp:
                 paths = build_workspace_paths(Path(tmp), script_path=ROOT / "scripts/overlord")
-                engine = FakeLifecycleEngine(paths, omp_mounted=True, state="running")
+                engine = FakeLifecycleEngine(paths, state="running")
                 setattr(engine, failure, True)
                 with self.assertRaises((LifecycleError, RuntimeError)):
                     ensure_running(engine, paths, (), env={"HOME": tmp})
@@ -437,7 +418,7 @@ class ContainerLifecycleTests(unittest.TestCase):
     def test_setup_failure_preserves_both_output_streams(self):
         with tempfile.TemporaryDirectory() as tmp:
             paths = build_workspace_paths(Path(tmp), script_path=ROOT / "scripts/overlord")
-            engine = FakeLifecycleEngine(paths, omp_mounted=True, state="running")
+            engine = FakeLifecycleEngine(paths, state="running")
             engine.setup_failure = True
             with self.assertRaises(LifecycleError) as failure:
                 ensure_running(engine, paths, (), env={"HOME": tmp})
@@ -448,7 +429,7 @@ class ContainerLifecycleTests(unittest.TestCase):
     def test_entrypoint_readiness_precedes_setup(self):
         with tempfile.TemporaryDirectory() as tmp:
             paths = build_workspace_paths(Path(tmp), script_path=ROOT / "scripts/overlord")
-            engine = FakeLifecycleEngine(paths, omp_mounted=True, state="running")
+            engine = FakeLifecycleEngine(paths, state="running")
             engine.ready_after = 2
             def while_waiting(_):
                 self.assertEqual(engine.setup_count, 0)
@@ -461,7 +442,7 @@ class ContainerLifecycleTests(unittest.TestCase):
         for list_failure in (False, True):
             with self.subTest(list_failure=list_failure), tempfile.TemporaryDirectory() as tmp:
                 paths = build_workspace_paths(Path(tmp), script_path=ROOT / "scripts/overlord")
-                engine = FakeLifecycleEngine(paths, omp_mounted=True)
+                engine = FakeLifecycleEngine(paths)
                 engine.inspect_failure = True
                 engine.list_failure = list_failure
                 with self.assertRaises(LifecycleError), workspace_lock(paths.workspace):
@@ -491,164 +472,74 @@ class ContainerLifecycleTests(unittest.TestCase):
                     purge(engine, paths, env={})
                 self.assertTrue(engine.image_present)
 
-    def test_promotion_failure_rolls_back_existing_omp_state(self):
-        from overlord_py.container_lifecycle import _promote_omp_agent_data
-        with tempfile.TemporaryDirectory() as tmp:
-            destination = Path(tmp) / "omp-agent-data"
-            destination.mkdir()
-            (destination / "session").write_text("preserve")
-            rescued = Path(tmp) / "rescued"
-            rescued.mkdir()
-            with patch.object(Path, "replace", side_effect=OSError("promotion denied")):
-                with self.assertRaises(LifecycleError):
-                    _promote_omp_agent_data(rescued, destination)
-            self.assertEqual((destination / "session").read_text(), "preserve")
-
-    def test_fresh_rescues_unmounted_omp_state_before_removal(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            paths = build_workspace_paths(Path(tmp), script_path=ROOT / "scripts" / "overlord")
-            paths.state.root.mkdir()
-            engine = FakeLifecycleEngine(paths)
-
-            fresh(engine, paths, env={})
-
-            stop_index = engine.calls.index(["stop", engine.container_id])
-            cp_index = next(index for index, call in enumerate(engine.calls) if call[0] == "cp")
-            self.assertLess(stop_index, cp_index)
-            self.assertEqual((paths.state.omp_agent_data / "rescued.txt").read_text(), "from-container")
-            self.assertLess(cp_index, engine.calls.index(["rm", engine.container_id]))
-
-    def test_purge_rescues_stopped_legacy_container_before_image_removal(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            paths = build_workspace_paths(Path(tmp), script_path=ROOT / "scripts" / "overlord")
-            paths.state.root.mkdir()
-            engine = FakeLifecycleEngine(paths, state="exited")
-
-            purge(engine, paths, env={})
-
-            cp_index = next(index for index, call in enumerate(engine.calls) if call[0] == "cp")
-            self.assertLess(cp_index, next(index for index, call in enumerate(engine.calls) if call[0] == "rm"))
-            self.assertLess(next(index for index, call in enumerate(engine.calls) if call[0] == "rm"), next(index for index, call in enumerate(engine.calls) if call[0] == "rmi"))
-
-    def test_absent_omp_source_allows_removal_and_recreation_without_replacing_host_state(self):
-        source = "/home/overlord/.omp/agent/."
-        container_id = "verified-container-id"
-        diagnostics = (
-            ("podman", 125, f'Error: "{source}" could not be found on container {container_id}: no such file or directory'),
-            ("docker", 1, f"Error response from daemon: Could not find the file {source} in container {container_id}"),
-        )
-        for engine_name, status, diagnostic in diagnostics:
-            for command in (fresh, purge, ensure_running):
-                with self.subTest(engine=engine_name, command=command.__name__), tempfile.TemporaryDirectory() as tmp:
+    def test_obsolete_agent_bind_is_removed_without_touching_old_host_data(self):
+        for command in (fresh, purge, ensure_running):
+            for legacy in (False, True):
+                with self.subTest(command=command.__name__, legacy=legacy), tempfile.TemporaryDirectory() as tmp:
                     paths = build_workspace_paths(Path(tmp), script_path=ROOT / "scripts/overlord")
                     ensure_state_dir(paths.state)
-                    marker = paths.state.omp_agent_data / "session.txt"
-                    marker.write_text("keep-existing-session")
-                    engine = FakeLifecycleEngine(paths, legacy=True, cp_returncode=status, cp_stderr=diagnostic)
-                    engine.name = engine_name
-
+                    old_state = paths.state.root / "omp-agent-data"
+                    old_state.mkdir(mode=0o700)
+                    session = old_state / "session.json"
+                    session.write_text("old session")
+                    session.chmod(0o600)
+                    backup = paths.state.root / ".omp-agent-data-backup-old"
+                    backup.mkdir()
+                    (backup / "saved").write_text("old backup")
+                    before = [(path.stat().st_ino, path.stat().st_mode, path.stat().st_uid, path.stat().st_gid) for path in (old_state, session)]
+                    engine = FakeLifecycleEngine(paths, legacy=legacy, state="running", initialized=True)
+                    old_id = engine.container_id
+                    engine.extra_mounts.append({"Type": "bind", "Source": str(old_state), "Destination": "/home/overlord/.omp/agent", "RW": True})
                     with patch("overlord_py.container_run_args.os.getuid", return_value=1000), patch("overlord_py.container_run_args.os.getgid", return_value=1000):
                         if command is ensure_running:
                             command(engine, paths, (), env={"HOME": tmp})
+                            self.assertNotEqual(engine.container_id, old_id)
+                            self.assertTrue(engine.initialized)
+                            self.assertEqual(len(engine.created_mounts), 3)
                         else:
-                            command(engine, paths, env={"HOME": tmp})
+                            command(engine, paths, env={})
+                            self.assertFalse(engine.present)
+                    self.assertFalse(any(call[0] in {"exec", "start", "cp"} and old_id in call for call in engine.calls))
+                    self.assertFalse(any(call[0] == "cp" for call in engine.calls))
+                    self.assertLess(engine.calls.index(["stop", old_id]), engine.calls.index(["rm", old_id]))
+                    self.assertEqual(session.read_text(), "old session")
+                    self.assertEqual((backup / "saved").read_text(), "old backup")
+                    self.assertEqual([(path.stat().st_ino, path.stat().st_mode, path.stat().st_uid, path.stat().st_gid) for path in (old_state, session)], before)
 
-                    self.assertEqual(marker.read_text(), "keep-existing-session")
-                    self.assertEqual(tuple(paths.state.root.glob(".omp-agent-data-*")), ())
-                    if command is ensure_running:
-                        self.assertNotEqual(engine.container_id, container_id)
-                        self.assertTrue(engine.initialized)
-                        self.assertTrue(engine.omp_mounted)
-                    else:
-                        self.assertFalse(engine.present)
-                        if command is purge:
-                            self.assertFalse(engine.image_present)
-
-    def test_ambiguous_missing_copy_errors_still_block_deletion(self):
-        source = "/home/overlord/.omp/agent/."
-        for diagnostic in (
-            "no such file or directory",
-            f'Error: "{source}/sessions" could not be found on container verified-container-id: no such file or directory',
-            f'Error: "{source}" could not be found on container other-container: no such file or directory',
-            f'Error: "{source}" could not be found on container verified-container-id: permission denied',
-            f'Error: "{source}" could not be found on container verified-container-id: no such file or directory\ncopy interrupted',
-        ):
-            with self.subTest(diagnostic=diagnostic), tempfile.TemporaryDirectory() as tmp:
+    def test_obsolete_host_state_is_not_validated_or_followed(self):
+        for command in (fresh, purge, ensure_running):
+            with self.subTest(command=command.__name__), tempfile.TemporaryDirectory() as tmp:
                 paths = build_workspace_paths(Path(tmp), script_path=ROOT / "scripts/overlord")
-                engine = FakeLifecycleEngine(paths, cp_returncode=125, cp_stderr=diagnostic)
-                engine.name = "podman"
-                with self.assertRaises(LifecycleError):
-                    purge(engine, paths, env={})
-                self.assertTrue(engine.present)
-                self.assertTrue(engine.image_present)
+                ensure_state_dir(paths.state)
+                outside = Path(tmp) / "outside"
+                outside.mkdir()
+                marker = outside / "session"
+                marker.write_text("untouched")
+                old_state = paths.state.root / "omp-agent-data"
+                old_state.symlink_to(outside, target_is_directory=True)
+                engine = FakeLifecycleEngine(paths, state="running", initialized=True)
+                if command is ensure_running:
+                    command(engine, paths, (), env={"HOME": tmp})
+                else:
+                    command(engine, paths, env={})
+                self.assertTrue(old_state.is_symlink())
+                self.assertEqual(marker.read_text(), "untouched")
+                self.assertFalse(any(call[0] == "cp" for call in engine.calls))
 
-    def test_missing_source_error_after_partial_copy_blocks_deletion(self):
-        class PartialCopyEngine(FakeLifecycleEngine):
-            def run(self, args, **kwargs):
-                result = super().run(args, **kwargs)
-                if args[0] == "cp":
-                    (Path(args[-1]) / "partial-session").write_text("incomplete")
-                return result
+    def test_unsafe_managed_state_blocks_removal_before_stop(self):
+        for command in (fresh, purge):
+            with self.subTest(command=command.__name__), tempfile.TemporaryDirectory() as tmp:
+                paths = build_workspace_paths(Path(tmp), script_path=ROOT / "scripts/overlord")
+                paths.state.root.mkdir()
+                outside = Path(tmp) / "outside"
+                outside.mkdir()
+                paths.state.prime_agent_data.symlink_to(outside, target_is_directory=True)
+                engine = FakeLifecycleEngine(paths)
+                with self.assertRaises(ManagedStateError):
+                    command(engine, paths, env={})
+                self.assertFalse(any(call[0] in {"stop", "rm", "rmi"} for call in engine.calls))
 
-        with tempfile.TemporaryDirectory() as tmp:
-            paths = build_workspace_paths(Path(tmp), script_path=ROOT / "scripts/overlord")
-            engine = PartialCopyEngine(paths, cp_returncode=125, cp_stderr='Error: "/home/overlord/.omp/agent/." could not be found on container verified-container-id: no such file or directory')
-            engine.name = "podman"
-            with self.assertRaises(LifecycleError):
-                purge(engine, paths, env={})
-            self.assertTrue(engine.present)
-            self.assertTrue(engine.image_present)
-
-    def test_copy_failure_preserves_container_and_blocks_purge_image_removal(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            paths = build_workspace_paths(Path(tmp), script_path=ROOT / "scripts" / "overlord")
-            paths.state.root.mkdir()
-            destination = paths.state.omp_agent_data
-            destination.mkdir()
-            marker = destination / "old.txt"
-            marker.write_text("keep", encoding="utf-8")
-            engine = FakeLifecycleEngine(paths, cp_returncode=1)
-
-            with self.assertRaises(LifecycleError):
-                purge(engine, paths, env={})
-
-            self.assertEqual(marker.read_text(), "keep")
-            self.assertFalse(any(call[0] == "rm" for call in engine.calls))
-            self.assertFalse(any(call[0] == "rmi" for call in engine.calls))
-
-    def test_existing_omp_destination_is_preserved_in_backup_before_promotion(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            paths = build_workspace_paths(Path(tmp), script_path=ROOT / "scripts" / "overlord")
-            paths.state.root.mkdir()
-            destination = paths.state.omp_agent_data
-            destination.mkdir()
-            (destination / "old.txt").write_text("keep", encoding="utf-8")
-            engine = FakeLifecycleEngine(paths)
-
-            fresh(engine, paths, env={})
-
-            backups = tuple(paths.state.root.glob(".omp-agent-data-backup-*"))
-            self.assertEqual(len(backups), 1)
-            self.assertEqual((backups[0] / "old.txt").read_text(encoding="utf-8"), "keep")
-            self.assertEqual((paths.state.omp_agent_data / "rescued.txt").read_text(encoding="utf-8"), "from-container")
-
-    def test_mounted_omp_state_is_not_copied_or_replaced(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            paths = build_workspace_paths(Path(tmp), script_path=ROOT / "scripts" / "overlord")
-            paths.state.root.mkdir()
-            destination = paths.state.omp_agent_data
-            destination.mkdir()
-            marker = destination / "mounted.txt"
-            marker.write_text("untouched", encoding="utf-8")
-            engine = FakeLifecycleEngine(paths, omp_mounted=True, cp_returncode=1)
-
-            fresh(engine, paths, env={})
-
-            self.assertEqual(marker.read_text(encoding="utf-8"), "untouched")
-            self.assertFalse(any(call[0] == "cp" for call in engine.calls))
-            self.assertEqual(tuple(paths.state.root.glob(".omp-agent-data-backup-*")), ())
-
-    def test_stop_failure_blocks_omp_rescue_and_container_removal(self):
+    def test_stop_failure_blocks_container_removal(self):
         with tempfile.TemporaryDirectory() as tmp:
             paths = build_workspace_paths(Path(tmp), script_path=ROOT / "scripts" / "overlord")
             paths.state.root.mkdir()
@@ -684,28 +575,13 @@ class ContainerLifecycleTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             paths = build_workspace_paths(Path(tmp), script_path=ROOT / "scripts/overlord")
-            engine = SharedImageEngine(paths, omp_mounted=True)
+            engine = SharedImageEngine(paths)
             engine.workspace_alias = f"localhost/{paths.identity.image_name}:latest"
             other_alias = "localhost/overlord-other-workspace:latest"
             engine.aliases = {engine.workspace_alias, other_alias}
             purge(engine, paths, env={})
             self.assertFalse(engine.present)
             self.assertEqual(engine.aliases, {other_alias})
-
-    def test_unsafe_omp_destination_is_rejected_before_stop(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            paths = build_workspace_paths(Path(tmp), script_path=ROOT / "scripts" / "overlord")
-            paths.state.root.mkdir()
-            outside = Path(tmp) / "outside"
-            outside.mkdir()
-            paths.state.omp_agent_data.symlink_to(outside, target_is_directory=True)
-            engine = FakeLifecycleEngine(paths)
-
-            with self.assertRaises(ManagedStateError):
-                fresh(engine, paths, env={})
-
-            self.assertFalse(any(call[0] == "stop" for call in engine.calls))
-
 
 if __name__ == "__main__":
     unittest.main()

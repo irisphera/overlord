@@ -145,6 +145,12 @@
           "maxInputTokens": 256000,
           "reasoning": true
         },
+        "deepseek-flash": {
+          "contextWindow": 256000,
+          "limitTokens": 256000,
+          "maxInputTokens": 256000,
+          "reasoning": true
+        },
         "gpt-5.6-luna": {
           "contextWindow": 256000,
           "limitTokens": 256000,
@@ -196,6 +202,15 @@
           "thinkingLevelMap": {
             "max": "max"
           }
+        },
+        {
+          "contextWindow": 256000,
+          "id": "deepseek-flash",
+          "limitTokens": 256000,
+          "maxInputTokens": 256000,
+          "maxTokens": 16384,
+          "name": "DeepSeek Flash (256k)",
+          "reasoning": true
         }
       ]
     }

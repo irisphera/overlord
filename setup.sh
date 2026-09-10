@@ -1316,9 +1316,11 @@ for raw_path in sys.argv[1:]:
             servers.pop("runpod-docs", None)
 
         # Remove stale picker entries and migrate legacy model IDs to the current
-        # configured versions. OpenCode has no configured models in this setup.
+        # configured versions. DeepSeek Flash is the default opencode-go model (256k).
         muse_spark_model = "muse-spark-1.3-contributor"
         gemini_model = "gemini-3.8-flash"
+        deepseek_model = "deepseek-flash"
+        retired_deepseek_model = "deepseek-v4.1-flash"
 
         def normalize_muse_spark_model(model):
             if not isinstance(model, str):
@@ -1348,8 +1350,16 @@ for raw_path in sys.argv[1:]:
                     return f"{provider}/{normalized}" if separator else normalized
             return model
 
+        def normalize_deepseek_model(model):
+            if not isinstance(model, str):
+                return model
+            provider, separator, model_id = model.rpartition("/")
+            if model_id == retired_deepseek_model:
+                return f"{provider}/{deepseek_model}" if separator else deepseek_model
+            return model
+
         def normalize_model(model):
-            return normalize_gemini_model(normalize_muse_spark_model(model))
+            return normalize_deepseek_model(normalize_gemini_model(normalize_muse_spark_model(model)))
 
         recent_models = settings.get("recentModels")
         if isinstance(recent_models, list):
@@ -1371,6 +1381,8 @@ for raw_path in sys.argv[1:]:
                 default_model = muse_spark_model
             elif raw_model_id.startswith("gemini-3.") and raw_model_id.endswith("-flash"):
                 _, _, default_model = default_model.rpartition("/")
+            elif raw_model_id == retired_deepseek_model:
+                default_model = deepseek_model
         if default_model is not None:
             settings["defaultModel"] = default_model
         if settings.get("defaultProvider") == "opencode":
@@ -1378,9 +1390,29 @@ for raw_path in sys.argv[1:]:
                 settings["defaultProvider"] = "opencode-go"
             elif default_model == muse_spark_model:
                 settings["defaultProvider"] = "opencode-go"
+            elif isinstance(default_model, str) and default_model.rpartition("/")[2] == deepseek_model:
+                settings["defaultProvider"] = "opencode-go"
             else:
                 settings.pop("defaultProvider", None)
                 settings.pop("defaultModel", None)
+        # DeepSeek Flash is the default opencode-go model. Fresh installs get it;
+        # re-runs migrate previous managed opencode-go defaults to it. Custom selections stay.
+        _, _, _default_id = default_model.rpartition("/") if isinstance(default_model, str) else ("", "", "")
+        if raw_default_model is None or (isinstance(raw_default_model, str) and raw_default_model.strip() == ""):
+            settings["defaultModel"] = deepseek_model
+            settings["defaultProvider"] = "opencode-go"
+        elif _default_id in ("gpt-5.6-luna", muse_spark_model, retired_deepseek_model):
+            settings["defaultModel"] = deepseek_model
+            if settings.get("defaultProvider") in ("opencode", "opencode-go"):
+                settings["defaultProvider"] = "opencode-go"
+        if isinstance(settings.get("defaultModel"), str) and settings["defaultModel"].rpartition("/")[2] == deepseek_model:
+            if settings.get("defaultProvider") in (None, "", "opencode", "opencode-go"):
+                settings["defaultProvider"] = "opencode-go"
+            recent = settings.get("recentModels")
+            if isinstance(recent, list):
+                deepseek_recent = f"opencode-go/{deepseek_model}"
+                if deepseek_recent not in recent:
+                    settings["recentModels"] = [deepseek_recent] + recent
 
         if before != json.dumps(settings, sort_keys=True):
             write_file(path, original, json.dumps(settings, indent=2, sort_keys=True) + "\n")
@@ -1440,7 +1472,7 @@ desired = {
         ("grok-4.6", "Grok 4.6"), ("gpt-6-astra", "GPT-6 Astra"),
     ],
     "google-vertex": [("gemini-3.8-flash", "Gemini 3.8 Flash")],
-    "opencode-go": [("gpt-5.6-luna", "GPT-5.6 Luna"), ("muse-spark-1.3-contributor", "Muse Spark 1.3 Contributor")],
+    "opencode-go": [("gpt-5.6-luna", "GPT-5.6 Luna"), ("muse-spark-1.3-contributor", "Muse Spark 1.3 Contributor"), ("deepseek-flash", "DeepSeek Flash")],
 }
 
 for raw in sys.argv[1:]:
@@ -1487,6 +1519,18 @@ for raw in sys.argv[1:]:
                         entry["baseUrl"] = base or entry.get("baseUrl") or "https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1"
                     if provider_id == "google-vertex":
                         entry.setdefault("input", ["text", "image"])
+            # Retired DeepSeek ID from the short-lived v4.1 config; the API serves deepseek-flash.
+            retired = "deepseek-v4.1-flash"
+            managed = mapping(providers, "opencode-go")
+            managed_entries = managed.get("models")
+            if isinstance(managed_entries, list):
+                managed["models"] = [
+                    entry for entry in managed_entries
+                    if not (isinstance(entry, dict) and entry.get("id") == retired)
+                ]
+            managed_overrides = managed.get("modelOverrides")
+            if isinstance(managed_overrides, dict):
+                managed_overrides.pop(retired, None)
         if before != data:
             write_file(path, original, json.dumps(data, indent=2, sort_keys=True) + "\n")
     except (OSError, UnicodeError, ValueError, TypeError) as error:

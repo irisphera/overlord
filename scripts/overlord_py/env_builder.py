@@ -30,6 +30,11 @@ AZURE_LEGACY_ENV_ALIASES: Final = {
 # key explicitly because the container only mounts persisted agent state, not the
 # host's ~/.prime/agent/auth.json.
 OPENCODE_ENV_VARS: Final = ("OPENCODE_API_KEY",)
+# Console Go requires x-opencode-session on every request (HTTP 400 when missing).
+# prime-agent resolves the models.json header from this variable; forwarding a
+# host-set value keeps container traffic on the user's own session ID, otherwise
+# the configured command synthesizes a stable per-workspace ID inside.
+OPENCODE_SESSION_ENV_VAR: Final = "OPENCODE_SESSION_ID"
 
 @dataclass(frozen=True, slots=True)
 class EnvironmentPlan:
@@ -87,6 +92,7 @@ def append_opencode_env(target: list[str], source: Mapping[str, str]) -> None:
     """Forward the shared OpenCode API key used by opencode and opencode-go."""
     for name in OPENCODE_ENV_VARS:
         append_present(target, source, name)
+    append_present(target, source, OPENCODE_SESSION_ENV_VAR)
 
 
 def env_flags(values: list[str] | tuple[str, ...]) -> tuple[str, ...]:

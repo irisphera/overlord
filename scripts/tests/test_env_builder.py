@@ -18,6 +18,26 @@ class EnvironmentBuilderTests(unittest.TestCase):
         self.assertIn("OPENCODE_API_KEY=test-key", plan.exec_env_values)
         self.assertIn("OPENCODE_API_KEY=test-key", plan.exec_env_flags)
 
+    def test_forwards_opencode_session_id_to_container(self):
+        plan = build_environment_plan(
+            {"OPENCODE_SESSION_ID": "session-123"},
+            home=Path("/tmp/home"),
+            workspace_name="workspace",
+        )
+
+        self.assertIn("OPENCODE_SESSION_ID=session-123", plan.exec_env_values)
+        self.assertIn("OPENCODE_SESSION_ID=session-123", plan.exec_env_flags)
+
+    def test_omits_empty_opencode_session_id(self):
+        plan = build_environment_plan(
+            {"OPENCODE_SESSION_ID": ""},
+            home=Path("/tmp/home"),
+            workspace_name="workspace",
+        )
+
+        self.assertNotIn("OPENCODE_SESSION_ID=", plan.exec_env_values)
+        self.assertNotIn("OPENCODE_SESSION_ID=", plan.exec_env_flags)
+
     def test_omits_empty_opencode_key(self):
         plan = build_environment_plan(
             {"OPENCODE_API_KEY": ""},

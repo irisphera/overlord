@@ -1515,10 +1515,25 @@ for raw in sys.argv[1:]:
                     if model_id in ("gpt-5.6-luna", "muse-spark-1.3-contributor"):
                         mapping(entry, "thinkingLevelMap")["max"] = "max"
                         mapping(override, "thinkingLevelMap")["max"] = "max"
+                    if model_id == "deepseek-flash":
+                        # Gateway accepts none/minimal/low/medium/high/xhigh/max (probed 2026-09-10).
+                        for level in ("off", "minimal", "low", "medium", "high", "xhigh", "max"):
+                            value = "none" if level == "off" else level
+                            mapping(entry, "thinkingLevelMap")[level] = value
+                            mapping(override, "thinkingLevelMap")[level] = value
                     if provider_id == "azure-openai-responses":
                         entry["baseUrl"] = base or entry.get("baseUrl") or "https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1"
                     if provider_id == "google-vertex":
                         entry.setdefault("input", ["text", "image"])
+            if provider_id == "opencode-go":
+                # Console Go rejects requests without x-opencode-session (HTTP 400).
+                # Prime resolves the value from the environment when set, else runs
+                # the command (cached per process): explicit override, per-workspace
+                # ID in containers (OVERLORD_WORKSPACE), per-host ID elsewhere.
+                mapping(provider, "headers").setdefault(
+                    "x-opencode-session",
+                    "!echo ${OPENCODE_SESSION_ID:-${OVERLORD_WORKSPACE:-$(hostname)}} | tr -cs 'A-Za-z0-9_.-' '-'",
+                )
             # Retired DeepSeek ID from the short-lived v4.1 config; the API serves deepseek-flash.
             retired = "deepseek-v4.1-flash"
             managed = mapping(providers, "opencode-go")

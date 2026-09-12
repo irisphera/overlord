@@ -98,14 +98,20 @@ Host Prime models seed a missing workspace models file without changing the host
 - Installs a root-owned Node.js 24 distribution, `uv`, and AWS CLI v2
 - Installs `prime-agent` and Codex CLI (`codex`) with Azure model support
 - Installs the language servers described above
-- Installs shared Prime skills from `mattpocock/skills`, `aws/agent-toolkit-for-aws`, and `cursor/plugins`, plus the AWS setup skill and Context7 routing skill, for the selected account. Context7 MCP is configured for Prime.
-- Enables bundled web search (Serper login remains a one-time user step)
+- Installs a curated Prime skill set for the selected account: `setup-matt-pocock-skills`, `grill-me`, `grill-with-docs`, `grilling`, and `domain-modeling` from `mattpocock/skills`, plus `thermos`, `thermo-nuclear-review`, and `thermo-nuclear-code-quality-review` from `cursor/plugins`, next to the CodeGraph and Context7 routing skills. Whole skill collections are not installed; the list lives in `install_prime_agent_skills`. Context7 MCP is configured for Prime.
+- Prompts for optional Context7 and Serper API keys when setup runs on a terminal, and reads `CONTEXT7_API_KEY` / `SERPER_API_KEY` otherwise, so headless runs never block. Keys are stored in the agent directory: `auth.json` for the bundled web search skill, and the Context7 MCP header in `settings.json`. Existing values are kept and key values are never printed; without a stored key Serper still supports `prime-agent` `/login`
 - Installs `oh-my-zsh` unattended
 - Clones `zsh-autosuggestions`, `zsh-syntax-highlighting`, `zsh-completions`, `zsh-autocomplete` and wires `~/.zshrc`
 - Clones `LazyVim/starter` to `~/.config/nvim` if not present and does a best-effort `nvim --headless "+Lazy! sync"`
 - Sets `zsh` as default shell via `chsh` (non-interactive)
 
-Rerunning `setup.sh` is safe.
+To add or replace the Context7 and Serper keys later without a full rerun, run from a terminal:
+
+```bash
+bash -c 'source ~/overlord/setup.sh; TARGET_HOME="$HOME" PRIME_AGENT_CODING_AGENT_DIR="$HOME/.prime/agent" configure_prime_agent_api_keys'
+```
+
+Rerunning `setup.sh` is safe. Setup never deletes skills: remove any installed by an earlier version with `npx skills remove --global <name>`.
 
 ## Container details
 

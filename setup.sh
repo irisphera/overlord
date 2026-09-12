@@ -953,11 +953,85 @@ python_config() {
 
 config_python_helpers() {
   cat <<'PY_HELPERS'
+import json
 import os
 import stat
 import sys
 import tempfile
 from pathlib import Path
+
+def parse_jsonc(text):
+    """Parse JSON with comments and trailing commas, as Prime Agent writes it."""
+    cleaned = []
+    i = 0
+    in_string = False
+    escaped = False
+    while i < len(text):
+        ch = text[i]
+        if in_string:
+            cleaned.append(ch)
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            i += 1
+            continue
+        if ch == '"':
+            in_string = True
+            cleaned.append(ch)
+            i += 1
+            continue
+        if ch == "/" and i + 1 < len(text) and text[i + 1] == "/":
+            i += 2
+            while i < len(text) and text[i] not in "\r\n":
+                i += 1
+            continue
+        if ch == "/" and i + 1 < len(text) and text[i + 1] == "*":
+            i += 2
+            while i + 1 < len(text) and text[i : i + 2] != "*/":
+                i += 1
+            i += 2
+            continue
+        cleaned.append(ch)
+        i += 1
+
+    text = "".join(cleaned)
+    result = []
+    i = 0
+    in_string = False
+    escaped = False
+    while i < len(text):
+        ch = text[i]
+        if in_string:
+            result.append(ch)
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            i += 1
+            continue
+        if ch == '"':
+            in_string = True
+            result.append(ch)
+            i += 1
+            continue
+        if ch == ",":
+            j = i + 1
+            while j < len(text) and text[j].isspace():
+                j += 1
+            if j < len(text) and text[j] in "}]":
+                i += 1
+                continue
+        result.append(ch)
+        i += 1
+    parsed = json.loads("".join(result))
+    if not isinstance(parsed, dict):
+        raise ValueError("settings root must be an object")
+    return parsed
 
 def ensure_directory(path):
     path = Path(path).absolute()
@@ -1153,21 +1227,36 @@ for raw in sys.argv[1:]:
 PYEOF_CODEX
 }
 
+install_skills_from_source() {
+  local source="$1"
+  shift
+  if npx --yes skills add "$source" "$@" --global --agent pi --yes --copy --full-depth \
+    2>&1 | sed "s|^|[skills:$source] |"; then
+    info "installed skills from $source"
+  else
+    warn "failed to install skills from $source"
+  fi
+}
+
 install_prime_agent_skills() {
   if ! command -v npx >/dev/null 2>&1; then
     warn "npx unavailable; skipping Prime Agent skill installation"
     return 0
   fi
   info "installing shared skills for Prime Agent..."
-  local skill_source
-  for skill_source in mattpocock/skills aws/agent-toolkit-for-aws cursor/plugins; do
-    if npx --yes skills add "$skill_source" --global --agent pi --yes --copy --full-depth \
-      2>&1 | sed "s|^|[skills:$skill_source] |"; then
-      info "installed skills from $skill_source"
-    else
-      warn "failed to install skills from $skill_source"
-    fi
-  done
+  # Curated set: the upstream collections are large and every installed skill
+  # costs prompt surface, so install only the skills this setup uses.
+  # grill-me and grill-with-docs delegate to grilling and domain-modeling.
+  install_skills_from_source mattpocock/skills \
+    --skill setup-matt-pocock-skills \
+    --skill grill-me \
+    --skill grill-with-docs \
+    --skill grilling \
+    --skill domain-modeling
+  install_skills_from_source cursor/plugins \
+    --skill thermos \
+    --skill thermo-nuclear-review \
+    --skill thermo-nuclear-code-quality-review
 
   # The skills CLI targets Pi; copy assets into the selected harness directories.
   local pi_skills="$HOME/.pi/agent/skills"
@@ -1181,31 +1270,159 @@ install_prime_agent_skills() {
   else
     warn "Pi skills directory was not created: $pi_skills"
   fi
+}
 
-  # The AWS setup URL is an interactive workflow, not a skills CLI package.
-  # Install it as a local skill so each harness can guide login/profile setup later.
-  local aws_setup_url="https://raw.githubusercontent.com/aws/agent-toolkit-for-aws/refs/heads/main/setup-instructions/setup.md"
-  local aws_setup_tmp
-  aws_setup_tmp="$(mktemp)"
-  if curl -fsSL "$aws_setup_url" -o "$aws_setup_tmp"; then
-    local skill_dir
-      for agent_skills in "$pi_skills" "$PRIME_AGENT_CODING_AGENT_DIR/skills"; do
-        skill_dir="$agent_skills/aws-agent-toolkit-setup"
-        mkdir -p "$skill_dir"
-        {
-          printf '%s\n' '---'
-          printf '%s\n' 'name: aws-agent-toolkit-setup'
-          printf '%s\n' 'description: Guide interactive AWS login, profile, region, Agent Toolkit, MCP, and AWS skill setup.'
-          printf '%s\n' '---' ''
-          printf 'Upstream instructions: %s\n\n' "$aws_setup_url"
-          cat "$aws_setup_tmp"
-        } > "$skill_dir/SKILL.md"
-      done
-    info "installed AWS Agent Toolkit setup skill"
-  else
-    warn "failed to download AWS Agent Toolkit setup instructions"
+# --- optional Prime Agent integration keys ---
+
+# Read one secret from the controlling terminal, hidden. Prints the value, or
+# nothing when no terminal is attached.
+read_agent_secret() {
+  local prompt="$1" value="" tty_fd
+  # A controlling terminal is not guaranteed even when /dev/tty exists.
+  if ! exec {tty_fd}<>/dev/tty 2>/dev/null; then
+    return 1
   fi
-  rm -f "$aws_setup_tmp"
+  printf '%s' "$prompt" >&"$tty_fd" || true
+  IFS= read -r -s value <&"$tty_fd" || value=""
+  printf '\n' >&"$tty_fd" || true
+  exec {tty_fd}>&-
+  printf '%s' "$value"
+}
+
+# Report which optional integration keys are already stored in the agent dir.
+prime_agent_key_status() {
+  python_config "$1" "$2" <<'PY'
+import sys
+from pathlib import Path
+
+def load(path):
+    original = read_text(path)
+    if original is None or not original.strip():
+        return {}
+    try:
+        return parse_jsonc(original)
+    except Exception:
+        return {}
+
+auth = load(Path(sys.argv[1]))
+settings = load(Path(sys.argv[2]))
+credential = auth.get("serper")
+serper = isinstance(credential, dict) and credential.get("type") == "api_key" and bool(str(credential.get("key") or "").strip())
+servers = settings.get("mcpServers")
+context7 = servers.get("context7") if isinstance(servers, dict) and isinstance(servers.get("context7"), dict) else {}
+headers = context7.get("headers") if isinstance(context7.get("headers"), dict) else {}
+context7_stored = bool(str(headers.get("CONTEXT7_API_KEY") or "").strip())
+print(f"context7={'stored' if context7_stored else 'missing'}")
+print(f"serper={'stored' if serper else 'missing'}")
+PY
+}
+
+# Prompt for the optional Context7 and Serper keys and store them for Prime
+# Agent: the Serper credential it reads for the bundled websearch skill, and the
+# header it sends to the Context7 MCP server. CONTEXT7_API_KEY and SERPER_API_KEY
+# win over a prompt, so headless setups (container initialization, CI) never
+# block. Prompts read the controlling terminal and a blank answer keeps the
+# stored key.
+configure_prime_agent_api_keys() {
+  local agent_dir="${PRIME_AGENT_CODING_AGENT_DIR:-$TARGET_HOME/.prime/agent}"
+  local auth_path="$agent_dir/auth.json"
+  local settings_path="$agent_dir/settings.json"
+  local context7_key="${CONTEXT7_API_KEY:-}"
+  local serper_key="${SERPER_API_KEY:-}"
+  local stored_context7=missing stored_serper=missing
+  local stored label
+
+  stored="$(prime_agent_key_status "$auth_path" "$settings_path")"
+  case "$stored" in *context7=stored*) stored_context7=stored ;; esac
+  case "$stored" in *serper=stored*) stored_serper=stored ;; esac
+
+  # Prompt only when setup talks to a terminal. Container initialization runs
+  # without one and must not block.
+  if [ -r /dev/tty ] && { [ -t 1 ] || [ -t 2 ]; }; then
+    if [ -z "$context7_key" ]; then
+      label='[blank to skip]'
+      if [ "$stored_context7" = stored ]; then label='[Enter keeps the stored key]'; fi
+      context7_key="$(read_agent_secret "Context7 API key (https://context7.com/dashboard) $label: " || true)"
+    fi
+    if [ -z "$serper_key" ]; then
+      label='[blank to skip]'
+      if [ "$stored_serper" = stored ]; then label='[Enter keeps the stored key]'; fi
+      serper_key="$(read_agent_secret "Serper API key (https://serper.dev) $label: " || true)"
+    fi
+  fi
+
+  context7_key="${context7_key//$'\n'/}"
+  serper_key="${serper_key//$'\n'/}"
+  case "$context7_key" in
+    ""|ctx7sk*) ;;
+    *) warn "Context7 API keys normally start with 'ctx7sk'" ;;
+  esac
+
+  if [ -z "$context7_key" ] && [ -z "$serper_key" ]; then
+    local missing_keys=''
+    if [ "$stored_context7" = missing ]; then missing_keys='Context7'; fi
+    if [ "$stored_serper" = missing ]; then
+      if [ -n "$missing_keys" ]; then
+        missing_keys="$missing_keys and Serper"
+      else
+        missing_keys='Serper'
+      fi
+    fi
+    if [ -n "$missing_keys" ]; then
+      warn "no $missing_keys API key: export CONTEXT7_API_KEY and SERPER_API_KEY and rerun setup.sh, or run setup.sh from a terminal to be prompted"
+    else
+      info "Prime Agent API keys already stored"
+    fi
+    return 0
+  fi
+
+  local secrets_file status=0
+  secrets_file="$(mktemp)"
+  chmod 600 "$secrets_file"
+  printf 'context7=%s\nserper=%s\n' "$context7_key" "$serper_key" > "$secrets_file"
+  # Keep the heredoc on a plain command: `declare -f` re-renders an `if` that
+  # routes a heredoc into an unparsable function body.
+  python_config "$auth_path" "$settings_path" "$secrets_file" <<'PY' || status=1
+import json
+import sys
+from pathlib import Path
+
+auth_path, settings_path, secrets_path = (Path(argument) for argument in sys.argv[1:4])
+values = {}
+for line in secrets_path.read_text(encoding="utf-8").splitlines():
+    name, separator, value = line.partition("=")
+    if separator:
+        values[name] = value.strip()
+
+def load(path):
+    original = read_text(path)
+    if original is None or not original.strip():
+        return {}, original
+    return parse_jsonc(original), original
+
+try:
+    if values.get("serper"):
+        auth, original = load(auth_path)
+        auth["serper"] = {"type": "api_key", "key": values["serper"]}
+        write_file(auth_path, original, json.dumps(auth, indent=2, sort_keys=True) + "\n")
+    if values.get("context7"):
+        settings, original = load(settings_path)
+        server = mapping(mapping(settings, "mcpServers"), "context7")
+        server.setdefault("type", "http")
+        server.setdefault("url", "https://mcp.context7.com/mcp")
+        server.setdefault("enabled", True)
+        mapping(server, "headers")["CONTEXT7_API_KEY"] = values["context7"]
+        write_file(settings_path, original, json.dumps(settings, indent=2, sort_keys=True) + "\n")
+except Exception as error:
+    print(f"could not store Prime Agent API keys: {type(error).__name__}", file=sys.stderr)
+    raise SystemExit(1)
+PY
+  if [ "$status" -eq 0 ]; then
+    info "stored Prime Agent API keys in $agent_dir"
+  else
+    warn "failed to store Prime Agent API keys in $agent_dir"
+  fi
+  rm -f "$secrets_file"
 }
 
 configure_prime_agent_tools() {
@@ -1216,79 +1433,6 @@ import json
 import os
 from pathlib import Path
 import sys
-
-def parse_jsonc(text: str) -> dict:
-    """Parse Prime's JSON-with-comments/trailing-commas settings safely."""
-    cleaned = []
-    i = 0
-    in_string = False
-    escaped = False
-    while i < len(text):
-        ch = text[i]
-        if in_string:
-            cleaned.append(ch)
-            if escaped:
-                escaped = False
-            elif ch == "\\":
-                escaped = True
-            elif ch == '"':
-                in_string = False
-            i += 1
-            continue
-        if ch == '"':
-            in_string = True
-            cleaned.append(ch)
-            i += 1
-            continue
-        if ch == "/" and i + 1 < len(text) and text[i + 1] == "/":
-            i += 2
-            while i < len(text) and text[i] not in "\r\n":
-                i += 1
-            continue
-        if ch == "/" and i + 1 < len(text) and text[i + 1] == "*":
-            i += 2
-            while i + 1 < len(text) and text[i : i + 2] != "*/":
-                i += 1
-            i += 2
-            continue
-        cleaned.append(ch)
-        i += 1
-
-    text = "".join(cleaned)
-    result = []
-    i = 0
-    in_string = False
-    escaped = False
-    while i < len(text):
-        ch = text[i]
-        if in_string:
-            result.append(ch)
-            if escaped:
-                escaped = False
-            elif ch == "\\":
-                escaped = True
-            elif ch == '"':
-                in_string = False
-            i += 1
-            continue
-        if ch == '"':
-            in_string = True
-            result.append(ch)
-            i += 1
-            continue
-        if ch == ",":
-            j = i + 1
-            while j < len(text) and text[j].isspace():
-                j += 1
-            if j < len(text) and text[j] in "}]":
-                i += 1
-                continue
-        result.append(ch)
-        i += 1
-    parsed = json.loads("".join(result))
-    if not isinstance(parsed, dict):
-        raise ValueError("settings root must be an object")
-    return parsed
 
 seen = set()
 for raw_path in sys.argv[1:]:
@@ -1305,11 +1449,16 @@ for raw_path in sys.argv[1:]:
         bundled = mapping(settings, "bundledSkills")
         bundled["websearch"] = True
         servers = mapping(settings, "mcpServers")
-        servers["context7"] = {
+        # Rebuild the entry instead of replacing it: setup stores the Context7
+        # API key header here and users may add their own fields.
+        context7 = servers.get("context7")
+        context7 = dict(context7) if isinstance(context7, dict) else {}
+        context7.update({
             "type": "http",
             "url": "https://mcp.context7.com/mcp",
             "enabled": True,
-        }
+        })
+        servers["context7"] = context7
         if os.environ.get("SETUP_PROFILE", "native") == "container":
             servers["runpod-docs"] = {"type": "http", "url": "https://docs.runpod.io/mcp", "enabled": True}
         else:
@@ -1453,8 +1602,8 @@ description: Search official Runpod documentation through the public Runpod Docs
 Use the Runpod Docs MCP tools for current Runpod product documentation.
 RUNPOD_SKILL
   fi
-  info "websearch enabled (one-time Serper login: prime-agent /login -> MCP Connections -> Serper)"
-  info "Context7 MCP server configured (no login required)"
+  info "websearch enabled (Serper key: setup prompt, SERPER_API_KEY, or prime-agent /login -> MCP Connections -> Serper)"
+  info "Context7 MCP server configured (key: setup prompt or CONTEXT7_API_KEY)"
 }
 
 configure_prime_agent_models() {
@@ -1574,6 +1723,7 @@ configure_user() {
   install_lazyvim
   install_prime_agent_skills
   configure_prime_agent_tools
+  configure_prime_agent_api_keys
   configure_prime_agent_models
   configure_codex
   verify_login_shell_tools

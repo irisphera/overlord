@@ -51,7 +51,7 @@ load_tool_versions() {
   # Embedded defaults keep curl | bash standalone. A local manifest overrides
   # defaults; explicit environment versions override the manifest.
   local -A versions=( [ZELLIJ_VERSION]=0.43.1 [NODE_VERSION]=24.20.0 [NVIM_VERSION]=0.12.5
-    [PRIME_AGENT_VERSION]=0.9.4 [CODEGRAPH_VERSION]=1.6.0 [CODEX_VERSION]=0.153.4
+    [PRIME_AGENT_VERSION]=0.9.5 [CODEGRAPH_VERSION]=1.6.0 [CODEX_VERSION]=0.153.4
     [TYPESCRIPT_LANGUAGE_SERVER_VERSION]=6.0.0 [TYPESCRIPT_VERSION]=6.0.3
     [PYRIGHT_VERSION]=1.1.413 [INTELEPHENSE_VERSION]=1.18.5
     [VSCODE_LANGSERVERS_VERSION]=4.10.0 [BASH_LANGUAGE_SERVER_VERSION]=5.6.0
@@ -927,21 +927,27 @@ install_prime_agent() (
   set -euo pipefail
   local destination="/opt/overlord/prime-agent-$PRIME_AGENT_VERSION" stage
   if [ ! -x "$destination/bin/prime-agent" ]; then
+    [ ! -e "$destination" ] && [ ! -L "$destination" ] || { die "incomplete installation exists: $destination"; exit 1; }
     stage="$(mktemp -d /opt/overlord/.prime.XXXXXXXX)"
     trap 'rm -rf "$stage"' EXIT
     download https://app.primeintellect.ai/prime-agent/install.sh "$stage/install.sh"
     mkdir "$stage/home"
-    HOME="$stage/home" npm_config_prefix="$stage" PRIME_AGENT_INSTALLER_PLAIN=1 \
-      PRIME_AGENT_BOOTSTRAP_KERNEL_ON_INSTALL=0 sh "$stage/install.sh" "$PRIME_AGENT_VERSION" </dev/null
-    verify_version "$stage/bin/prime-agent" "$PRIME_AGENT_VERSION"
-    chmod -R a+rX "$stage"
-    [ ! -e "$destination" ] || { die "incomplete installation exists: $destination"; exit 1; }
-    mv "$stage" "$destination"
+    # Native releases ignore npm's prefix and require an empty managed root.
+    # Both formats must keep their assets and relative bin links when moved.
+    # Overlord publishes the command; the upstream public link is absolute.
+    # Ignore archive owner IDs, which may be unmapped in rootless builds.
+    # setsid also prevents older/Node installers from prompting via /dev/tty.
+    HOME="$stage/home" TAR_OPTIONS=--no-same-owner npm_config_prefix="$stage/runtime" \
+      PRIME_AGENT_INSTALL_DIR="$stage/runtime" PRIME_AGENT_INSTALL_LINK=0 \
+      PRIME_AGENT_INSTALLER_PLAIN=1 PRIME_AGENT_INSTALLER_NONINTERACTIVE=1 \
+      PRIME_AGENT_BOOTSTRAP_KERNEL_ON_INSTALL=0 setsid --wait sh "$stage/install.sh" "$PRIME_AGENT_VERSION" </dev/null
+    verify_version "$stage/runtime/bin/prime-agent" "$PRIME_AGENT_VERSION"
+    chmod -R a+rX "$stage/runtime"
+    mv "$stage/runtime" "$destination"
   fi
   verify_version "$destination/bin/prime-agent" "$PRIME_AGENT_VERSION"
   publish_binary "$destination/bin/prime-agent" prime-agent
 )
-
 
 
 install_codex() { install_npm_tool codex @openai/codex "$CODEX_VERSION"; }

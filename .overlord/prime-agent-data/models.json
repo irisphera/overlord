@@ -58,7 +58,7 @@
           "id": "gpt-5.6-sol",
           "limitTokens": 256000,
           "maxInputTokens": 256000,
-          "maxTokens": 16384,
+          "maxTokens": 65536,
           "name": "GPT-5.6 Sol (256k)",
           "reasoning": true
         },
@@ -68,7 +68,7 @@
           "id": "grok-4.6",
           "limitTokens": 180000,
           "maxInputTokens": 180000,
-          "maxTokens": 16384,
+          "maxTokens": 65536,
           "name": "Grok 4.6 (180k)",
           "reasoning": false
         },
@@ -78,7 +78,7 @@
           "id": "gpt-5.6-luna",
           "limitTokens": 256000,
           "maxInputTokens": 256000,
-          "maxTokens": 16384,
+          "maxTokens": 65536,
           "name": "GPT-5.6 Luna (256k)",
           "reasoning": true,
           "thinkingLevelMap": {
@@ -91,7 +91,7 @@
           "id": "gpt-6-astra",
           "limitTokens": 272000,
           "maxInputTokens": 272000,
-          "maxTokens": 16384,
+          "maxTokens": 65536,
           "name": "GPT-6 Astra (272k)",
           "reasoning": true,
           "thinkingLevelMap": {
@@ -131,7 +131,7 @@
           ],
           "limitTokens": 256000,
           "maxInputTokens": 256000,
-          "maxTokens": 16384,
+          "maxTokens": 65536,
           "name": "Gemini 3.8 Flash (256k)",
           "reasoning": true
         }
@@ -180,6 +180,14 @@
           "thinkingLevelMap": {
             "max": "max"
           }
+        },
+        "union-alpha": {
+          "api": "anthropic-messages",
+          "baseUrl": "https://opencode.ai/zen/go",
+          "contextWindow": 256000,
+          "limitTokens": 256000,
+          "maxInputTokens": 256000,
+          "reasoning": true
         }
       },
       "models": [
@@ -194,7 +202,7 @@
           ],
           "limitTokens": 256000,
           "maxInputTokens": 256000,
-          "maxTokens": 16384,
+          "maxTokens": 65536,
           "name": "Muse Spark 1.3 Contributor (256k)",
           "provider": "opencode-go",
           "reasoning": true,
@@ -208,7 +216,7 @@
           "id": "gpt-5.6-luna",
           "limitTokens": 256000,
           "maxInputTokens": 256000,
-          "maxTokens": 16384,
+          "maxTokens": 65536,
           "name": "GPT-5.6 Luna (256k)",
           "reasoning": true,
           "thinkingLevelMap": {
@@ -220,7 +228,7 @@
           "id": "deepseek-flash",
           "limitTokens": 256000,
           "maxInputTokens": 256000,
-          "maxTokens": 16384,
+          "maxTokens": 65536,
           "name": "DeepSeek Flash (256k)",
           "reasoning": true,
           "thinkingLevelMap": {
@@ -232,6 +240,21 @@
             "off": "none",
             "xhigh": "xhigh"
           }
+        },
+        {
+          "api": "anthropic-messages",
+          "baseUrl": "https://opencode.ai/zen/go",
+          "contextWindow": 256000,
+          "id": "union-alpha",
+          "input": [
+            "text",
+            "image"
+          ],
+          "limitTokens": 256000,
+          "maxInputTokens": 256000,
+          "maxTokens": 65536,
+          "name": "Union Alpha (256k)",
+          "reasoning": true
         }
       ]
     }

@@ -1621,7 +1621,7 @@ desired = {
         ("grok-4.6", "Grok 4.6"), ("gpt-6-astra", "GPT-6 Astra"),
     ],
     "google-vertex": [("gemini-3.8-flash", "Gemini 3.8 Flash")],
-    "opencode-go": [("gpt-5.6-luna", "GPT-5.6 Luna"), ("muse-spark-1.3-contributor", "Muse Spark 1.3 Contributor"), ("deepseek-flash", "DeepSeek Flash")],
+    "opencode-go": [("gpt-5.6-luna", "GPT-5.6 Luna"), ("muse-spark-1.3-contributor", "Muse Spark 1.3 Contributor"), ("deepseek-flash", "DeepSeek Flash"), ("union-alpha", "Union Alpha")],
 }
 
 for raw in sys.argv[1:]:
@@ -1648,6 +1648,11 @@ for raw in sys.argv[1:]:
                 if not matching:
                     matching = [{"id": model_id}]
                     entries.extend(matching)
+                if model_id == "union-alpha":
+                    # The Zen gateway serves union-alpha through the Anthropic Messages API.
+                    # The Anthropic SDK appends /v1/messages to the base URL, so drop the version suffix.
+                    fields["api"] = "anthropic-messages"
+                    fields["baseUrl"] = "https://opencode.ai/zen/go"
                 if model_id == "gpt-6-astra":
                     # Custom definitions replace Prime's built-ins. Keep every
                     # Astra effort explicit; Prime's off selector sends Azure none.
@@ -1660,7 +1665,10 @@ for raw in sys.argv[1:]:
                 override.update(copy.deepcopy(fields))
                 for entry in matching:
                     entry.update(fields, name=f"{name} ({window // 1000}k)")
-                    entry.setdefault("maxTokens", 16384)
+                    # Managed models may output up to 64k tokens unless they set their own cap.
+                    entry.setdefault("maxTokens", 65536)
+                    if model_id == "union-alpha":
+                        entry.setdefault("input", ["text", "image"])
                     if model_id in ("gpt-5.6-luna", "muse-spark-1.3-contributor"):
                         mapping(entry, "thinkingLevelMap")["max"] = "max"
                         mapping(override, "thinkingLevelMap")["max"] = "max"

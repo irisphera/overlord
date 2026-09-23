@@ -180,7 +180,8 @@ def ensure_running(engine: ContainerEngine, paths: WorkspacePaths, exec_env_flag
     validate_state_dirs(paths.state)
     engine_socket_path(engine_name=engine.name, env=env)
     state_before = "missing" if container is None else container.state
-    if container is not None and (not container.entrypoint_ready_contract or not container.mounts.access_matches):
+    if container is not None and (not container.entrypoint_ready_contract or not container.mounts.access_matches
+                                  or container.mounts.claude_data is None):
         _remove_verified(engine, paths, container, env=env, stage=stage)
         container = None
     ensure_state_dir(paths.state)
@@ -194,7 +195,7 @@ def ensure_running(engine: ContainerEngine, paths: WorkspacePaths, exec_env_flag
         container = verified_container(engine, paths, env=env)
         if container is None:
             raise LifecycleError("Error: newly created container disappeared")
-        if not container.mounts.access_matches or not container.entrypoint_ready_contract:
+        if not container.mounts.access_matches or not container.entrypoint_ready_contract or container.mounts.claude_data is None:
             raise LifecycleError("Error: newly created container does not satisfy workspace isolation and initialization requirements; use overlord fresh.")
     elif container.name != paths.identity.container_name:
         require_success(engine.run(["rename", container.container_id, paths.identity.container_name], cwd=paths.workspace, env=env), "adopt verified legacy container")

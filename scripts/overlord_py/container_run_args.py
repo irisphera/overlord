@@ -48,6 +48,10 @@ def build_container_run_args(
         "-v", f"{sources.workspace}:/workspace:rw",
         "-v", f"{sources.zsh_data}:/home/overlord/.zsh_data",
         "-v", f"{sources.prime_agent_data}:/home/overlord/.prime/agent",
+        "-v", f"{sources.claude_data}:/home/overlord/.claude",
+        # Claude Code writes .claude.json beside ~/.claude unless CLAUDE_CONFIG_DIR
+        # names its directory; keep that file (onboarding, account) in the mount too.
+        "-e", "CLAUDE_CONFIG_DIR=/home/overlord/.claude",
         *exec_env_flags,
     ]
     socket_path = engine_socket_path(engine_name=engine_name, env=env)

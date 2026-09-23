@@ -15,6 +15,9 @@ from .engine import CommandResult
 WORKSPACE_DESTINATION: Final = "/workspace"
 ZSH_DATA_DESTINATION: Final = "/home/overlord/.zsh_data"
 PRIME_AGENT_DATA_DESTINATION: Final = "/home/overlord/.prime/agent"
+CLAUDE_DATA_DESTINATION: Final = "/home/overlord/.claude"
+PERSISTED_DESTINATIONS: Final = (WORKSPACE_DESTINATION, ZSH_DATA_DESTINATION,
+                                 PRIME_AGENT_DATA_DESTINATION, CLAUDE_DATA_DESTINATION)
 
 @dataclass(slots=True)
 class MountSafetyFailure(Exception):
@@ -40,6 +43,9 @@ class PersistedStateMounts:
     workspace: VerifiedMount
     zsh_data: VerifiedMount
     prime_agent_data: VerifiedMount
+    # Containers created before Claude Code state was persisted lack this mount.
+    # They stay verifiable and removable; attaching recreates them with it.
+    claude_data: VerifiedMount | None
     access_matches: bool
 
 class EngineRunner(Protocol):
@@ -66,6 +72,9 @@ def verify_persisted_state_mounts(
     _require_mount(workspace, _normalize_absolute_posix(str(expected_sources.workspace), "expected Source"))
     _require_mount(zsh_data, _normalize_absolute_posix(str(expected_sources.zsh_data), "expected Source"))
     _require_mount(prime_agent_data, _normalize_absolute_posix(str(expected_sources.prime_agent_data), "expected Source"))
+    claude_data = _optional_mount(mounts, CLAUDE_DATA_DESTINATION)
+    if claude_data is not None:
+        _require_mount(claude_data, _normalize_absolute_posix(str(expected_sources.claude_data), "expected Source"))
     access_matches = _access_matches(mounts, env.get("OVERLORD_ENGINE_SOCKET"))
     if not access_matches and not allow_legacy_access:
         raise MountSafetyFailure("Container mounts expose host paths outside the requested workspace/state/socket access; use overlord fresh.")
@@ -73,6 +82,7 @@ def verify_persisted_state_mounts(
         workspace=_verified(workspace),
         zsh_data=_verified(zsh_data),
         prime_agent_data=_verified(prime_agent_data),
+        claude_data=None if claude_data is None else _verified(claude_data),
         access_matches=access_matches,
     )
 
@@ -107,18 +117,16 @@ def _optional_mount(mounts: tuple[InspectedMount, ...], destination: str) -> Ins
     return matching[0] if matching else None
 
 def _reject_shadowing_mounts(mounts: tuple[InspectedMount, ...]) -> None:
-    destinations = (WORKSPACE_DESTINATION, ZSH_DATA_DESTINATION, PRIME_AGENT_DATA_DESTINATION)
     for mount in mounts:
         normalized = _normalize_absolute_posix(mount.destination, "mount Destination")
         if normalized != mount.destination:
             raise MountSafetyFailure(f"Noncanonical mount destination: {mount.destination}")
-        for destination in destinations:
+        for destination in PERSISTED_DESTINATIONS:
             if mount.destination.startswith(destination + "/"):
                 raise MountSafetyFailure(f"Mount beneath {destination} would shadow persisted state: {mount.destination}")
 
 def _access_matches(mounts: tuple[InspectedMount, ...], socket: str | None) -> bool:
-    destinations = (WORKSPACE_DESTINATION, ZSH_DATA_DESTINATION, PRIME_AGENT_DATA_DESTINATION)
-    extra = tuple(mount for mount in mounts if mount.destination not in destinations)
+    extra = tuple(mount for mount in mounts if mount.destination not in PERSISTED_DESTINATIONS)
     if not socket:
         return not extra
     if len(extra) != 1 or not posixpath.isabs(socket):

@@ -78,6 +78,8 @@ def ensure_state_dir(paths: StatePaths) -> StateEnsureResult:
     gitignore_appended = append_state_gitignore(gitignore, gitignore_snapshot)
     create_directory(paths.zsh_data, parents=True, exist_ok=True)
     create_directory(paths.prime_agent_data, parents=True, exist_ok=True)
+    # Claude Code keeps its login credentials here.
+    create_directory(paths.claude_data, exist_ok=True, mode=0o700)
     for plan in pair_plans:
         apply_pair_plan(plan)
     return StateEnsureResult(
@@ -88,7 +90,7 @@ def ensure_state_dir(paths: StatePaths) -> StateEnsureResult:
     )
 
 def validate_state_dirs(paths: StatePaths) -> None:
-    for path in (paths.root, paths.zsh_data, paths.prime_agent_data,
+    for path in (paths.root, paths.zsh_data, paths.prime_agent_data, paths.claude_data,
                  paths.codegraph.managed_directory):
         snapshot = classify_node(path)
         if snapshot.kind not in {NodeKind.MISSING, NodeKind.DIRECTORY}:
@@ -150,9 +152,9 @@ def apply_pair_plan(plan: PairPlan) -> None:
         case unreachable:
             assert_never(unreachable)
 
-def create_directory(path: Path, *, parents: bool = False, exist_ok: bool = False) -> None:
+def create_directory(path: Path, *, parents: bool = False, exist_ok: bool = False, mode: int = 0o777) -> None:
     try:
-        path.mkdir(parents=parents, exist_ok=exist_ok)
+        path.mkdir(mode=mode, parents=parents, exist_ok=exist_ok)
     except OSError as error:
         raise ManagedStateError(path, f"could not create directory: {error}") from error
 

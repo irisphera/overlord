@@ -44,6 +44,7 @@ class StatePaths:
     root: Path
     zsh_data: Path
     prime_agent_data: Path
+    claude_data: Path
     codegraph: ManagedStatePaths
 
 @dataclass(frozen=True, slots=True)
@@ -78,6 +79,7 @@ def state_paths(workspace: Path) -> StatePaths:
         root=root,
         zsh_data=root / "zsh-data",
         prime_agent_data=root / "prime-agent-data",
+        claude_data=root / "claude-data",
         codegraph=managed_state_paths(workspace, root, ".codegraph"),
     )
 

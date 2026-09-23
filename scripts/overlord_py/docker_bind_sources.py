@@ -16,6 +16,7 @@ class BindSourcePaths:
     workspace: Path
     zsh_data: Path
     prime_agent_data: Path
+    claude_data: Path
 
 
 def validate_local_endpoint(engine: ContainerEngine, paths: WorkspacePaths, *, env: Mapping[str, str]) -> None:
@@ -141,4 +142,5 @@ def bind_source_paths(paths: WorkspacePaths) -> BindSourcePaths:
         workspace=paths.workspace,
         zsh_data=paths.state.zsh_data,
         prime_agent_data=paths.state.prime_agent_data,
+        claude_data=paths.state.claude_data,
     )

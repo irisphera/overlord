@@ -37,6 +37,7 @@ class PersistedStateMountTests(unittest.TestCase):
             workspace=self.paths.workspace,
             zsh_data=self.paths.state.zsh_data,
             prime_agent_data=self.paths.state.prime_agent_data,
+            claude_data=self.paths.state.claude_data,
         )
 
     def tearDown(self):
@@ -47,6 +48,7 @@ class PersistedStateMountTests(unittest.TestCase):
             self._mount(self.sources.workspace, "/workspace"),
             self._mount(self.sources.zsh_data, "/home/overlord/.zsh_data"),
             self._mount(self.sources.prime_agent_data, "/home/overlord/.prime/agent"),
+            self._mount(self.sources.claude_data, "/home/overlord/.claude"),
         ]
         return mounts
 
@@ -79,7 +81,30 @@ class PersistedStateMountTests(unittest.TestCase):
         self.assertTrue(result.zsh_data_created)
         self.assertTrue(result.prime_agent_data_created)
         self.assertEqual({path.name for path in self.paths.state.root.iterdir()},
-                         {"zsh-data", "prime-agent-data", ".codegraph"})
+                         {"zsh-data", "prime-agent-data", "claude-data", ".codegraph"})
+        # Claude Code stores login credentials there.
+        self.assertEqual(self.paths.state.claude_data.stat().st_mode & 0o777, 0o700)
+
+    def test_claude_state_mount_is_optional_for_existing_containers(self):
+        mounts = [mount for mount in self._mounts() if mount["Destination"] != "/home/overlord/.claude"]
+        result = verify_persisted_state_mounts(
+            InspectEngine(mounts), "container", expected_sources=self.sources,
+            cwd=self.workspace, env={},
+        )
+        self.assertIsNone(result.claude_data)
+        self.assertTrue(result.access_matches)
+
+    def test_claude_state_mount_must_be_the_workspace_bind(self):
+        for overrides in ({"Source": str(self.workspace.parent / "home" / ".claude")}, {"RW": False}, {"Type": "volume"}):
+            for legacy in (False, True):
+                with self.subTest(overrides=overrides, legacy=legacy):
+                    mounts = self._mounts()
+                    mounts[3].update(overrides)
+                    with self.assertRaises(MountSafetyFailure):
+                        verify_persisted_state_mounts(
+                            InspectEngine(mounts), "container", expected_sources=self.sources,
+                            cwd=self.workspace, env={}, allow_legacy_access=legacy,
+                        )
 
     def test_supported_mount_set_is_sufficient(self):
         result = verify_persisted_state_mounts(
@@ -88,6 +113,7 @@ class PersistedStateMountTests(unittest.TestCase):
         )
         self.assertTrue(result.access_matches)
         self.assertEqual(result.prime_agent_data.source, str(self.sources.prime_agent_data))
+        self.assertEqual(result.claude_data.source, str(self.sources.claude_data))
     def test_required_mounts_remain_fail_closed_in_legacy_removal_mode(self):
         for index in range(3):
             for overrides in ({"Source": str(self.workspace / "other")}, {"RW": False}, {"Type": "volume"}, None):
@@ -118,7 +144,7 @@ class PersistedStateMountTests(unittest.TestCase):
                 )
                 self.assertFalse(result.access_matches)
     def test_duplicate_and_descendant_binds_cannot_shadow_persisted_state(self):
-        for destination in ("/workspace", "/home/overlord/.zsh_data", "/home/overlord/.prime/agent"):
+        for destination in ("/workspace", "/home/overlord/.zsh_data", "/home/overlord/.prime/agent", "/home/overlord/.claude"):
             for suffix in ("", "/shadow"):
                 for legacy in (False, True):
                     with self.subTest(destination=destination, suffix=suffix, legacy=legacy):

@@ -57,6 +57,8 @@ class FakeLifecycleEngine:
         self.mount_workspace = paths.workspace
         self.extra_mounts = []
         self.created_mounts = None
+        # Containers created before Claude Code state was persisted lack this mount.
+        self.claude_mount = True
 
     def _inspect_mounts(self):
         sources = bind_source_paths(self.paths)
@@ -65,6 +67,8 @@ class FakeLifecycleEngine:
             {"Type": "bind", "Source": str(sources.zsh_data), "Destination": "/home/overlord/.zsh_data", "RW": True},
             {"Type": "bind", "Source": str(sources.prime_agent_data), "Destination": "/home/overlord/.prime/agent", "RW": True},
         ]
+        if self.claude_mount:
+            mounts.append({"Type": "bind", "Source": str(sources.claude_data), "Destination": "/home/overlord/.claude", "RW": True})
         mounts = mounts + self.extra_mounts if self.created_mounts is None else self.created_mounts
         return json.dumps([{"Id": self.container_id, "Image": self.image_id, "State": {"Status": self.state},
                             "Config": {"Labels": {ENTRYPOINT_LABEL: "1"} if self.contract else {}}, "Mounts": mounts}])
@@ -163,7 +167,7 @@ class ContainerLifecycleTests(unittest.TestCase):
                 mounts = json.loads(engine._inspect_mounts())[0]["Mounts"]
                 self.assertEqual({mount["Source"] for mount in mounts}, {
                     str(paths.workspace), str(paths.state.zsh_data),
-                    str(paths.state.prime_agent_data),
+                    str(paths.state.prime_agent_data), str(paths.state.claude_data),
                 })
                 self.assertEqual([(path.stat().st_mode, path.stat().st_uid, path.stat().st_gid) for path in (home, home / ".ssh", home / ".gitconfig")], before)
 
@@ -193,7 +197,38 @@ class ContainerLifecycleTests(unittest.TestCase):
                 self.assertEqual((session.stat().st_mode, session.stat().st_uid, session.stat().st_gid), (before.st_mode, before.st_uid, before.st_gid))
                 self.assertEqual({mount["Source"] for mount in json.loads(engine._inspect_mounts())[0]["Mounts"]}, {
                     str(paths.workspace), str(paths.state.zsh_data), str(paths.state.prime_agent_data),
+                    str(paths.state.claude_data),
                 })
+
+    def test_container_without_claude_state_is_recreated_with_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = build_workspace_paths(Path(tmp), script_path=ROOT / "scripts/overlord")
+            ensure_state_dir(paths.state)
+            session = paths.state.prime_agent_data / "session.json"
+            session.write_text("saved session")
+            credentials = paths.state.claude_data / ".credentials.json"
+            credentials.write_text("saved login")
+            engine = FakeLifecycleEngine(paths, state="running", initialized=True)
+            engine.claude_mount = False
+            old_id = engine.container_id
+            with patch("overlord_py.container_run_args.os.getuid", return_value=1000), patch("overlord_py.container_run_args.os.getgid", return_value=1000):
+                result = ensure_running(engine, paths, (), env={"HOME": tmp})
+            self.assertNotEqual(result.container_id, old_id)
+            self.assertFalse(any(call[0] in {"exec", "start"} and old_id in call for call in engine.calls))
+            run = next(call for call in engine.calls if call[0] == "run")
+            self.assertIn(f"{paths.state.claude_data}:/home/overlord/.claude", run)
+            self.assertIn("CLAUDE_CONFIG_DIR=/home/overlord/.claude", run)
+            self.assertEqual((session.read_text(), credentials.read_text()), ("saved session", "saved login"))
+
+    def test_fresh_and_purge_remove_containers_without_claude_state(self):
+        for command in (fresh, purge):
+            with self.subTest(command=command.__name__), tempfile.TemporaryDirectory() as tmp:
+                paths = build_workspace_paths(Path(tmp), script_path=ROOT / "scripts/overlord")
+                ensure_state_dir(paths.state)
+                engine = FakeLifecycleEngine(paths)
+                engine.claude_mount = False
+                command(engine, paths, env={})
+                self.assertFalse(engine.present)
 
     def test_fresh_and_purge_preserve_host_state_despite_extra_access(self):
         for command in (fresh, purge):
@@ -323,7 +358,7 @@ class ContainerLifecycleTests(unittest.TestCase):
             self.assertEqual(engine.calls, [])
 
     def test_state_directory_symlinks_are_rejected_before_any_write(self):
-        for name in ("root", "zsh_data", "prime_agent_data", "codegraph"):
+        for name in ("root", "zsh_data", "prime_agent_data", "claude_data", "codegraph"):
             with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
                 paths = build_workspace_paths(Path(tmp), script_path=ROOT / "scripts/overlord")
                 outside = Path(tmp) / "outside"
@@ -344,7 +379,8 @@ class ContainerLifecycleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             paths = build_workspace_paths(Path(tmp), script_path=ROOT / "scripts/overlord")
             ensure_state_dir(paths.state)
-            directories = (paths.workspace, paths.state.root, paths.state.zsh_data, paths.state.prime_agent_data)
+            directories = (paths.workspace, paths.state.root, paths.state.zsh_data, paths.state.prime_agent_data,
+                           paths.state.claude_data)
             for directory in directories:
                 directory.chmod(0o700)
             before = [(directory.stat().st_mode, directory.stat().st_uid, directory.stat().st_gid) for directory in directories]
@@ -495,7 +531,8 @@ class ContainerLifecycleTests(unittest.TestCase):
                             command(engine, paths, (), env={"HOME": tmp})
                             self.assertNotEqual(engine.container_id, old_id)
                             self.assertTrue(engine.initialized)
-                            self.assertEqual(len(engine.created_mounts), 3)
+                            self.assertEqual({mount["Destination"] for mount in engine.created_mounts},
+                                             {"/workspace", "/home/overlord/.zsh_data", "/home/overlord/.prime/agent", "/home/overlord/.claude"})
                         else:
                             command(engine, paths, env={})
                             self.assertFalse(engine.present)

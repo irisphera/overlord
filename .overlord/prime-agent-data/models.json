@@ -172,6 +172,23 @@
             "max": "max"
           }
         },
+        "mimo-v2.6-flash": {
+          "api": "openai-completions",
+          "baseUrl": "https://opencode.ai/zen/go/v1",
+          "contextWindow": 256000,
+          "limitTokens": 256000,
+          "maxInputTokens": 256000,
+          "reasoning": true,
+          "thinkingLevelMap": {
+            "high": "high",
+            "low": "low",
+            "max": null,
+            "medium": "medium",
+            "minimal": null,
+            "off": "none",
+            "xhigh": null
+          }
+        },
         "muse-spark-1.3-contributor": {
           "contextWindow": 256000,
           "limitTokens": 256000,
@@ -255,6 +272,30 @@
           "maxTokens": 65536,
           "name": "Union Alpha (256k)",
           "reasoning": true
+        },
+        {
+          "api": "openai-completions",
+          "baseUrl": "https://opencode.ai/zen/go/v1",
+          "contextWindow": 256000,
+          "id": "mimo-v2.6-flash",
+          "input": [
+            "text",
+            "image"
+          ],
+          "limitTokens": 256000,
+          "maxInputTokens": 256000,
+          "maxTokens": 65536,
+          "name": "MiMo V2.6 Flash (256k)",
+          "reasoning": true,
+          "thinkingLevelMap": {
+            "high": "high",
+            "low": "low",
+            "max": null,
+            "medium": "medium",
+            "minimal": null,
+            "off": "none",
+            "xhigh": null
+          }
         }
       ]
     }

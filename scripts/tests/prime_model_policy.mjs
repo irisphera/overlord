@@ -47,7 +47,9 @@ const registry = new ModelRegistry({ getOAuthProviders: () => [] }, path.resolve
 assert.equal(registry.getError(), undefined);
 let model = registry.getAll().find((m) => m.provider === "azure-openai-responses" && m.id === "gpt-6-astra");
 assert.ok(model, "Astra missing from actual registry");
-assert.equal(model.contextWindow, 272000);
+// Every managed model compacts at 150k: window = threshold + the 16384 reserve.
+assert.equal(model.contextWindow, 150000 + 16384);
+assert.equal(model.maxTokens, undefined, "managed models must impose no output cap");
 assert.equal(model.reasoning, true);
 const expectedLevels = ["off", "low", "medium", "high", "xhigh", "max"];
 assert.deepEqual(getSupportedThinkingLevels(model), expectedLevels);

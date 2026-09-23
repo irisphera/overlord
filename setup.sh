@@ -1621,13 +1621,26 @@ resource = os.environ.get("AZURE_OPENAI_RESOURCE_NAME", "").strip()
 base = os.environ.get("AZURE_OPENAI_BASE_URL", "").strip().rstrip("/")
 if not base and resource:
     base = f"https://{resource}.openai.azure.com/openai/v1"
+# Prime auto-compacts when contextTokens > contextWindow - reserveTokens, and
+# reserveTokens defaults to 16384 (compaction.ts). Every managed model must
+# compact at 150k, so the window is that threshold plus the reserve; a model's
+# true provider window is deliberately not used. Output is left uncapped:
+# Prime omits max_tokens/max_output_tokens when a model carries no maxTokens,
+# so the provider's own maximum applies.
+AUTOCOMPACT_TOKENS = 150000
+RESERVE_TOKENS = 16384
+WINDOW = AUTOCOMPACT_TOKENS + RESERVE_TOKENS
+# The Anthropic Messages API requires max_tokens, and Prime falls back to
+# maxTokens/3 (0 when unset) there, so those models keep an explicit ceiling.
+ANTHROPIC_MAX_TOKENS = 64000
+
 desired = {
     "azure-openai-responses": [
         ("gpt-5.6-sol", "GPT-5.6 Sol"), ("gpt-5.6-luna", "GPT-5.6 Luna"),
         ("grok-4.6", "Grok 4.6"), ("gpt-6-astra", "GPT-6 Astra"),
     ],
     "google-vertex": [("gemini-3.8-flash", "Gemini 3.8 Flash")],
-    "opencode-go": [("gpt-5.6-luna", "GPT-5.6 Luna"), ("muse-spark-1.3-contributor", "Muse Spark 1.3 Contributor"), ("deepseek-flash", "DeepSeek Flash"), ("union-alpha", "Union Alpha")],
+    "opencode-go": [("gpt-5.6-luna", "GPT-5.6 Luna"), ("muse-spark-1.3-contributor", "Muse Spark 1.3 Contributor"), ("deepseek-flash", "DeepSeek Flash"), ("union-alpha", "Union Alpha"), ("mimo-v2.6-flash", "MiMo V2.6 Flash"), ("mimo-v2.6-pro", "MiMo V2.6 Pro")],
 }
 
 for raw in sys.argv[1:]:
@@ -1639,7 +1652,7 @@ for raw in sys.argv[1:]:
             raise ValueError("models must be a mapping")
         before = copy.deepcopy(data)
         defaults = mapping(data, "defaults")
-        defaults.update(contextWindow=256000, maxInputTokens=256000, limitTokens=256000, reasoning=True)
+        defaults.update(contextWindow=WINDOW, maxInputTokens=WINDOW, limitTokens=WINDOW, reasoning=True)
         providers = mapping(data, "providers")
         for provider_id, models in desired.items():
             provider = mapping(providers, provider_id)
@@ -1648,8 +1661,7 @@ for raw in sys.argv[1:]:
                 raise ValueError("models must be a list of mappings")
             overrides = mapping(provider, "modelOverrides")
             for model_id, name in models:
-                window = {"grok-4.6": 180000, "gpt-6-astra": 272000}.get(model_id, 256000)
-                fields = dict(contextWindow=window, maxInputTokens=window, limitTokens=window, reasoning=model_id != "grok-4.6")
+                fields = dict(contextWindow=WINDOW, maxInputTokens=WINDOW, limitTokens=WINDOW, reasoning=model_id != "grok-4.6")
                 matching = [entry for entry in entries if entry.get("id") == model_id]
                 if not matching:
                     matching = [{"id": model_id}]
@@ -1659,6 +1671,17 @@ for raw in sys.argv[1:]:
                     # The Anthropic SDK appends /v1/messages to the base URL, so drop the version suffix.
                     fields["api"] = "anthropic-messages"
                     fields["baseUrl"] = "https://opencode.ai/zen/go"
+                if model_id in ("mimo-v2.6-flash", "mimo-v2.6-pro"):
+                    # The Zen gateway serves both v2.6 MiMo models only through the OpenAI
+                    # Chat Completions API; /responses and /messages answer 503 (probed 2026-09-22).
+                    fields["api"] = "openai-completions"
+                    fields["baseUrl"] = "https://opencode.ai/zen/go/v1"
+                    # The gateway rejects minimal/xhigh/max. Leave those selectors unsupported
+                    # so Prime clamps a saved level instead of sending a rejected effort.
+                    fields["thinkingLevelMap"] = {
+                        "off": "none", "minimal": None, "low": "low",
+                        "medium": "medium", "high": "high", "xhigh": None, "max": None,
+                    }
                 if model_id == "gpt-6-astra":
                     # Custom definitions replace Prime's built-ins. Keep every
                     # Astra effort explicit; Prime's off selector sends Azure none.
@@ -1669,11 +1692,19 @@ for raw in sys.argv[1:]:
                     }
                 override = mapping(overrides, model_id)
                 override.update(copy.deepcopy(fields))
+                if fields.get("api") == "anthropic-messages":
+                    override["maxTokens"] = ANTHROPIC_MAX_TOKENS
+                else:
+                    override.pop("maxTokens", None)
                 for entry in matching:
-                    entry.update(fields, name=f"{name} ({window // 1000}k)")
-                    # Managed models may output up to 64k tokens unless they set their own cap.
-                    entry.setdefault("maxTokens", 65536)
-                    if model_id == "union-alpha":
+                    # The suffix names where the model auto-compacts, not its provider window.
+                    entry.update(fields, name=f"{name} ({AUTOCOMPACT_TOKENS // 1000}k)")
+                    if fields.get("api") == "anthropic-messages":
+                        entry["maxTokens"] = ANTHROPIC_MAX_TOKENS
+                    else:
+                        # Leaving maxTokens unset sends no output cap at all.
+                        entry.pop("maxTokens", None)
+                    if model_id in ("union-alpha", "mimo-v2.6-flash", "mimo-v2.6-pro"):
                         entry.setdefault("input", ["text", "image"])
                     if model_id in ("gpt-5.6-luna", "muse-spark-1.3-contributor"):
                         mapping(entry, "thinkingLevelMap")["max"] = "max"

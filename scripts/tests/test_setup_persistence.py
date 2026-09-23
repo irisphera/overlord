@@ -7,6 +7,10 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+# Prime auto-compacts at contextWindow - reserveTokens, reserveTokens defaulting
+# to 16384, and every managed model must compact at 150k.
+AUTOCOMPACT_TOKENS = 150000
+WINDOW = AUTOCOMPACT_TOKENS + 16384
 
 
 class SetupPersistenceTests(unittest.TestCase):
@@ -87,7 +91,7 @@ class SetupPersistenceTests(unittest.TestCase):
         self.assertEqual(data["providers"]["opencode"], custom)
         entries = {entry["id"]: entry for entry in data["providers"]["azure-openai-responses"]["models"]}
         self.assertEqual(entries["private-deployment"], {"id": "private-deployment", "name": "personal"})
-        self.assertEqual(entries["grok-4.6"]["contextWindow"], 180000)
+        self.assertEqual(entries["grok-4.6"]["contextWindow"], WINDOW)
         self.assertEqual(entries["gpt-6-astra"]["thinkingLevelMap"], {
             "off": "none", "minimal": None, "low": "low", "medium": "medium",
             "high": "high", "xhigh": "xhigh", "max": "max",
@@ -98,9 +102,9 @@ class SetupPersistenceTests(unittest.TestCase):
         self.assertEqual(database.read_bytes(), b"database bytes\x00")
         self.assertNotIn("private-marker", result.stdout + result.stderr)
 
-    def test_astra_context_window_is_created_and_migrated_idempotently(self):
+    def test_every_managed_model_compacts_at_the_same_threshold(self):
         path = self.prime / "models.json"
-        for existing_window in (None, 256000):
+        for existing_window in (None, 256000, 272000):
             with self.subTest(existing_window=existing_window):
                 if existing_window is not None:
                     fields = dict(contextWindow=existing_window, maxInputTokens=existing_window, limitTokens=existing_window)
@@ -113,10 +117,13 @@ class SetupPersistenceTests(unittest.TestCase):
                 provider = data["providers"]["azure-openai-responses"]
                 entries = {entry["id"]: entry for entry in provider["models"]}
                 for field in ("contextWindow", "maxInputTokens", "limitTokens"):
-                    self.assertEqual(entries["gpt-6-astra"][field], 272000)
-                    self.assertEqual(provider["modelOverrides"]["gpt-6-astra"][field], 272000)
-                    self.assertEqual(entries["gpt-5.6-luna"][field], 256000)
-                self.assertEqual(entries["gpt-6-astra"]["name"], "GPT-6 Astra (272k)")
+                    self.assertEqual(entries["gpt-6-astra"][field], WINDOW)
+                    self.assertEqual(provider["modelOverrides"]["gpt-6-astra"][field], WINDOW)
+                    self.assertEqual(entries["gpt-5.6-luna"][field], WINDOW)
+                self.assertEqual(entries["gpt-6-astra"]["name"], "GPT-6 Astra (150k)")
+                # No managed model imposes an output cap.
+                for entry in entries.values():
+                    self.assertNotIn("maxTokens", entry)
                 before = path.read_bytes(), path.stat().st_mtime_ns
                 self.configure("configure_prime_agent_models")
                 self.assertEqual((path.read_bytes(), path.stat().st_mtime_ns), before)
@@ -143,13 +150,52 @@ class SetupPersistenceTests(unittest.TestCase):
                 for entry in [*entries, provider["modelOverrides"]["gpt-6-astra"]]:
                     self.assertTrue(entry["reasoning"])
                     self.assertEqual(entry["thinkingLevelMap"], expected)
-                    self.assertEqual(entry["contextWindow"], 272000)
+                    self.assertEqual(entry["contextWindow"], WINDOW)
                 self.assertEqual(entries[0]["baseUrl"], astra["baseUrl"])
                 self.assertIn(unrelated, provider["models"])
                 self.assertEqual(provider["modelOverrides"]["custom"], {"thinkingLevelMap": {"off": None}})
                 before = path.read_bytes(), path.stat().st_mtime_ns
                 self.configure("configure_prime_agent_models")
                 self.assertEqual((path.read_bytes(), path.stat().st_mtime_ns), before)
+
+    def test_mimo_v26_models_use_chat_completions_and_supported_efforts(self):
+        path = self.prime / "models.json"
+        expected = {"off": "none", "minimal": None, "low": "low", "medium": "medium",
+                    "high": "high", "xhigh": None, "max": None}
+        # A stale entry carries the old window and output cap; both must be corrected.
+        path.write_text(json.dumps({"providers": {"opencode-go": {"models": [
+            {"id": "mimo-v2.6-flash", "contextWindow": 256000, "maxTokens": 65536,
+             "thinkingLevelMap": {"max": "max"}},
+        ]}}}))
+        self.configure("configure_prime_agent_models")
+        provider = json.loads(path.read_text())["providers"]["opencode-go"]
+        for model_id, label in (("mimo-v2.6-flash", "MiMo V2.6 Flash"), ("mimo-v2.6-pro", "MiMo V2.6 Pro")):
+            with self.subTest(model_id=model_id):
+                entries = [entry for entry in provider["models"] if entry["id"] == model_id]
+                self.assertEqual(len(entries), 1)
+                for entry in [*entries, provider["modelOverrides"][model_id]]:
+                    self.assertTrue(entry["reasoning"])
+                    self.assertEqual(entry["thinkingLevelMap"], expected)
+                    self.assertEqual(entry["api"], "openai-completions")
+                    self.assertEqual(entry["baseUrl"], "https://opencode.ai/zen/go/v1")
+                    self.assertEqual(entry["contextWindow"], WINDOW)
+                    self.assertNotIn("maxTokens", entry)
+                self.assertEqual(entries[0]["input"], ["text", "image"])
+                self.assertEqual(entries[0]["name"], f"{label} (150k)")
+        before = path.read_bytes(), path.stat().st_mtime_ns
+        self.configure("configure_prime_agent_models")
+        self.assertEqual((path.read_bytes(), path.stat().st_mtime_ns), before)
+
+    def test_anthropic_route_keeps_the_required_output_ceiling(self):
+        # Prime sends maxTokens/3 (0 when unset) on the Anthropic Messages route,
+        # which that API rejects, so those entries are the one documented exception.
+        path = self.prime / "models.json"
+        self.configure("configure_prime_agent_models")
+        provider = json.loads(path.read_text())["providers"]["opencode-go"]
+        entry = next(e for e in provider["models"] if e["id"] == "union-alpha")
+        self.assertEqual(entry["api"], "anthropic-messages")
+        self.assertEqual(entry["maxTokens"], 64000)
+        self.assertEqual(provider["modelOverrides"]["union-alpha"]["maxTokens"], 64000)
 
     def test_malformed_config_is_unchanged_without_secret_diagnostics(self):
         for function, filename in (("configure_prime_agent_models", "models.json"), ("configure_prime_agent_tools", "settings.json")):

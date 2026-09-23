@@ -172,6 +172,19 @@ for check_only in (True, False):
 PY
 }
 
+# The mounted agent directory outlives the image, so authored defaults only seed
+# files it does not already have. Existing state would therefore keep the model
+# catalog of whichever image first created it, and no rebuild could correct it.
+# Re-apply the installer's managed model policy instead: the merge is idempotent
+# and preserves unrelated keys, including the selected model and reasoning level.
+reconcile_agent_models() {
+	local installer="$1" home="$2"
+	[[ -f "$installer" && ! -L "$installer" ]] || fail "missing image installer: $installer"
+	gosu overlord env HOME="$home" TARGET_HOME="$home" SETUP_PROFILE=container \
+		PRIME_AGENT_CODING_AGENT_DIR="$home/.prime/agent" \
+		bash -c 'set -euo pipefail; source "$1"; configure_prime_agent_models' entrypoint "$installer" >&2
+}
+
 configure_socket() {
 	local socket="$1" gid group
 	[[ -S "$socket" ]] || return 0
@@ -213,8 +226,8 @@ configure_git_trust() {
 }
 
 entrypoint_main() {
-	local home="$1" defaults="$2" socket="$3" ready="$4" git_config="$5"
-	shift 5
+	local home="$1" defaults="$2" socket="$3" ready="$4" git_config="$5" installer="$6"
+	shift 6
 	# Remove stale readiness even when a later validation/remap fails.
 	rm -f "$ready"
 	[[ $(id -u) == 0 ]] || fail 'entrypoint must start as container root'
@@ -223,6 +236,7 @@ entrypoint_main() {
 	export XDG_CONFIG_HOME="$home/.config" XDG_CACHE_HOME="$home/.cache"
 	export XDG_DATA_HOME="$home/.local/share" XDG_STATE_HOME="$home/.local/state"
 	seed_agent_defaults "$defaults" "$home/.prime/agent" settings.json models.json skills
+	reconcile_agent_models "$installer" "$home"
 	configure_socket "$socket"
 	configure_git_trust "$home" "$git_config"
 	[[ $# -gt 0 ]] || fail 'missing container command'
@@ -232,5 +246,6 @@ entrypoint_main() {
 
 if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
 	entrypoint_main /home/overlord /usr/local/share/overlord/prime-agent-defaults \
-		/var/run/docker.sock /run/overlord-entrypoint-ready /run/overlord.gitconfig "$@"
+		/var/run/docker.sock /run/overlord-entrypoint-ready /run/overlord.gitconfig \
+		/usr/local/share/overlord/setup.sh "$@"
 fi

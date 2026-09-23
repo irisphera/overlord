@@ -28,6 +28,7 @@ EXAMPLES:
     Use 'fresh' to destroy the container and start from a clean image.
     Use 'purge' to also remove the image (full rebuild on next launch).
     .overlord/ inside the workspace survives fresh/purge.
+    Persisted Prime models are re-merged with the image policy on every start.
     Mount verification failures block deletion; existing host state is retained.
     Docker/Podman must be local; remote bind-mount endpoints are unsupported.
     Host engine credentials/context are preserved for every engine operation.

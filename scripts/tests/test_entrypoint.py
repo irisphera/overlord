@@ -11,6 +11,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 ENTRYPOINT = ROOT / "config" / "entrypoint.sh"
+INSTALLER = ROOT / "setup.sh"
 
 # Only account-management and privilege-changing commands are replaced. Files,
 # sockets, Git, shell error propagation, and the entrypoint's Python run for real.
@@ -81,9 +82,10 @@ class EntrypointTests(unittest.TestCase):
             path = commands / name
             path.write_text(COMMAND_DRIVER)
             path.chmod(0o755)
+        self.installer = INSTALLER
         self.env = {
             key: value for key, value in os.environ.items()
-            if not key.startswith(("GIT_CONFIG", "HOST_UID", "HOST_GID"))
+            if not key.startswith(("GIT_CONFIG", "HOST_UID", "HOST_GID", "AZURE_OPENAI_"))
         }
         self.env.update(
             PATH=f"{commands}:{os.environ['PATH']}",
@@ -95,7 +97,7 @@ class EntrypointTests(unittest.TestCase):
 
     def start(self, **environment):
         args = [str(path) for path in (
-            self.home, self.defaults, self.socket_path, self.ready, self.git_config
+            self.home, self.defaults, self.socket_path, self.ready, self.git_config, self.installer
         )]
         # The child observes the configured account and its login environment.
         command = ["bash", "-c", 'printf "%s:%s:%s:%s\\n" "$(id -u overlord)" "$(id -g overlord)" "$USER" "$HOME"']
@@ -223,14 +225,20 @@ class EntrypointTests(unittest.TestCase):
         originals = {path: (path.read_bytes(), self.snapshot(path)) for path in (session, auth, config)}
         prime_models = self.agent / "models.json"
         prime_models.write_text('{"providers":{"personal":{}}}\n')
-        originals[prime_models] = (prime_models.read_bytes(), self.snapshot(prime_models))
         directory_mode = stat.S_IMODE(self.agent.stat().st_mode)
+        reconciled = None
         for _ in range(2):
             result = self.start()
             self.assertEqual(result.returncode, 0, result.stderr)
             for path, expected in originals.items():
                 self.assertEqual((path.read_bytes(), self.snapshot(path)), expected)
             self.assertEqual(stat.S_IMODE(self.agent.stat().st_mode), directory_mode)
+            # The managed model policy is re-applied, then left alone once current.
+            self.assertIn("personal", json.loads(prime_models.read_text())["providers"])
+            current = prime_models.read_bytes(), self.snapshot(prime_models)
+            if reconciled is not None:
+                self.assertEqual(current, reconciled)
+            reconciled = current
         self.assertEqual((self.agent / "skills" / "sample" / "SKILL.md").read_text(), "authored skill\n")
         self.assertFalse((session.parent / "session.json").exists())
 
@@ -241,7 +249,7 @@ class EntrypointTests(unittest.TestCase):
         self.assertFalse((self.agent / "sessions").exists())
         self.assertFalse((self.agent / "runtime.db").exists())
         self.assertTrue(json.loads((self.agent / "settings.json").read_text())["bundledSkills"]["websearch"])
-        self.assertEqual(json.loads((self.agent / "models.json").read_text()), {"providers": {}})
+        self.assertIn("opencode-go", json.loads((self.agent / "models.json").read_text())["providers"])
         self.assertEqual((self.agent / "skills" / "sample" / "SKILL.md").read_text(), "authored skill\n")
 
     def test_fresh_settings_defaults_survive_recreation(self):
@@ -255,6 +263,28 @@ class EntrypointTests(unittest.TestCase):
         result = self.start()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((config.read_bytes(), self.snapshot(config)), original)
+
+    def test_rebuilt_model_policy_reaches_existing_state(self):
+        # Persisted state predating a model is exactly what purge retains, so the
+        # rebuilt image's catalog must reach it instead of being skipped as present.
+        self.agent.mkdir(parents=True)
+        models = self.agent / "models.json"
+        models.write_text(json.dumps({
+            "defaultModel": "opencode-go/deepseek-flash",
+            "providers": {"opencode-go": {"models": [{"id": "deepseek-flash"}]},
+                          "personal": {"models": [{"id": "keep-me"}]}},
+        }))
+        models.chmod(0o640)
+        result = self.start()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        data = json.loads(models.read_text())
+        entries = {entry["id"] for entry in data["providers"]["opencode-go"]["models"]}
+        self.assertIn("mimo-v2.6-flash", entries)
+        self.assertIn("deepseek-flash", entries)
+        # Unmanaged providers and the user's selections are merged around, not replaced.
+        self.assertEqual(data["providers"]["personal"], {"models": [{"id": "keep-me"}]})
+        self.assertEqual(data["defaultModel"], "opencode-go/deepseek-flash")
+        self.assertEqual(stat.S_IMODE(models.stat().st_mode), 0o640)
 
     def test_symlink_destination_fails_before_any_seed_write(self):
         outside = self.root / "outside"

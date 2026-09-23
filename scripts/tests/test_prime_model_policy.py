@@ -70,7 +70,7 @@ class PrimeModelPolicyTests(unittest.TestCase):
     def test_migrated_setup_selectors_and_azure_payloads(self):
         for stale in ({}, {"off": None, "minimal": "minimal", "xhigh": "high", "max": "high"}):
             with self.subTest(stale=stale):
-                astra = {"id": "gpt-6-astra", "reasoning": True, "contextWindow": 256000,
+                astra = {"id": "gpt-6-astra", "reasoning": True, "contextWindow": 256000, "maxTokens": 65536,
                          "thinkingLevelMap": stale, "baseUrl": "https://mock.invalid/openai/v1"}
                 self.models.write_text(json.dumps({"providers": {"azure-openai-responses": {
                     "models": [astra], "modelOverrides": {"gpt-6-astra": {"thinkingLevelMap": stale}},

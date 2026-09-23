@@ -5,7 +5,7 @@ Minimal per-workspace dev container launcher + standalone VM setup.
 - **Container**: `overlord` runs agents in a per-workspace container, exposing the launched folder and its `.overlord/` state rather than your host home or sibling projects.
 - **VM direct**: `setup.sh` installs the same tools on **Debian 13 or Ubuntu 22.04/24.04/26.04 LTS**, configuring one explicitly selected account.
 
-Includes zsh + oh-my-zsh, zellij, LazyVim, Node 24, uv, AWS CLI, CodeGraph, Prime Agent and Codex CLI. Oh My Pi (OMP) and DeepSeek Harness are no longer installed or integrated. Setup does not uninstall existing copies or delete host-saved data. See the container migration notes before recreating old containers.
+Includes zsh + oh-my-zsh, zellij, LazyVim, Node 24, uv, AWS CLI, CodeGraph, Prime Agent and Claude Code. Oh My Pi (OMP), DeepSeek Harness, and Codex CLI are no longer installed or integrated. Setup removes only the Codex distribution it installed itself; it does not uninstall other copies or delete host-saved data such as `~/.codex`. See the container migration notes before recreating old containers.
 
 ## Quick start (container)
 
@@ -57,9 +57,9 @@ The target defaults to `SUDO_USER`, then the invoking non-root account. Root mus
 
 npm global installs default to `/usr/local`, keeping workspace-installed executables on PATH across Node upgrades. Explicit npm prefix settings still take precedence; project-local installs stay in the project.
 
-Python environments use **Astral uv**; Conda is not installed or required. The installer uses `/usr/bin/python3` and distro-provided TOML support for configuration edits, independently of any activated Python environment. Neovim is installed from a checksum-verified, pinned upstream release because older distro packages do not meet [LazyVim's runtime requirements](https://www.lazyvim.org/).
+Python environments use **Astral uv**; Conda is not installed or required. The installer uses `/usr/bin/python3` for configuration edits, independently of any activated Python environment. Neovim is installed from a checksum-verified, pinned upstream release because older distro packages do not meet [LazyVim's runtime requirements](https://www.lazyvim.org/).
 
-Version precedence: explicit environment variables, then `--versions FILE` or adjacent `config/tool-versions.env`, then embedded standalone defaults. The manifest is parsed as data, not sourced as shell. It pins Node, Neovim (`NVIM_VERSION`), zellij, CodeGraph, Prime Agent, and Codex. Required downloads, installs, and executable version checks fail setup; optional skill downloads and LazyVim plugin synchronization report warnings.
+Version precedence: explicit environment variables, then `--versions FILE` or adjacent `config/tool-versions.env`, then embedded standalone defaults. The manifest is parsed as data, not sourced as shell. It pins Node, Neovim (`NVIM_VERSION`), zellij, CodeGraph, and Prime Agent. `CLAUDE_CODE_VERSION` alone may name an npm dist-tag (default `next`) instead of a version; see Claude Code below. Required downloads, installs, and executable version checks fail setup; optional skill downloads and LazyVim plugin synchronization report warnings.
 
 Use `--profile native` (default) for VMs. `--profile container` additionally enables Runpod Docs MCP for Prime. The thin `setup-devcontainer.sh` adapter selects the container profile and `overlord` account; it propagates failures from the shared installer.
 
@@ -69,29 +69,30 @@ Setup installs TypeScript/JavaScript, Python (Pyright), PHP (Intelephense), Java
 
 Repository `setup-devcontainer.sh` files install their additional tooling and repair incompatible or inaccessible server installations. They reuse valid `/opt/overlord` distributions and use `/usr/local` for fallback npm installs instead of a user's nvm prefix.
 
-### Prime Agent and Codex model policy
+### Claude Code
+
+Setup installs Claude Code with npm from `@anthropic-ai/claude-code@next`. `CLAUDE_CODE_VERSION` defaults to the `next` dist-tag. Setup resolves the tag to the version it currently points at, installs that version as a root-owned distribution in `/opt/overlord/claude-<version>`, verifies `claude --version`, and publishes `/usr/local/bin/claude`. Set `CLAUDE_CODE_VERSION` to a version (for example `2.1.281`) to pin it. When [Safe Chain](https://github.com/AikidoSec/safe-chain) is on `PATH`, the install passes `--safe-chain-skip-minimum-package-age`, because a fresh `next` release is younger than Safe Chain's minimum package age. Plain npm would only warn about the unknown flag, so it is omitted there.
+
+The distribution is root-owned, so the managed shell block sets `DISABLE_AUTOUPDATER=1`. Update Claude Code by re-running setup, or with `overlord purge` then `overlord` for containers. In containers, `~/.claude` (login and settings) is not persisted across `fresh`/`purge`.
+
+### Prime Agent model policy
 
 | Agent / work | Model | Reasoning effort |
 | --- | --- | --- |
 | Prime Agent — default | `deepseek-flash` on `opencode-go` | selected level; `off` → `none` |
-| Codex — normal work | `gpt-5.6-luna` | `max` |
-| Codex — high-brain profile | `gpt-6-astra` | `medium` |
 
 - **Prime Agent models:** setup manages five `opencode-go` models — `deepseek-flash` (the default), `muse-spark-1.3-contributor`, `mimo-v2.6-flash`, `mimo-v2.6-pro`, and `space-bunny-free` — plus `gemini-3.8-flash` on `google-vertex`. It manages no Azure (`azure-openai-responses`) or GPT model for Prime. Re-runs and container starts remove the previously managed `gpt-5.6-sol`, `gpt-5.6-luna`, `grok-4.6`, `gpt-6-astra`, and `union-alpha` entries (and the retired `deepseek-v4.1-flash`) but keep models you added to those providers; a provider left empty is removed because Prime rejects it. Setup re-runs also move a default model that pointed at a removed entry to DeepSeek Flash and drop removed entries from the recent-model list. Any other selection, including every managed model, stays selected.
-- **Prime built-ins:** `models.json` can add and override models but cannot hide Prime's own catalog. Prime's built-in `opencode-go` models, including `gpt-5.6-luna` and `grok-4.6`, stay listed whenever `OPENCODE_API_KEY` is set, and its Azure models whenever `AZURE_OPENAI_API_KEY` is set. They keep their native windows, so the 150k policy below does not apply to them.
+- **Prime built-ins:** `models.json` can add and override models but cannot hide Prime's own catalog. Prime's built-in `opencode-go` models, including `gpt-5.6-luna` and `grok-4.6`, stay listed whenever `OPENCODE_API_KEY` is set. Its Azure models appear only when `AZURE_OPENAI_API_KEY` is set; the launcher no longer forwards Azure variables into containers. They keep their native windows, so the 150k policy below does not apply to them.
 - **Compaction threshold:** every managed Prime model auto-compacts at 150,000 tokens. Prime compacts when `contextTokens > contextWindow - reserveTokens` and `reserveTokens` defaults to 16,384, so setup writes a `contextWindow` of 166,384 for all of them and the model name carries the threshold, not the provider window (`DeepSeek Flash (150k)`). A model's larger real window is deliberately unused; raising the threshold means raising it here. Setting `reserveTokens` in `settings.json` moves the threshold away from 150k. Older setups also wrote a 256k `"*"` override; Prime ignores that ID, and setup now removes it.
 - **Output tokens:** Prime 0.9.5 sends `min(maxTokens, 32000)` as every request's output cap, and a custom model without `maxTokens` defaults to 16,384. `models.json` cannot remove the cap (`maxTokens` must be positive), so every managed model carries `maxTokens: 32000`, Prime's own ceiling, and imposes no lower limit of its own.
 - **Space Bunny:** the Zen gateway lists the model only as `space-bunny-free` (there is no `space-bunny` ID). The entry pins the OpenAI Chat Completions route (`openai-completions`, `https://opencode.ai/zen/go/v1`) with image input. The gateway accepts `minimal` through `max` but rejects `none` with HTTP 400 (probed 2026-09-23), and Prime sends `none` for `off`; the `thinkingLevelMap` therefore disables `off`, so a saved `off` is clamped to `minimal`, and maps `xhigh` and `max` explicitly so Prime offers them.
 - **MiMo V2.6:** Setup adds `mimo-v2.6-flash` and `mimo-v2.6-pro` on `opencode-go` with image input. The Zen gateway serves both only over the OpenAI Chat Completions route, so the entries pin `openai-completions` and `https://opencode.ai/zen/go/v1` (`/responses` and `/messages` answer 503; probed 2026-09-22). Their `thinkingLevelMap` disables the gateway-rejected `minimal`, `xhigh`, and `max` selectors, so a saved level above `high` is clamped to `high`.
-- **Codex:** `codex` (or `codex --profile default`) uses Luna/max. Use `codex --profile high-brain` for Astra/medium. These are explicit profiles, not automatic task-complexity routing. Plan-mode effort matches the selected profile. Codex `0.153.4` supports literal `max`; it is not replaced with `xhigh`. Select the profile instead of changing only `--model`, which would keep the old effort. The high-brain profile gives Astra 272,000 tokens; Codex has no auto-compaction and is outside the Prime policy.
-- Setup merges `~/.prime/agent/models.json`, `~/.codex/config.toml`, and Codex's `default.config.toml` / `high-brain.config.toml` profile files. It preserves unrelated settings and saves the first originals as `*.bak`. Codex `0.153.4` uses these file profiles. Setup removes rejected legacy `profile = "..."` selectors and migrates managed `[profiles.default]` / `[profiles.high-brain]` tables into the corresponding files. It updates old Astra/high defaults on re-runs. Invalid files are left unchanged with a warning. The setup uses distro `python3-tomlkit` package for safe config merges.
-- `AZURE_OPENAI_BASE_URL` takes precedence over `AZURE_OPENAI_RESOURCE_NAME`. Codex resolves both model names through `AZURE_OPENAI_DEPLOYMENT_NAME_MAP`. The Azure variables configure Codex only; API keys stay in the environment, not in the generated configuration.
 
 ### Configuration preservation
 
-Managed JSON/JSONC, TOML, zellij, and shell-block writes preserve existing file modes and the first `*.bak`, use same-directory atomic replacement, and reject symlink/non-regular configuration destinations. Malformed agent files are left unchanged with credential-safe diagnostics. Unrelated settings, sessions, auth files, and databases are preserved. A detected concurrent configuration change causes the write to be refused.
+Managed JSON/JSONC, zellij, and shell-block writes preserve existing file modes and the first `*.bak`, use same-directory atomic replacement, and reject symlink/non-regular configuration destinations. Malformed agent files are left unchanged with credential-safe diagnostics. Unrelated settings, sessions, auth files, and databases are preserved. A detected concurrent configuration change causes the write to be refused.
 
-Host Prime models seed a missing workspace models file without changing the host file. Existing workspace models are authoritative. Shared skills are copied from the selected account's Pi skills staging directory into Prime; `PRIME_AGENT_CODING_AGENT_DIR` and `CODEX_HOME` can explicitly select alternate locations.
+Host Prime models seed a missing workspace models file without changing the host file. Existing workspace models are authoritative. Shared skills are copied from the selected account's Pi skills staging directory into Prime; `PRIME_AGENT_CODING_AGENT_DIR` can explicitly select an alternate location.
 
 ## What setup.sh does (idempotent)
 
@@ -100,7 +101,7 @@ Host Prime models seed a missing workspace models file without changing the host
 - Installs `zellij` v0.43.1 (arch-aware tarball)
 - Installs checksum-verified Neovim from a pinned upstream release for LazyVim
 - Installs a root-owned Node.js 24 distribution, `uv`, and AWS CLI v2
-- Installs `prime-agent` (managed `opencode-go` models) and Codex CLI (`codex`, Azure models)
+- Installs `prime-agent` (managed `opencode-go` models) and Claude Code (`claude`, npm `@anthropic-ai/claude-code@next`); removes a Codex CLI distribution installed by earlier runs
 - Installs the language servers described above
 - Installs a curated Prime skill set for the selected account: `setup-matt-pocock-skills`, `grill-me`, `grill-with-docs`, `grilling`, and `domain-modeling` from `mattpocock/skills`, plus `thermos`, `thermo-nuclear-review`, and `thermo-nuclear-code-quality-review` from `cursor/plugins`, next to the CodeGraph and Context7 routing skills. Whole skill collections are not installed; the list lives in `install_prime_agent_skills`. Context7 MCP is configured for Prime.
 - Prompts for optional Context7 and Serper API keys when setup runs on a terminal, and reads `CONTEXT7_API_KEY` / `SERPER_API_KEY` otherwise, so headless runs never block. Keys are stored in the agent directory: `auth.json` for the bundled web search skill, and the Context7 MCP header in `settings.json`. Existing values are kept and key values are never printed; without a stored key Serper still supports `prime-agent` `/login`

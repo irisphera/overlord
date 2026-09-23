@@ -51,18 +51,21 @@ load_tool_versions() {
   # Embedded defaults keep curl | bash standalone. A local manifest overrides
   # defaults; explicit environment versions override the manifest.
   local -A versions=( [ZELLIJ_VERSION]=0.43.1 [NODE_VERSION]=24.20.0 [NVIM_VERSION]=0.12.5
-    [PRIME_AGENT_VERSION]=0.9.5 [CODEGRAPH_VERSION]=1.6.0 [CODEX_VERSION]=0.153.4
+    [PRIME_AGENT_VERSION]=0.9.5 [CODEGRAPH_VERSION]=1.6.0 [CLAUDE_CODE_VERSION]=next
     [TYPESCRIPT_LANGUAGE_SERVER_VERSION]=6.0.0 [TYPESCRIPT_VERSION]=6.0.3
     [PYRIGHT_VERSION]=1.1.413 [INTELEPHENSE_VERSION]=1.18.5
     [VSCODE_LANGSERVERS_VERSION]=4.10.0 [BASH_LANGUAGE_SERVER_VERSION]=5.6.0
     [YAML_LANGUAGE_SERVER_VERSION]=1.24.0 [JDTLS_VERSION]=1.60.0 [JDTLS_JAVA_VERSION]=21.0.10 )
+  # npm dist-tags are resolved to a version at install time.
+  local -A dist_tag_allowed=( [CLAUDE_CODE_VERSION]=1 )
+  local semver='^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$' dist_tag='^[a-z][a-z0-9-]*$'
   local -A seen=()
   local line name value
   if [ -n "${VERSION_FILE:-}" ]; then
     [ -r "$VERSION_FILE" ] || { die "cannot read version manifest: $VERSION_FILE"; return 1; }
     while IFS= read -r line || [ -n "$line" ]; do
       [[ "$line" =~ ^[[:space:]]*(#|$) ]] && continue
-      [[ "$line" =~ ^([A-Z_]+)=([0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?)$ ]] || {
+      [[ "$line" =~ ^([A-Z_]+)=([0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?|[a-z][a-z0-9-]*)$ ]] || {
         die 'invalid version manifest assignment'; return 1;
       }
       name="${BASH_REMATCH[1]}"; value="${BASH_REMATCH[2]}"
@@ -72,7 +75,9 @@ load_tool_versions() {
   fi
   for name in "${!versions[@]}"; do
     value="${!name:-${versions[$name]}}"
-    [[ "$value" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$ ]] || { die "invalid $name"; return 1; }
+    [[ "$value" =~ $semver ]] || { [[ -v dist_tag_allowed[$name] && "$value" =~ $dist_tag ]]; } || {
+      die "invalid $name"; return 1;
+    }
     printf -v "$name" '%s' "$value"
     export "$name"
   done
@@ -135,11 +140,12 @@ publish_binary() {
 install_npm_tool() (
   set -euo pipefail
   local name="$1" package="$2" version="$3" destination stage
+  shift 3
   destination="/opt/overlord/$name-$version"
   if [ ! -x "$destination/bin/$name" ]; then
     stage="$(mktemp -d /opt/overlord/.npm.XXXXXXXX)"
     trap 'rm -rf "$stage"' EXIT
-    npm install --global --prefix "$stage" --no-audit --no-fund "$package@$version"
+    npm install --global --prefix "$stage" --no-audit --no-fund "$@" "$package@$version"
     verify_version "$stage/bin/$name" "$version"
     chmod -R a+rX "$stage"
     [ ! -e "$destination" ] || { die "incomplete installation exists: $destination"; exit 1; }
@@ -376,7 +382,6 @@ install_base_packages() {
     xz-utils
     util-linux
     passwd
-    python3-tomlkit
     # Pulls the distro's ICU runtime required by Marksman's bundled .NET.
     libicu-dev
   )
@@ -539,6 +544,8 @@ ensure_node_shell_rc() {
     upsert_overlord_shell_block "$TARGET_HOME/$rc" 'Overlord: persistent tool PATH' <<'PATH_BLOCK'
 # --- Overlord: persistent tool PATH ---
 export PATH="/usr/local/bin:$HOME/.local/bin:$PATH"
+# Claude Code is a root-owned install; re-running setup updates it.
+export DISABLE_AUTOUPDATER=1
 PATH_BLOCK
   done
 }
@@ -547,7 +554,7 @@ PATH_BLOCK
 verify_login_shell_tools() {
   [ "$(id -u)" -eq "$TARGET_UID" ] || { die 'login verification requires the target UID'; return 1; }
   local command
-  for command in node npm npx nvim prime-agent git codex; do
+  for command in node npm npx nvim prime-agent git claude; do
     env -i HOME="$TARGET_HOME" USER="$TARGET_USER" LOGNAME="$TARGET_USER" \
       TERM=xterm-256color PATH=/usr/local/bin:/usr/bin:/bin \
       zsh -lic "$command --version" >/dev/null || { die "$command does not run as $TARGET_USER"; return 1; }
@@ -950,7 +957,35 @@ install_prime_agent() (
 )
 
 
-install_codex() { install_npm_tool codex @openai/codex "$CODEX_VERSION"; }
+# CLAUDE_CODE_VERSION may name an npm dist-tag (default: next). Resolve it to the
+# version it points at now, so each release gets its own verified distribution
+# and a re-run picks up the newer release.
+install_claude_code() {
+  local package=@anthropic-ai/claude-code version="$CLAUDE_CODE_VERSION" npm_flags=()
+  if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$ ]]; then
+    version="$(npm view "$package@$CLAUDE_CODE_VERSION" version)" || {
+      die "cannot resolve $package@$CLAUDE_CODE_VERSION"; return 1;
+    }
+    [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$ ]] || {
+      die "unexpected $package@$CLAUDE_CODE_VERSION version: $version"; return 1;
+    }
+  fi
+  # Safe Chain blocks packages younger than its minimum age, which a fresh
+  # @next release is. Plain npm would only warn about the unknown flag.
+  if command -v safe-chain >/dev/null 2>&1; then
+    npm_flags+=(--safe-chain-skip-minimum-package-age)
+  fi
+  install_npm_tool claude "$package" "$version" "${npm_flags[@]}"
+}
+
+# Codex CLI is no longer installed. Remove the distributions earlier runs
+# published; the account's ~/.codex configuration and sessions stay.
+remove_codex() {
+  if [ -L /usr/local/bin/codex ] && [[ "$(readlink /usr/local/bin/codex)" == /opt/overlord/codex-* ]]; then
+    rm -f /usr/local/bin/codex
+  fi
+  rm -rf /opt/overlord/codex-*
+}
 
 # Shared Python I/O keeps managed formats atomic and preserves permissions.
 python_config() {
@@ -1096,141 +1131,6 @@ def write_file(path, original, rendered):
         temporary.unlink(missing_ok=True)
     print(f"configured {path}")
 PY_HELPERS
-}
-
-# Codex: Luna/max by default, explicit high-brain profile for Astra/medium.
-# Merge config instead of skipping old Astra defaults; preserve unrelated settings.
-# Resolve deployment mappings here because Codex sends model names verbatim.
-configure_codex() {
-  info "configuring Codex model policy (Luna max / Astra medium)..."
-  python_config "${CODEX_HOME:-$TARGET_HOME/.codex}" <<'PYEOF_CODEX'
-import copy
-import os
-import stat
-import sys
-import tempfile
-from collections.abc import MutableMapping
-from pathlib import Path
-
-import tomlkit
-
-resource = os.environ.get("AZURE_OPENAI_RESOURCE_NAME", "").strip()
-env_base = os.environ.get("AZURE_OPENAI_BASE_URL", "").strip().rstrip("/")
-if env_base:
-    # Azure's versioned Responses endpoint is /openai/responses?api-version=...
-    # Codex appends /responses; Prime bases may include the /v1 suffix.
-    configured_base = env_base[:-3].rstrip("/") if env_base.endswith("/v1") else env_base
-elif resource:
-    configured_base = f"https://{resource}.openai.azure.com/openai"
-else:
-    configured_base = None
-api_version = os.environ.get("AZURE_OPENAI_API_VERSION", "").strip()
-deployments = {"gpt-5.6-luna": "gpt-5.6-luna", "gpt-6-astra": "gpt-6-astra"}
-for chunk in os.environ.get("AZURE_OPENAI_DEPLOYMENT_NAME_MAP", "").split(","):
-    key, separator, value = chunk.partition("=")
-    if separator and key.strip() in deployments and value.strip():
-        deployments[key.strip()] = value.strip()
-
-
-def table(parent, key):
-    if key not in parent:
-        parent[key] = tomlkit.table()
-    value = parent[key]
-    if not isinstance(value, MutableMapping):
-        raise ValueError("managed configuration entry must be a table")
-    return value
-
-
-def apply_model_policy(config, model, effort):
-    # Since Codex 0.153.4 --profile selects <name>.config.toml. A legacy
-    # root profile selector is rejected, even though older schemas retain it.
-    config.pop("profile", None)
-    config["model"] = deployments[model]
-    config["model_provider"] = "azure"
-    config["model_reasoning_effort"] = effort
-    config["plan_mode_reasoning_effort"] = effort
-    if model == "gpt-6-astra":
-        config["model_context_window"] = 272000
-    # Reviews inherit the current effort. Do not leave an Astra-only model
-    # override that could send Luna's max effort to Astra.
-    if config.get("review_model") in {"gpt-6-astra", deployments["gpt-6-astra"]}:
-        config.pop("review_model", None)
-
-
-def apply_policy(config, model, effort, is_base):
-    apply_model_policy(config, model, effort)
-    # Keep unrelated legacy profiles, but enforce medium for any Astra entries.
-    if "profiles" in config:
-        for profile in table(config, "profiles").values():
-            if isinstance(profile, MutableMapping) and profile.get("model") in {"gpt-6-astra", deployments["gpt-6-astra"]}:
-                profile["model_reasoning_effort"] = "medium"
-                profile["plan_mode_reasoning_effort"] = "medium"
-                profile["model_context_window"] = 272000
-    if is_base:
-        azure = table(table(config, "model_providers"), "azure")
-        azure["name"] = "Azure OpenAI"
-        azure["base_url"] = configured_base or azure.get("base_url") or "https://YOUR-RESOURCE-NAME.openai.azure.com/openai"
-        azure["env_key"] = "AZURE_OPENAI_API_KEY"
-        azure["wire_api"] = "responses"
-        query = table(azure, "query_params")
-        query["api-version"] = api_version or query.get("api-version") or "2025-04-01-preview"
-
-
-
-
-def merge_missing(target, source):
-    # An existing file-profile setting wins over a legacy inline setting.
-    for key, value in source.items():
-        if key not in target:
-            target[key] = copy.deepcopy(value)
-        elif isinstance(target[key], MutableMapping) and isinstance(value, MutableMapping):
-            merge_missing(target[key], value)
-
-
-policy = {
-    "config.toml": ("gpt-5.6-luna", "max"),
-    "default.config.toml": ("gpt-5.6-luna", "max"),
-    "high-brain.config.toml": ("gpt-6-astra", "medium"),
-}
-for raw in sys.argv[1:]:
-    home_dir = Path(raw)
-    try:
-        ensure_directory(home_dir)
-        originals, documents = {}, {}
-        # Validate all files before modifying any. Malformed user config stays intact.
-        for filename in policy:
-            target = home_dir / filename
-            original = read_text(target)
-            originals[filename] = original
-            config = tomlkit.parse(original) if original is not None else tomlkit.document()
-            if original is None:
-                config.add(tomlkit.comment("Managed model policy from overlord setup.sh (configure_codex)."))
-            documents[filename] = config
-        # Codex rejects --profile NAME while a legacy [profiles.NAME] table
-        # remains in any loaded layer. Move managed tables into their files.
-        for config in documents.values():
-            if "profiles" not in config:
-                continue
-            legacy = table(config, "profiles")
-            for name in ("default", "high-brain"):
-                if name in legacy:
-                    source = table(legacy, name)
-                    merge_missing(documents[f"{name}.config.toml"], source)
-                    del legacy[name]
-            if not legacy:
-                del config["profiles"]
-        rendered = {}
-        for filename, (model, effort) in policy.items():
-            config = documents[filename]
-            apply_policy(config, model, effort, filename == "config.toml")
-            rendered[filename] = tomlkit.dumps(config)
-        # Save profile settings before removing their old tables from the base.
-        for filename in ("default.config.toml", "high-brain.config.toml", "config.toml"):
-            write_file(home_dir / filename, originals[filename], rendered[filename])
-    except (OSError, UnicodeError, ValueError, TypeError, tomlkit.exceptions.TOMLKitError) as error:
-        # Parser diagnostics may contain credentials: report only the error type.
-        print(f"skipping invalid or unwritable Codex config in {home_dir}: {type(error).__name__}")
-PYEOF_CODEX
 }
 
 install_skills_from_source() {
@@ -1706,7 +1606,6 @@ configure_user() {
   configure_prime_agent_tools
   configure_prime_agent_api_keys
   configure_prime_agent_models
-  configure_codex
   verify_login_shell_tools
 }
 
@@ -1730,7 +1629,7 @@ setup_system() {
     # files in the selected account's existing agent directories.
     export HOME=/root USER=root LOGNAME=root
     unset XDG_CONFIG_HOME XDG_CACHE_HOME XDG_DATA_HOME XDG_STATE_HOME
-    unset PRIME_AGENT_CODING_AGENT_DIR CODEX_HOME
+    unset PRIME_AGENT_CODING_AGENT_DIR
     install_node
     install_language_servers
     install_zellij
@@ -1739,7 +1638,8 @@ setup_system() {
     install_uv
     install_aws_cli
     install_prime_agent
-    install_codex
+    install_claude_code
+    remove_codex
   )
   make_zsh_default
   # Transfer function definitions, not a user-editable root script. User startup
@@ -1777,10 +1677,9 @@ main() {
   export SETUP_PROFILE SETUP_DIR
   export LAZYVIM_REPO="${LAZYVIM_REPO:-https://github.com/LazyVim/starter}"
   export PRIME_AGENT_CODING_AGENT_DIR="${PRIME_AGENT_CODING_AGENT_DIR:-$TARGET_HOME/.prime/agent}"
-  export CODEX_HOME="${CODEX_HOME:-$TARGET_HOME/.codex}"
   if [ "$(id -u)" -ne 0 ]; then
     sudo -n true || { die 'passwordless sudo is required; run setup as root with --user NAME'; return 1; }
-    { declare -f; printf '\nsetup_system\n'; } | sudo -n --preserve-env=TARGET_USER,TARGET_UID,TARGET_GID,TARGET_HOME,SETUP_DIR,SETUP_PROFILE,ZELLIJ_VERSION,NODE_VERSION,NVIM_VERSION,PRIME_AGENT_VERSION,CODEGRAPH_VERSION,CODEX_VERSION,TYPESCRIPT_LANGUAGE_SERVER_VERSION,TYPESCRIPT_VERSION,PYRIGHT_VERSION,INTELEPHENSE_VERSION,VSCODE_LANGSERVERS_VERSION,BASH_LANGUAGE_SERVER_VERSION,YAML_LANGUAGE_SERVER_VERSION,JDTLS_VERSION,JDTLS_JAVA_VERSION,LAZYVIM_REPO,PRIME_AGENT_CODING_AGENT_DIR,CODEX_HOME,AZURE_OPENAI_BASE_URL,AZURE_OPENAI_RESOURCE_NAME,AZURE_OPENAI_API_VERSION,AZURE_OPENAI_DEPLOYMENT_NAME_MAP bash -s
+    { declare -f; printf '\nsetup_system\n'; } | sudo -n --preserve-env=TARGET_USER,TARGET_UID,TARGET_GID,TARGET_HOME,SETUP_DIR,SETUP_PROFILE,ZELLIJ_VERSION,NODE_VERSION,NVIM_VERSION,PRIME_AGENT_VERSION,CODEGRAPH_VERSION,CLAUDE_CODE_VERSION,TYPESCRIPT_LANGUAGE_SERVER_VERSION,TYPESCRIPT_VERSION,PYRIGHT_VERSION,INTELEPHENSE_VERSION,VSCODE_LANGSERVERS_VERSION,BASH_LANGUAGE_SERVER_VERSION,YAML_LANGUAGE_SERVER_VERSION,JDTLS_VERSION,JDTLS_JAVA_VERSION,LAZYVIM_REPO,PRIME_AGENT_CODING_AGENT_DIR bash -s
   else
     setup_system
   fi

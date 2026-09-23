@@ -64,6 +64,46 @@ class SetupShTests(unittest.TestCase):
             manifest.write_text("NODE_VERSION=24.19.0\nNODE_VERSION=24.20.0\n")
             self.assertNotEqual(self.run_shell('VERSION_FILE="$1"; load_tool_versions', manifest, env=env).returncode, 0)
 
+    def test_only_claude_code_may_follow_an_npm_dist_tag(self):
+        env = {key: value for key, value in os.environ.items() if not key.endswith("_VERSION")}
+        result = self.run_shell('VERSION_FILE="$1"; load_tool_versions; printf "%s" "$CLAUDE_CODE_VERSION"',
+                                ROOT / "config/tool-versions.env", env=env)
+        self.assertEqual((result.returncode, result.stdout), (0, "next"), result.stderr)
+        for name, value in (("CLAUDE_CODE_VERSION", "2.1.281"), ("CLAUDE_CODE_VERSION", "latest")):
+            with self.subTest(name=name, value=value):
+                result = self.run_shell('VERSION_FILE=""; load_tool_versions; printf "%s" "$CLAUDE_CODE_VERSION"',
+                                        env=dict(env, **{name: value}))
+                self.assertEqual((result.returncode, result.stdout), (0, value), result.stderr)
+        for name, value in (("PRIME_AGENT_VERSION", "next"), ("CLAUDE_CODE_VERSION", "Next"),
+                            ("CLAUDE_CODE_VERSION", "next;id")):
+            with self.subTest(name=name, value=value):
+                result = self.run_shell('VERSION_FILE=""; load_tool_versions', env=dict(env, **{name: value}))
+                self.assertNotEqual(result.returncode, 0)
+
+    def test_claude_code_installs_the_resolved_dist_tag_through_npm(self):
+        # Stub npm and the shared installer: record the resolution and install arguments.
+        stubs = ('npm() { printf "npm %s\\n" "$*" >&2; printf "2.1.281\\n"; }; '
+                 'install_npm_tool() { printf "%s\\n" "$@"; }; ')
+        with tempfile.TemporaryDirectory() as tmp:
+            safe_chain = Path(tmp) / "safe-chain"
+            safe_chain.write_text("#!/bin/sh\n")
+            safe_chain.chmod(0o755)
+            for path, flags in (("/usr/bin:/bin", []), (f"{tmp}:/usr/bin:/bin", ["--safe-chain-skip-minimum-package-age"])):
+                with self.subTest(safe_chain=bool(flags)):
+                    env = dict(os.environ, PATH=path, CLAUDE_CODE_VERSION="next")
+                    result = self.run_shell(stubs + "install_claude_code", env=env)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(result.stdout.splitlines(), ["claude", "@anthropic-ai/claude-code", "2.1.281", *flags])
+                    self.assertIn("npm view @anthropic-ai/claude-code@next version", result.stderr)
+            pinned = self.run_shell(stubs + "install_claude_code", env=dict(os.environ, PATH="/usr/bin:/bin",
+                                                                            CLAUDE_CODE_VERSION="2.1.280"))
+            self.assertEqual(pinned.stdout.splitlines(), ["claude", "@anthropic-ai/claude-code", "2.1.280"])
+            self.assertNotIn("npm view", pinned.stderr)
+            broken = self.run_shell('npm() { printf "not a version\\n"; }; install_npm_tool() { exit 9; }; install_claude_code',
+                                    env=dict(os.environ, PATH="/usr/bin:/bin", CLAUDE_CODE_VERSION="next"))
+            self.assertNotEqual(broken.returncode, 0)
+            self.assertNotEqual(broken.returncode, 9)
+
     def test_unknown_account_and_invalid_options_fail_before_installation(self):
         result = self.run_shell('REQUESTED_USER=overlord-account-that-does-not-exist; resolve_setup_identity')
         self.assertNotEqual(result.returncode, 0)

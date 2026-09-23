@@ -10,22 +10,6 @@ from typing import Final
 
 CONTAINER_HOME: Final = "/home/overlord"
 OPTIONAL_TERMINAL_ENV_VARS: Final = ("COLORTERM", "TERM_PROGRAM", "TERM_PROGRAM_VERSION", "LANG", "LC_ALL")
-# Azure OpenAI credentials for Codex's azure provider (configure_codex). Setup
-# manages no Prime models on Azure, but with AZURE_OPENAI_API_KEY present Prime
-# still lists its own built-in azure-openai-responses catalog.
-AZURE_ENV_VARS: Final = (
-    "AZURE_OPENAI_API_KEY",
-    "AZURE_OPENAI_BASE_URL",
-    "AZURE_OPENAI_RESOURCE_NAME",
-    "AZURE_OPENAI_API_VERSION",
-    "AZURE_OPENAI_DEPLOYMENT_NAME_MAP",
-)
-# Legacy names exported by older setups; mapped to the AZURE_OPENAI_* names
-# prime-agent reads when the modern variable is absent.
-AZURE_LEGACY_ENV_ALIASES: Final = {
-    "AZURE_API_KEY": "AZURE_OPENAI_API_KEY",
-    "AZURE_RESOURCE_NAME": "AZURE_OPENAI_RESOURCE_NAME",
-}
 # Both OpenCode providers resolve credentials from OPENCODE_API_KEY. Forward the
 # key explicitly because the container only mounts persisted agent state, not the
 # host's ~/.prime/agent/auth.json.
@@ -47,7 +31,6 @@ def build_environment_plan(host_env: Mapping[str, str], *, home: Path, workspace
     exec_values = base_exec_env(host_env, workspace_name)
     for name in OPTIONAL_TERMINAL_ENV_VARS:
         append_present(exec_values, host_env, name)
-    append_azure_env(exec_values, host_env)
     append_opencode_env(exec_values, host_env)
     return EnvironmentPlan(
         exec_env_values=tuple(exec_values),
@@ -72,21 +55,6 @@ def base_exec_env(host_env: Mapping[str, str], workspace_name: str) -> list[str]
 def append_present(target: list[str], source: Mapping[str, str], name: str) -> None:
     if name in source and source[name] != "":
         target.append(f"{name}={source[name]}")
-
-def append_azure_env(target: list[str], source: Mapping[str, str]) -> None:
-    """Forward Azure OpenAI credentials, mapping legacy AZURE_* names forward.
-
-    Codex reads AZURE_OPENAI_API_KEY / AZURE_OPENAI_RESOURCE_NAME /
-    AZURE_OPENAI_BASE_URL. Hosts that export the older AZURE_API_KEY /
-    AZURE_RESOURCE_NAME names get them mapped when the modern name is absent,
-    so Codex's Azure models keep working inside the container.
-    """
-    for name in AZURE_ENV_VARS:
-        append_present(target, source, name)
-    for legacy, modern in AZURE_LEGACY_ENV_ALIASES.items():
-        if modern not in source or source[modern] == "":
-            if legacy in source and source[legacy] != "":
-                target.append(f"{modern}={source[legacy]}")
 
 def append_opencode_env(target: list[str], source: Mapping[str, str]) -> None:
     """Forward the shared OpenCode API key used by opencode and opencode-go."""

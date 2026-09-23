@@ -1,5 +1,7 @@
 # Sessions data
 sessions/
+# Claude Code local state
+.claude/
 
 /**/*pycache*/**
 

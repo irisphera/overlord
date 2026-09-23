@@ -323,14 +323,14 @@ class ContainerLifecycleTests(unittest.TestCase):
             self.assertEqual(engine.calls, [])
 
     def test_state_directory_symlinks_are_rejected_before_any_write(self):
-        for name in ("root", "zsh_data", "prime_agent_data", "omo", "codegraph"):
+        for name in ("root", "zsh_data", "prime_agent_data", "codegraph"):
             with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
                 paths = build_workspace_paths(Path(tmp), script_path=ROOT / "scripts/overlord")
                 outside = Path(tmp) / "outside"
                 outside.mkdir()
                 (outside / "sentinel").write_text("unchanged")
                 target = getattr(paths.state, name)
-                if name in {"omo", "codegraph"}:
+                if name == "codegraph":
                     target = target.managed_directory
                 if name != "root":
                     paths.state.root.mkdir()

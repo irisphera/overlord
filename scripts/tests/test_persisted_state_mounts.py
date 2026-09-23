@@ -79,7 +79,7 @@ class PersistedStateMountTests(unittest.TestCase):
         self.assertTrue(result.zsh_data_created)
         self.assertTrue(result.prime_agent_data_created)
         self.assertEqual({path.name for path in self.paths.state.root.iterdir()},
-                         {"zsh-data", "prime-agent-data", ".omo", ".codegraph"})
+                         {"zsh-data", "prime-agent-data", ".codegraph"})
 
     def test_supported_mount_set_is_sufficient(self):
         result = verify_persisted_state_mounts(

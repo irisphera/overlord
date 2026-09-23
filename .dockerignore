@@ -1,11 +1,9 @@
 .git
 .overlord
 .codegraph
-.omo
 **/.overlord
 **/.git
 **/.codegraph
-**/.omo
 **/__pycache__
 **/*.py[cod]
 **/.pytest_cache

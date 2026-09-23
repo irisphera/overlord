@@ -44,7 +44,6 @@ class StatePaths:
     root: Path
     zsh_data: Path
     prime_agent_data: Path
-    omo: ManagedStatePaths
     codegraph: ManagedStatePaths
 
 @dataclass(frozen=True, slots=True)
@@ -79,7 +78,6 @@ def state_paths(workspace: Path) -> StatePaths:
         root=root,
         zsh_data=root / "zsh-data",
         prime_agent_data=root / "prime-agent-data",
-        omo=managed_state_paths(workspace, root, ".omo"),
         codegraph=managed_state_paths(workspace, root, ".codegraph"),
     )
 

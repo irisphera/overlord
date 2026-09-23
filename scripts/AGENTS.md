@@ -6,7 +6,6 @@
 
 `scripts/` owns the host launcher. `overlord` is the bind-mounted local workflow.
 `scripts/overlord` is a minimal shim that resolves host `python3` and execs `scripts/overlord_py/`.
-`install` is a thin wrapper that execs `setup.sh`.
 
 ## PRIMARY COMMAND
 

@@ -11,7 +11,7 @@ from typing import Final, assert_never, override
 
 from overlord_py.paths import ManagedStatePaths, StatePaths
 
-MANAGED_GITIGNORE_ENTRIES: Final = (".overlord/", ".omo", ".codegraph")
+MANAGED_GITIGNORE_ENTRIES: Final = (".overlord/", ".codegraph")
 
 @unique
 class NodeKind(StrEnum):
@@ -65,7 +65,7 @@ def ensure_state_dir(paths: StatePaths) -> StateEnsureResult:
     gitignore = paths.root.parent / ".gitignore"
     pair_snapshots = tuple(
         (pair, classify_node(pair.workspace_entry), classify_node(pair.managed_directory))
-        for pair in (paths.omo, paths.codegraph)
+        for pair in (paths.codegraph,)
     )
     gitignore_snapshot = classify_node(gitignore)
     if gitignore_snapshot.kind not in {NodeKind.MISSING, NodeKind.FILE}:
@@ -89,7 +89,7 @@ def ensure_state_dir(paths: StatePaths) -> StateEnsureResult:
 
 def validate_state_dirs(paths: StatePaths) -> None:
     for path in (paths.root, paths.zsh_data, paths.prime_agent_data,
-                 paths.omo.managed_directory, paths.codegraph.managed_directory):
+                 paths.codegraph.managed_directory):
         snapshot = classify_node(path)
         if snapshot.kind not in {NodeKind.MISSING, NodeKind.DIRECTORY}:
             raise ManagedStateError(path, f"expected a real directory or no entry, found {snapshot.kind}")

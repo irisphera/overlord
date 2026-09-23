@@ -2,6 +2,8 @@
 sessions/
 # Claude Code local state
 .claude/
+# Cloudflare Wrangler cache
+.wrangler/
 
 /**/*pycache*/**
 
@@ -17,13 +19,9 @@ Thumbs.db
 # Crash dumps
 *.core
 
-# Local overrides
+# Logs
+*.log
 
 # Per-workspace persistent state (created by overlord script)
-.overlord/**
-.sisyphus/**
-.omo/**
-.log
 .overlord/
-.omo
 .codegraph

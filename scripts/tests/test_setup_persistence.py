@@ -202,6 +202,17 @@ class SetupPersistenceTests(unittest.TestCase):
         data = json.loads(path.read_text())
         self.assertEqual((data["defaultProvider"], data["defaultModel"]), ("azure-openai-responses", "private-deployment"))
 
+    def test_every_managed_model_stays_selected_across_reruns(self):
+        path = self.prime / "settings.json"
+        for model in MANAGED_OPENCODE_GO:
+            with self.subTest(model=model):
+                selection = {"defaultProvider": "opencode-go", "defaultModel": model, "recentModels": [f"opencode-go/{model}"]}
+                path.write_text(json.dumps(selection))
+                self.configure("configure_prime_agent_tools")
+                self.configure("configure_prime_agent_tools")
+                data = json.loads(path.read_text())
+                self.assertEqual({key: data[key] for key in selection}, selection)
+
     def test_space_bunny_uses_chat_completions_without_the_rejected_none_effort(self):
         path = self.prime / "models.json"
         self.configure("configure_prime_agent_models")

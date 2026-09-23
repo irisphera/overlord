@@ -1516,11 +1516,23 @@ for raw_path in sys.argv[1:]:
         def normalize_model(model):
             return normalize_deepseek_model(normalize_gemini_model(normalize_muse_spark_model(model)))
 
+        # Models setup no longer manages (configure_prime_agent_models removes them).
+        retired_models = {
+            "azure-openai-responses": ("gpt-5.6-sol", "gpt-5.6-luna", "grok-4.6", "gpt-6-astra"),
+            "opencode-go": ("gpt-5.6-luna", "union-alpha"),
+        }
+
+        def is_retired(model, provider=None):
+            if not isinstance(model, str):
+                return False
+            prefix, separator, model_id = model.rpartition("/")
+            return model_id in retired_models.get(prefix if separator else provider, ())
+
         recent_models = settings.get("recentModels")
         if isinstance(recent_models, list):
             migrated_recent_models = []
             for model in recent_models:
-                if isinstance(model, str) and model.startswith("opencode/"):
+                if (isinstance(model, str) and model.startswith("opencode/")) or is_retired(model):
                     continue
                 model = normalize_model(model)
                 if model is not None:
@@ -1554,6 +1566,9 @@ for raw_path in sys.argv[1:]:
         # re-runs migrate previous managed opencode-go defaults to it. Custom selections stay.
         _, _, _default_id = default_model.rpartition("/") if isinstance(default_model, str) else ("", "", "")
         if raw_default_model is None or (isinstance(raw_default_model, str) and raw_default_model.strip() == ""):
+            settings["defaultModel"] = deepseek_model
+            settings["defaultProvider"] = "opencode-go"
+        elif is_retired(default_model, settings.get("defaultProvider")):
             settings["defaultModel"] = deepseek_model
             settings["defaultProvider"] = "opencode-go"
         elif _default_id in ("gpt-5.6-luna", muse_spark_model, retired_deepseek_model):
@@ -1617,30 +1632,35 @@ configure_prime_agent_models() {
 import copy
 import json
 
-resource = os.environ.get("AZURE_OPENAI_RESOURCE_NAME", "").strip()
-base = os.environ.get("AZURE_OPENAI_BASE_URL", "").strip().rstrip("/")
-if not base and resource:
-    base = f"https://{resource}.openai.azure.com/openai/v1"
 # Prime auto-compacts when contextTokens > contextWindow - reserveTokens, and
 # reserveTokens defaults to 16384 (compaction.ts). Every managed model must
 # compact at 150k, so the window is that threshold plus the reserve; a model's
-# true provider window is deliberately not used. Output is left uncapped:
-# Prime omits max_tokens/max_output_tokens when a model carries no maxTokens,
-# so the provider's own maximum applies.
+# true provider window is deliberately not used.
 AUTOCOMPACT_TOKENS = 150000
 RESERVE_TOKENS = 16384
 WINDOW = AUTOCOMPACT_TOKENS + RESERVE_TOKENS
-# The Anthropic Messages API requires max_tokens, and Prime falls back to
-# maxTokens/3 (0 when unset) there, so those models keep an explicit ceiling.
-ANTHROPIC_MAX_TOKENS = 64000
+# Prime 0.9.5 sends min(maxTokens, 32000) as every request's output cap, and a
+# custom model without maxTokens defaults to 16384. Output cannot be uncapped
+# from models.json (maxTokens must be positive), so managed models carry
+# Prime's own ceiling and no lower limit of their own.
+MAX_TOKENS = 32000
 
 desired = {
-    "azure-openai-responses": [
-        ("gpt-5.6-sol", "GPT-5.6 Sol"), ("gpt-5.6-luna", "GPT-5.6 Luna"),
-        ("grok-4.6", "Grok 4.6"), ("gpt-6-astra", "GPT-6 Astra"),
-    ],
     "google-vertex": [("gemini-3.8-flash", "Gemini 3.8 Flash")],
-    "opencode-go": [("gpt-5.6-luna", "GPT-5.6 Luna"), ("muse-spark-1.3-contributor", "Muse Spark 1.3 Contributor"), ("deepseek-flash", "DeepSeek Flash"), ("union-alpha", "Union Alpha"), ("mimo-v2.6-flash", "MiMo V2.6 Flash"), ("mimo-v2.6-pro", "MiMo V2.6 Pro")],
+    "opencode-go": [
+        ("deepseek-flash", "DeepSeek Flash"),
+        ("muse-spark-1.3-contributor", "Muse Spark 1.3 Contributor"),
+        ("mimo-v2.6-flash", "MiMo V2.6 Flash"),
+        ("mimo-v2.6-pro", "MiMo V2.6 Pro"),
+        ("space-bunny-free", "Space Bunny Free"),
+    ],
+}
+# Previously managed entries. Re-runs remove them from existing state; models a
+# user added to the same providers are kept. Prime's own built-in catalog is
+# not affected by models.json and still lists its models for configured keys.
+retired = {
+    "azure-openai-responses": ("gpt-5.6-sol", "gpt-5.6-luna", "grok-4.6", "gpt-6-astra"),
+    "opencode-go": ("gpt-5.6-luna", "union-alpha", "deepseek-v4.1-flash"),
 }
 
 for raw in sys.argv[1:]:
@@ -1654,23 +1674,45 @@ for raw in sys.argv[1:]:
         defaults = mapping(data, "defaults")
         defaults.update(contextWindow=WINDOW, maxInputTokens=WINDOW, limitTokens=WINDOW, reasoning=True)
         providers = mapping(data, "providers")
+        for provider_id, model_ids in retired.items():
+            provider = providers.get(provider_id)
+            if not isinstance(provider, dict):
+                continue
+            entries = provider.get("models")
+            if isinstance(entries, list):
+                provider["models"] = [
+                    entry for entry in entries
+                    if not (isinstance(entry, dict) and entry.get("id") in model_ids)
+                ]
+            overrides = provider.get("modelOverrides")
+            if isinstance(overrides, dict):
+                for model_id in model_ids:
+                    overrides.pop(model_id, None)
+                # Older setups wrote a 256k "*" override. Prime ignores unknown IDs,
+                # so it never applied, but it misstates the managed window.
+                overrides.pop("*", None)
+            if provider_id not in desired:
+                # Prime rejects a provider with no models, overrides, or endpoint
+                # settings, which would fail the whole file; drop what is left empty.
+                for key in ("models", "modelOverrides"):
+                    if provider.get(key) in ([], {}):
+                        del provider[key]
+                if not provider:
+                    del providers[provider_id]
         for provider_id, models in desired.items():
             provider = mapping(providers, provider_id)
             entries = provider.setdefault("models", [])
             if not isinstance(entries, list) or any(not isinstance(entry, dict) for entry in entries):
                 raise ValueError("models must be a list of mappings")
             overrides = mapping(provider, "modelOverrides")
+            overrides.pop("*", None)
             for model_id, name in models:
-                fields = dict(contextWindow=WINDOW, maxInputTokens=WINDOW, limitTokens=WINDOW, reasoning=model_id != "grok-4.6")
+                fields = dict(contextWindow=WINDOW, maxInputTokens=WINDOW, limitTokens=WINDOW,
+                              maxTokens=MAX_TOKENS, reasoning=True)
                 matching = [entry for entry in entries if entry.get("id") == model_id]
                 if not matching:
                     matching = [{"id": model_id}]
                     entries.extend(matching)
-                if model_id == "union-alpha":
-                    # The Zen gateway serves union-alpha through the Anthropic Messages API.
-                    # The Anthropic SDK appends /v1/messages to the base URL, so drop the version suffix.
-                    fields["api"] = "anthropic-messages"
-                    fields["baseUrl"] = "https://opencode.ai/zen/go"
                 if model_id in ("mimo-v2.6-flash", "mimo-v2.6-pro"):
                     # The Zen gateway serves both v2.6 MiMo models only through the OpenAI
                     # Chat Completions API; /responses and /messages answer 503 (probed 2026-09-22).
@@ -1682,31 +1724,26 @@ for raw in sys.argv[1:]:
                         "off": "none", "minimal": None, "low": "low",
                         "medium": "medium", "high": "high", "xhigh": None, "max": None,
                     }
-                if model_id == "gpt-6-astra":
-                    # Custom definitions replace Prime's built-ins. Keep every
-                    # Astra effort explicit; Prime's off selector sends Azure none.
-                    # Astra does not support the generic minimal effort.
+                if model_id == "space-bunny-free":
+                    # The gateway lists Space Bunny only under this ID, on its OpenAI
+                    # Chat Completions route. It accepts minimal through max but rejects
+                    # "none" (probed 2026-09-23), so off is unsupported: Prime clamps it
+                    # to minimal instead of sending its default "none". xhigh and max
+                    # must be mapped explicitly or Prime hides them.
+                    fields["api"] = "openai-completions"
+                    fields["baseUrl"] = "https://opencode.ai/zen/go/v1"
                     fields["thinkingLevelMap"] = {
-                        "off": "none", "minimal": None, "low": "low",
+                        "off": None, "minimal": "minimal", "low": "low",
                         "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max",
                     }
                 override = mapping(overrides, model_id)
                 override.update(copy.deepcopy(fields))
-                if fields.get("api") == "anthropic-messages":
-                    override["maxTokens"] = ANTHROPIC_MAX_TOKENS
-                else:
-                    override.pop("maxTokens", None)
                 for entry in matching:
                     # The suffix names where the model auto-compacts, not its provider window.
                     entry.update(fields, name=f"{name} ({AUTOCOMPACT_TOKENS // 1000}k)")
-                    if fields.get("api") == "anthropic-messages":
-                        entry["maxTokens"] = ANTHROPIC_MAX_TOKENS
-                    else:
-                        # Leaving maxTokens unset sends no output cap at all.
-                        entry.pop("maxTokens", None)
-                    if model_id in ("union-alpha", "mimo-v2.6-flash", "mimo-v2.6-pro"):
+                    if model_id in ("mimo-v2.6-flash", "mimo-v2.6-pro", "space-bunny-free"):
                         entry.setdefault("input", ["text", "image"])
-                    if model_id in ("gpt-5.6-luna", "muse-spark-1.3-contributor"):
+                    if model_id == "muse-spark-1.3-contributor":
                         mapping(entry, "thinkingLevelMap")["max"] = "max"
                         mapping(override, "thinkingLevelMap")["max"] = "max"
                     if model_id == "deepseek-flash":
@@ -1715,8 +1752,6 @@ for raw in sys.argv[1:]:
                             value = "none" if level == "off" else level
                             mapping(entry, "thinkingLevelMap")[level] = value
                             mapping(override, "thinkingLevelMap")[level] = value
-                    if provider_id == "azure-openai-responses":
-                        entry["baseUrl"] = base or entry.get("baseUrl") or "https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1"
                     if provider_id == "google-vertex":
                         entry.setdefault("input", ["text", "image"])
             if provider_id == "opencode-go":
@@ -1728,18 +1763,6 @@ for raw in sys.argv[1:]:
                     "x-opencode-session",
                     "!echo ${OPENCODE_SESSION_ID:-${OVERLORD_WORKSPACE:-$(hostname)}} | tr -cs 'A-Za-z0-9_.-' '-'",
                 )
-            # Retired DeepSeek ID from the short-lived v4.1 config; the API serves deepseek-flash.
-            retired = "deepseek-v4.1-flash"
-            managed = mapping(providers, "opencode-go")
-            managed_entries = managed.get("models")
-            if isinstance(managed_entries, list):
-                managed["models"] = [
-                    entry for entry in managed_entries
-                    if not (isinstance(entry, dict) and entry.get("id") == retired)
-                ]
-            managed_overrides = managed.get("modelOverrides")
-            if isinstance(managed_overrides, dict):
-                managed_overrides.pop(retired, None)
         if before != data:
             write_file(path, original, json.dumps(data, indent=2, sort_keys=True) + "\n")
     except (OSError, UnicodeError, ValueError, TypeError) as error:

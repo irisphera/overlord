@@ -1,4 +1,4 @@
-"""Optional offline integration tests against an installed Prime Agent package."""
+"""Optional offline integration tests against the installed Prime Agent binary."""
 
 import json
 import os
@@ -9,33 +9,25 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-FIXTURE = Path(__file__).with_name("prime_model_policy.mjs")
+MANAGED_OPENCODE_GO = ["deepseek-flash", "muse-spark-1.3-contributor", "mimo-v2.6-flash",
+                       "mimo-v2.6-pro", "space-bunny-free"]
+# `model list` rounds to thousands: a 150000 + 16384 window compacts at 150k, and
+# 32000 is Prime's per-request output ceiling.
+CONTEXT = "166.4K"
+MAX_OUTPUT = "32K"
 
 
-def installed_prime_package():
-    explicit = os.environ.get("OVERLORD_PRIME_AGENT_TEST_PACKAGE")
-    if explicit:
-        package = Path(explicit).resolve()
-        metadata = json.loads((package / "package.json").read_text())
-        if metadata.get("name") != "prime-agent":
-            raise ValueError("OVERLORD_PRIME_AGENT_TEST_PACKAGE must point to the prime-agent package")
-        return package
-    binary = shutil.which("prime-agent")
-    if binary:
-        for directory in Path(binary).resolve().parents:
-            metadata = directory / "package.json"
-            if metadata.is_file() and json.loads(metadata.read_text()).get("name") == "prime-agent":
-                return directory
-    raise unittest.SkipTest("Prime Agent not installed; set OVERLORD_PRIME_AGENT_TEST_PACKAGE to run integration tests")
+def installed_prime_binary():
+    binary = os.environ.get("OVERLORD_PRIME_AGENT_TEST_BINARY") or shutil.which("prime-agent")
+    if not binary:
+        raise unittest.SkipTest("Prime Agent not installed; set OVERLORD_PRIME_AGENT_TEST_BINARY to run integration tests")
+    return binary
 
 
 class PrimeModelPolicyTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.node = shutil.which("node")
-        if not cls.node:
-            raise unittest.SkipTest("Node.js is required for the optional Prime integration tests")
-        cls.package = installed_prime_package()
+        cls.binary = installed_prime_binary()
 
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
@@ -45,8 +37,9 @@ class PrimeModelPolicyTests(unittest.TestCase):
         self.agent.mkdir(parents=True)
         self.models = self.agent / "models.json"
         self.env = {key: value for key, value in os.environ.items() if not key.startswith("AZURE_OPENAI_")}
-        self.env.update(HOME=str(self.home), TARGET_HOME=str(self.home),
-                        PRIME_AGENT_CODING_AGENT_DIR=str(self.agent), PI_OFFLINE="1")
+        # A placeholder key makes opencode-go models available; --offline sends no request.
+        self.env.update(HOME=str(self.home), TARGET_HOME=str(self.home), PRIME_AGENT_CODING_AGENT_DIR=str(self.agent),
+                        PI_OFFLINE="1", OPENCODE_API_KEY="offline-test-key")
 
     def configure(self):
         result = subprocess.run(
@@ -57,28 +50,40 @@ class PrimeModelPolicyTests(unittest.TestCase):
 
     def assert_runtime_policy(self):
         result = subprocess.run(
-            [self.node, str(FIXTURE), str(self.package), str(self.models)],
-            env=self.env, text=True, capture_output=True, timeout=30,
+            [self.binary, "--offline", "model", "list"],
+            env=self.env, text=True, capture_output=True, timeout=60,
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("PASS: actual registry selectors and 7 Azure payloads", result.stdout)
+        # Load and schema errors name the file; Prime then drops every custom model.
+        self.assertNotIn("models.json", result.stdout + result.stderr)
+        rows = {}
+        for line in result.stdout.splitlines()[1:]:
+            fields = line.split()
+            if len(fields) == 6:
+                rows[fields[0], fields[1]] = tuple(fields[2:5])
+        for model_id in MANAGED_OPENCODE_GO:
+            with self.subTest(model=model_id):
+                self.assertEqual(rows.get(("opencode-go", model_id)), (CONTEXT, MAX_OUTPUT, "yes"))
+        # Without Azure credentials nothing is listed, so no managed Azure entry survived.
+        self.assertEqual([key for key in rows if key[0] == "azure-openai-responses"], [])
 
-    def test_fresh_setup_selectors_and_azure_payloads(self):
+    def test_fresh_setup_policy(self):
         self.configure()
         self.assert_runtime_policy()
 
-    def test_migrated_setup_selectors_and_azure_payloads(self):
-        for stale in ({}, {"off": None, "minimal": "minimal", "xhigh": "high", "max": "high"}):
-            with self.subTest(stale=stale):
-                astra = {"id": "gpt-6-astra", "reasoning": True, "contextWindow": 256000, "maxTokens": 65536,
-                         "thinkingLevelMap": stale, "baseUrl": "https://mock.invalid/openai/v1"}
-                self.models.write_text(json.dumps({"providers": {"azure-openai-responses": {
-                    "models": [astra], "modelOverrides": {"gpt-6-astra": {"thinkingLevelMap": stale}},
-                }}}))
-                self.configure()
-                self.assert_runtime_policy()
+    def test_migrated_setup_policy(self):
+        legacy = dict(contextWindow=256000, maxInputTokens=256000, limitTokens=256000, reasoning=True)
+        self.models.write_text(json.dumps({"providers": {
+            "azure-openai-responses": {"models": [dict(id="gpt-6-astra", baseUrl="https://mock.invalid/openai/v1", **legacy)],
+                                       "modelOverrides": {"*": legacy, "gpt-6-astra": legacy}},
+            "opencode-go": {"models": [dict(id="deepseek-flash", maxTokens=65536, **legacy),
+                                       {"id": "union-alpha", "api": "anthropic-messages", "baseUrl": "https://opencode.ai/zen/go"}],
+                            "modelOverrides": {"*": legacy}},
+        }}))
+        self.configure()
+        self.assert_runtime_policy()
 
-    def test_tracked_models_selectors_and_azure_payloads(self):
+    def test_tracked_models_policy(self):
         # Read a temp copy so registry cache lookups cannot touch persisted repo state.
         self.models.write_bytes((ROOT / ".overlord/prime-agent-data/models.json").read_bytes())
         self.assert_runtime_policy()

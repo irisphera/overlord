@@ -10,9 +10,9 @@ from typing import Final
 
 CONTAINER_HOME: Final = "/home/overlord"
 OPTIONAL_TERMINAL_ENV_VARS: Final = ("COLORTERM", "TERM_PROGRAM", "TERM_PROGRAM_VERSION", "LANG", "LC_ALL")
-# Azure OpenAI credentials for prime-agent's azure-openai-responses provider.
-# Without AZURE_OPENAI_API_KEY the provider (and all its models, e.g. grok-4.6)
-# is hidden from `prime-agent model list`.
+# Azure OpenAI credentials for Codex's azure provider (configure_codex). Setup
+# manages no Prime models on Azure, but with AZURE_OPENAI_API_KEY present Prime
+# still lists its own built-in azure-openai-responses catalog.
 AZURE_ENV_VARS: Final = (
     "AZURE_OPENAI_API_KEY",
     "AZURE_OPENAI_BASE_URL",
@@ -76,10 +76,10 @@ def append_present(target: list[str], source: Mapping[str, str], name: str) -> N
 def append_azure_env(target: list[str], source: Mapping[str, str]) -> None:
     """Forward Azure OpenAI credentials, mapping legacy AZURE_* names forward.
 
-    prime-agent reads AZURE_OPENAI_API_KEY / AZURE_OPENAI_RESOURCE_NAME /
+    Codex reads AZURE_OPENAI_API_KEY / AZURE_OPENAI_RESOURCE_NAME /
     AZURE_OPENAI_BASE_URL. Hosts that export the older AZURE_API_KEY /
     AZURE_RESOURCE_NAME names get them mapped when the modern name is absent,
-    so the azure-openai-responses provider stays visible inside the container.
+    so Codex's Azure models keep working inside the container.
     """
     for name in AZURE_ENV_VARS:
         append_present(target, source, name)

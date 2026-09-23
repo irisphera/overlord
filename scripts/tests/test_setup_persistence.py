@@ -11,6 +11,10 @@ ROOT = Path(__file__).resolve().parents[2]
 # to 16384, and every managed model must compact at 150k.
 AUTOCOMPACT_TOKENS = 150000
 WINDOW = AUTOCOMPACT_TOKENS + 16384
+# Prime 0.9.5 caps each request at min(maxTokens, 32000).
+MAX_TOKENS = 32000
+MANAGED_OPENCODE_GO = ["deepseek-flash", "muse-spark-1.3-contributor", "mimo-v2.6-flash",
+                       "mimo-v2.6-pro", "space-bunny-free"]
 
 
 class SetupPersistenceTests(unittest.TestCase):
@@ -89,18 +93,24 @@ class SetupPersistenceTests(unittest.TestCase):
         result = self.configure("configure_prime_agent_models")
         data = json.loads(path.read_text())
         self.assertEqual(data["providers"]["opencode"], custom)
-        entries = {entry["id"]: entry for entry in data["providers"]["azure-openai-responses"]["models"]}
-        self.assertEqual(entries["private-deployment"], {"id": "private-deployment", "name": "personal"})
-        self.assertEqual(entries["grok-4.6"]["contextWindow"], WINDOW)
-        self.assertEqual(entries["gpt-6-astra"]["thinkingLevelMap"], {
-            "off": "none", "minimal": None, "low": "low", "medium": "medium",
-            "high": "high", "xhigh": "xhigh", "max": "max",
-        })
-        self.assertEqual(entries["gpt-5.6-luna"]["thinkingLevelMap"]["max"], "max")
+        # Setup no longer manages Azure models; the user's own deployment stays.
+        self.assertEqual(data["providers"]["azure-openai-responses"],
+                         {"models": [{"id": "private-deployment", "name": "personal"}]})
+        entries = {entry["id"]: entry for entry in data["providers"]["opencode-go"]["models"]}
+        self.assertEqual(entries["muse-spark-1.3-contributor"]["thinkingLevelMap"]["max"], "max")
         self.assertEqual(state.read_bytes(), b"saved session\n")
         self.assertEqual(auth.read_bytes(), b"private credentials\n")
         self.assertEqual(database.read_bytes(), b"database bytes\x00")
         self.assertNotIn("private-marker", result.stdout + result.stderr)
+
+    def test_opencode_go_offers_exactly_the_managed_models(self):
+        path = self.prime / "models.json"
+        self.configure("configure_prime_agent_models")
+        data = json.loads(path.read_text())
+        self.assertEqual(sorted(data["providers"]), ["google-vertex", "opencode-go"])
+        provider = data["providers"]["opencode-go"]
+        self.assertEqual([entry["id"] for entry in provider["models"]], MANAGED_OPENCODE_GO)
+        self.assertEqual(sorted(provider["modelOverrides"]), sorted(MANAGED_OPENCODE_GO))
 
     def test_every_managed_model_compacts_at_the_same_threshold(self):
         path = self.prime / "models.json"
@@ -108,55 +118,109 @@ class SetupPersistenceTests(unittest.TestCase):
             with self.subTest(existing_window=existing_window):
                 if existing_window is not None:
                     fields = dict(contextWindow=existing_window, maxInputTokens=existing_window, limitTokens=existing_window)
-                    path.write_text(json.dumps({"providers": {"azure-openai-responses": {
-                        "models": [dict(id="gpt-6-astra", name="GPT-6 Astra (256k)", **fields)],
-                        "modelOverrides": {"*": fields, "gpt-6-astra": fields},
+                    path.write_text(json.dumps({"providers": {"opencode-go": {
+                        "models": [dict(id="deepseek-flash", name="DeepSeek Flash (256k)", maxTokens=65536, **fields)],
+                        "modelOverrides": {"*": fields, "deepseek-flash": fields},
                     }}}))
                 self.configure("configure_prime_agent_models")
                 data = json.loads(path.read_text())
-                provider = data["providers"]["azure-openai-responses"]
-                entries = {entry["id"]: entry for entry in provider["models"]}
-                for field in ("contextWindow", "maxInputTokens", "limitTokens"):
-                    self.assertEqual(entries["gpt-6-astra"][field], WINDOW)
-                    self.assertEqual(provider["modelOverrides"]["gpt-6-astra"][field], WINDOW)
-                    self.assertEqual(entries["gpt-5.6-luna"][field], WINDOW)
-                self.assertEqual(entries["gpt-6-astra"]["name"], "GPT-6 Astra (150k)")
-                # No managed model imposes an output cap.
-                for entry in entries.values():
-                    self.assertNotIn("maxTokens", entry)
+                managed = [
+                    (provider_id, entry, data["providers"][provider_id]["modelOverrides"][entry["id"]])
+                    for provider_id in ("opencode-go", "google-vertex")
+                    for entry in data["providers"][provider_id]["models"]
+                ]
+                self.assertEqual(len(managed), len(MANAGED_OPENCODE_GO) + 1)
+                for provider_id, entry, override in managed:
+                    for field in ("contextWindow", "maxInputTokens", "limitTokens"):
+                        self.assertEqual(entry[field], WINDOW, (provider_id, entry["id"], field))
+                        self.assertEqual(override[field], WINDOW, (provider_id, entry["id"], field))
+                    # Prime's own per-request ceiling; an unset field would default to 16384.
+                    self.assertEqual(entry["maxTokens"], MAX_TOKENS)
+                    self.assertEqual(override["maxTokens"], MAX_TOKENS)
+                    self.assertTrue(entry["name"].endswith(" (150k)"), entry["name"])
+                # The legacy 256k wildcard never applied in Prime and is dropped.
+                self.assertNotIn("*", data["providers"]["opencode-go"]["modelOverrides"])
                 before = path.read_bytes(), path.stat().st_mtime_ns
                 self.configure("configure_prime_agent_models")
                 self.assertEqual((path.read_bytes(), path.stat().st_mtime_ns), before)
 
-    def test_astra_reasoning_modes_are_created_and_migrated_idempotently(self):
+    def test_retired_models_are_removed_and_user_models_kept(self):
         path = self.prime / "models.json"
-        expected = {"off": "none", "minimal": None, "low": "low", "medium": "medium",
-                    "high": "high", "xhigh": "xhigh", "max": "max"}
-        for stale in (None, {}, {"off": None, "minimal": "minimal", "xhigh": "high", "max": "high"}):
-            with self.subTest(stale=stale):
-                unrelated = {"id": "custom", "thinkingLevelMap": {"max": "custom-effort"}}
-                astra = {"id": "gpt-6-astra", "baseUrl": "https://custom.example/openai/v1"}
-                if stale is not None:
-                    astra["thinkingLevelMap"] = stale
-                original = json.dumps({"providers": {"azure-openai-responses": {
-                    "models": [astra, dict(astra), unrelated],
-                    "modelOverrides": {"gpt-6-astra": {"thinkingLevelMap": stale or {}},
-                                       "custom": {"thinkingLevelMap": {"off": None}}},
-                }}})
-                path.write_text(original)
+        legacy_window = dict(contextWindow=256000, maxInputTokens=256000, limitTokens=256000, reasoning=True)
+        azure_ids = ("gpt-5.6-sol", "gpt-5.6-luna", "grok-4.6", "gpt-6-astra")
+        user_model = {"id": "glm-5.3", "name": "personal"}
+        for user_azure in ([], [{"id": "private-deployment"}]):
+            with self.subTest(user_azure=user_azure):
+                path.write_text(json.dumps({"providers": {
+                    "azure-openai-responses": {
+                        "models": [{"id": model_id} for model_id in azure_ids] + user_azure,
+                        "modelOverrides": {"*": legacy_window, **{model_id: legacy_window for model_id in azure_ids}},
+                    },
+                    "opencode-go": {
+                        "models": [{"id": "gpt-5.6-luna"}, {"id": "union-alpha", "api": "anthropic-messages"},
+                                   {"id": "deepseek-v4.1-flash"}, user_model, {"id": "deepseek-flash"}],
+                        "modelOverrides": {"gpt-5.6-luna": {}, "union-alpha": {"maxTokens": 64000},
+                                           "deepseek-v4.1-flash": {}, "*": legacy_window},
+                    },
+                }}))
                 self.configure("configure_prime_agent_models")
-                provider = json.loads(path.read_text())["providers"]["azure-openai-responses"]
-                entries = [entry for entry in provider["models"] if entry["id"] == "gpt-6-astra"]
-                for entry in [*entries, provider["modelOverrides"]["gpt-6-astra"]]:
-                    self.assertTrue(entry["reasoning"])
-                    self.assertEqual(entry["thinkingLevelMap"], expected)
-                    self.assertEqual(entry["contextWindow"], WINDOW)
-                self.assertEqual(entries[0]["baseUrl"], astra["baseUrl"])
-                self.assertIn(unrelated, provider["models"])
-                self.assertEqual(provider["modelOverrides"]["custom"], {"thinkingLevelMap": {"off": None}})
+                providers = json.loads(path.read_text())["providers"]
+                if user_azure:
+                    self.assertEqual(providers["azure-openai-responses"], {"models": user_azure})
+                else:
+                    # An emptied provider would fail Prime's validation of the whole file.
+                    self.assertNotIn("azure-openai-responses", providers)
+                provider = providers["opencode-go"]
+                ids = [entry["id"] for entry in provider["models"]]
+                self.assertEqual(sorted(ids), sorted([*MANAGED_OPENCODE_GO, "glm-5.3"]))
+                self.assertIn(user_model, provider["models"])
+                self.assertEqual(sorted(provider["modelOverrides"]), sorted(MANAGED_OPENCODE_GO))
                 before = path.read_bytes(), path.stat().st_mtime_ns
                 self.configure("configure_prime_agent_models")
                 self.assertEqual((path.read_bytes(), path.stat().st_mtime_ns), before)
+
+    def test_retired_selections_fall_back_to_the_default_model(self):
+        path = self.prime / "settings.json"
+        recent = ["azure-openai-responses/gpt-6-astra", "opencode-go/union-alpha", "opencode-go/gpt-5.6-luna",
+                  "opencode-go/glm-5.3", "azure-openai-responses/private-deployment", "opencode-go/space-bunny-free"]
+        kept = ["opencode-go/deepseek-flash", "opencode-go/glm-5.3",
+                "azure-openai-responses/private-deployment", "opencode-go/space-bunny-free"]
+        for default in (
+            {"defaultProvider": "azure-openai-responses", "defaultModel": "gpt-6-astra"},
+            {"defaultModel": "azure-openai-responses/grok-4.6"},
+            {"defaultProvider": "opencode-go", "defaultModel": "union-alpha"},
+        ):
+            with self.subTest(default=default):
+                path.write_text(json.dumps({**default, "recentModels": recent}))
+                self.configure("configure_prime_agent_tools")
+                data = json.loads(path.read_text())
+                self.assertEqual((data["defaultProvider"], data["defaultModel"]), ("opencode-go", "deepseek-flash"))
+                self.assertEqual(data["recentModels"], kept)
+        # A user's own model on a formerly managed provider stays selected.
+        path.write_text(json.dumps({"defaultProvider": "azure-openai-responses", "defaultModel": "private-deployment"}))
+        self.configure("configure_prime_agent_tools")
+        data = json.loads(path.read_text())
+        self.assertEqual((data["defaultProvider"], data["defaultModel"]), ("azure-openai-responses", "private-deployment"))
+
+    def test_space_bunny_uses_chat_completions_without_the_rejected_none_effort(self):
+        path = self.prime / "models.json"
+        self.configure("configure_prime_agent_models")
+        provider = json.loads(path.read_text())["providers"]["opencode-go"]
+        entries = [entry for entry in provider["models"] if entry["id"] == "space-bunny-free"]
+        self.assertEqual(len(entries), 1)
+        for entry in [*entries, provider["modelOverrides"]["space-bunny-free"]]:
+            self.assertTrue(entry["reasoning"])
+            self.assertEqual(entry["api"], "openai-completions")
+            self.assertEqual(entry["baseUrl"], "https://opencode.ai/zen/go/v1")
+            # off is unsupported (Prime would send "none"); xhigh/max must be explicit.
+            self.assertEqual(entry["thinkingLevelMap"], {
+                "off": None, "minimal": "minimal", "low": "low", "medium": "medium",
+                "high": "high", "xhigh": "xhigh", "max": "max",
+            })
+            self.assertEqual(entry["contextWindow"], WINDOW)
+            self.assertEqual(entry["maxTokens"], MAX_TOKENS)
+        self.assertEqual(entries[0]["input"], ["text", "image"])
+        self.assertEqual(entries[0]["name"], "Space Bunny Free (150k)")
 
     def test_mimo_v26_models_use_chat_completions_and_supported_efforts(self):
         path = self.prime / "models.json"
@@ -179,23 +243,12 @@ class SetupPersistenceTests(unittest.TestCase):
                     self.assertEqual(entry["api"], "openai-completions")
                     self.assertEqual(entry["baseUrl"], "https://opencode.ai/zen/go/v1")
                     self.assertEqual(entry["contextWindow"], WINDOW)
-                    self.assertNotIn("maxTokens", entry)
+                    self.assertEqual(entry["maxTokens"], MAX_TOKENS)
                 self.assertEqual(entries[0]["input"], ["text", "image"])
                 self.assertEqual(entries[0]["name"], f"{label} (150k)")
         before = path.read_bytes(), path.stat().st_mtime_ns
         self.configure("configure_prime_agent_models")
         self.assertEqual((path.read_bytes(), path.stat().st_mtime_ns), before)
-
-    def test_anthropic_route_keeps_the_required_output_ceiling(self):
-        # Prime sends maxTokens/3 (0 when unset) on the Anthropic Messages route,
-        # which that API rejects, so those entries are the one documented exception.
-        path = self.prime / "models.json"
-        self.configure("configure_prime_agent_models")
-        provider = json.loads(path.read_text())["providers"]["opencode-go"]
-        entry = next(e for e in provider["models"] if e["id"] == "union-alpha")
-        self.assertEqual(entry["api"], "anthropic-messages")
-        self.assertEqual(entry["maxTokens"], 64000)
-        self.assertEqual(provider["modelOverrides"]["union-alpha"]["maxTokens"], 64000)
 
     def test_malformed_config_is_unchanged_without_secret_diagnostics(self):
         for function, filename in (("configure_prime_agent_models", "models.json"), ("configure_prime_agent_tools", "settings.json")):

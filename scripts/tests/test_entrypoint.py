@@ -280,6 +280,7 @@ class EntrypointTests(unittest.TestCase):
         data = json.loads(models.read_text())
         entries = {entry["id"] for entry in data["providers"]["opencode-go"]["models"]}
         self.assertIn("mimo-v2.6-flash", entries)
+        self.assertIn("space-bunny-free", entries)
         self.assertIn("deepseek-flash", entries)
         # Unmanaged providers and the user's selections are merged around, not replaced.
         self.assertEqual(data["providers"]["personal"], {"models": [{"id": "keep-me"}]})

@@ -1,5 +1,34 @@
 # PROJECT KNOWLEDGE BASE
 
+## WORKING RULES
+
+The owner set these rules for every Irisphera repository. If a later section sets a stricter rule for this repository,
+the stricter rule wins.
+
+- **Work on `main`.** Commit to `main` and push. If the repository has a deployment workflow, deploy the change too. A
+  change that touches only documentation needs no deploy. Do not ask first, and do not leave work on a separate branch
+  waiting for approval. If you work in a separate worktree, land the commit with `git push origin HEAD:main`. Never
+  force-push `main`.
+- **Ask before anything else in production.** Reading production data, running migrations by hand and changing services
+  or infrastructure need the owner's explicit go-ahead.
+- **Do not work around a refusal.** If a permission check or a tool refuses an action, hand the command to the owner.
+- **Hand over commands that work from any directory.** Use `git -C <absolute path>` and absolute file paths. Never hand
+  over a bare `git checkout <commit> -- <paths>`: run in the wrong checkout, it once overwrote uncommitted work. Prefer
+  commands that refuse, rather than overwrite, when they run in the wrong place. After the owner runs a command, check
+  the result in the intended directory. The `!` prefix works only at the Claude Code prompt. In the owner's own shell, a
+  leading `!` negates the exit status, so give the command without it.
+- **Keep records in git.** Ledgers, decisions and notes the team relies on belong in the repository they describe, not
+  on one machine. Do not point repository files at local paths. If the repository has a `LEDGER.md`, update its state
+  and its log in the same commit as the change, or right after.
+- **Check old work before you clear it.** Before you delete uncommitted work, a stash or a branch, check whether it is
+  already on `main` or has been replaced. If it is neither, commit it or ask the owner.
+- **Do not run `git submodule update` in a linked worktree.** A linked worktree shares the submodule's git config with
+  the main checkout. The update rewrites `core.worktree` there and breaks `git status` in the main checkout. Move the
+  submodule with `git -C <worktree>/<submodule> checkout <commit>` instead.
+- **Prefer the simplest mechanism, and measure.** Prove that a change works by measuring it, for example against a copy
+  of the production schema, instead of adding guards. Guards that depend on details of the test environment have
+  refused in production before.
+
 ## OVERVIEW
 
 Overlord is a minimal dev-container launcher + standalone VM setup. The repo has:

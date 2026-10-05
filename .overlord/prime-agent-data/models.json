@@ -96,7 +96,13 @@
           "maxTokens": 32000,
           "reasoning": true,
           "thinkingLevelMap": {
-            "max": "max"
+            "high": "high",
+            "low": "low",
+            "max": "max",
+            "medium": "medium",
+            "minimal": "minimal",
+            "off": null,
+            "xhigh": "xhigh"
           }
         },
         "space-bunny-free": {
@@ -135,7 +141,12 @@
           "provider": "opencode-go",
           "reasoning": true,
           "thinkingLevelMap": {
+            "high": "high",
+            "low": "low",
             "max": "max",
+            "medium": "medium",
+            "minimal": "minimal",
+            "off": null,
             "xhigh": "xhigh"
           }
         },

@@ -1564,7 +1564,9 @@ for raw in sys.argv[1:]:
                 for entry in matching:
                     # The suffix names where the model auto-compacts, not its provider window.
                     entry.update(fields, name=f"{name} ({AUTOCOMPACT_TOKENS // 1000}k)")
-                    if model_id in ("mimo-v2.6-flash", "mimo-v2.6-pro", "space-bunny-free"):
+                    # Muse Spark's built-in entry takes images; this entry replaces it.
+                    if model_id in ("mimo-v2.6-flash", "mimo-v2.6-pro", "space-bunny-free",
+                                    "muse-spark-1.3-contributor"):
                         entry.setdefault("input", ["text", "image"])
                     if model_id == "deepseek-flash":
                         # Gateway accepts none/minimal/low/medium/high/xhigh/max (probed 2026-09-10).

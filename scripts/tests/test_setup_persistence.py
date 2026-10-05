@@ -245,6 +245,8 @@ class SetupPersistenceTests(unittest.TestCase):
         provider = json.loads(path.read_text())["providers"]["opencode-go"]
         entries = [entry for entry in provider["models"] if entry["id"] == "muse-spark-1.3-contributor"]
         self.assertEqual(len(entries), 1)
+        # Replacing the built-in entry would otherwise also drop its image input.
+        self.assertEqual(entries[0]["input"], ["text", "image"])
         for entry in [*entries, provider["modelOverrides"]["muse-spark-1.3-contributor"]]:
             self.assertEqual(entry["thinkingLevelMap"], {
                 "off": None, "minimal": "minimal", "low": "low", "medium": "medium",

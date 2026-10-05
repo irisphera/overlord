@@ -46,6 +46,7 @@ class PrimeModelsScriptTests(unittest.TestCase):
         self.assertEqual(sorted(entry["id"] for entry in models), sorted(["custom-model", *MANAGED_OPENCODE_GO]))
         muse = next(entry for entry in models if entry["id"] == "muse-spark-1.3-contributor")
         self.assertIsNone(muse["thinkingLevelMap"]["off"])
+        self.assertEqual(muse["input"], ["text", "image"])
         self.assertEqual(self.models.with_suffix(".json.bak").read_text(), original)
 
 

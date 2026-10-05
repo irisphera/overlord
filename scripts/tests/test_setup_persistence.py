@@ -97,7 +97,7 @@ class SetupPersistenceTests(unittest.TestCase):
         self.assertEqual(data["providers"]["azure-openai-responses"],
                          {"models": [{"id": "private-deployment", "name": "personal"}]})
         entries = {entry["id"]: entry for entry in data["providers"]["opencode-go"]["models"]}
-        self.assertEqual(entries["muse-spark-1.3-contributor"]["thinkingLevelMap"]["max"], "max")
+        self.assertIsNone(entries["muse-spark-1.3-contributor"]["thinkingLevelMap"]["off"])
         self.assertEqual(state.read_bytes(), b"saved session\n")
         self.assertEqual(auth.read_bytes(), b"private credentials\n")
         self.assertEqual(database.read_bytes(), b"database bytes\x00")
@@ -232,6 +232,27 @@ class SetupPersistenceTests(unittest.TestCase):
             self.assertEqual(entry["maxTokens"], MAX_TOKENS)
         self.assertEqual(entries[0]["input"], ["text", "image"])
         self.assertEqual(entries[0]["name"], "Space Bunny Free (150k)")
+
+    def test_muse_spark_never_sends_the_rejected_none_effort(self):
+        path = self.prime / "models.json"
+        # Earlier setups wrote only max, which left off at Prime's default "none":
+        # compaction requests no effort, so every compaction was rejected.
+        path.write_text(json.dumps({"providers": {"opencode-go": {
+            "models": [{"id": "muse-spark-1.3-contributor", "thinkingLevelMap": {"max": "max"}}],
+            "modelOverrides": {"muse-spark-1.3-contributor": {"thinkingLevelMap": {"max": "max"}}},
+        }}}))
+        self.configure("configure_prime_agent_models")
+        provider = json.loads(path.read_text())["providers"]["opencode-go"]
+        entries = [entry for entry in provider["models"] if entry["id"] == "muse-spark-1.3-contributor"]
+        self.assertEqual(len(entries), 1)
+        for entry in [*entries, provider["modelOverrides"]["muse-spark-1.3-contributor"]]:
+            self.assertEqual(entry["thinkingLevelMap"], {
+                "off": None, "minimal": "minimal", "low": "low", "medium": "medium",
+                "high": "high", "xhigh": "xhigh", "max": "max",
+            })
+            # The built-in Responses route stays; only the efforts are managed.
+            self.assertNotIn("api", entry)
+            self.assertNotIn("baseUrl", entry)
 
     def test_mimo_v26_models_use_chat_completions_and_supported_efforts(self):
         path = self.prime / "models.json"

@@ -1549,6 +1549,16 @@ for raw in sys.argv[1:]:
                         "off": None, "minimal": "minimal", "low": "low",
                         "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max",
                     }
+                if model_id == "muse-spark-1.3-contributor":
+                    # The gateway accepts minimal through max and rejects "none". Prime's
+                    # compaction requests no effort, and the Responses builder then sends
+                    # thinkingLevelMap.off, defaulting to "none" unless off is null. This
+                    # entry replaces Prime's built-in one, whose off: null is lost, so the
+                    # whole map is written here; xhigh and max must be explicit or Prime hides them.
+                    fields["thinkingLevelMap"] = {
+                        "off": None, "minimal": "minimal", "low": "low",
+                        "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max",
+                    }
                 override = mapping(overrides, model_id)
                 override.update(copy.deepcopy(fields))
                 for entry in matching:
@@ -1556,9 +1566,6 @@ for raw in sys.argv[1:]:
                     entry.update(fields, name=f"{name} ({AUTOCOMPACT_TOKENS // 1000}k)")
                     if model_id in ("mimo-v2.6-flash", "mimo-v2.6-pro", "space-bunny-free"):
                         entry.setdefault("input", ["text", "image"])
-                    if model_id == "muse-spark-1.3-contributor":
-                        mapping(entry, "thinkingLevelMap")["max"] = "max"
-                        mapping(override, "thinkingLevelMap")["max"] = "max"
                     if model_id == "deepseek-flash":
                         # Gateway accepts none/minimal/low/medium/high/xhigh/max (probed 2026-09-10).
                         for level in ("off", "minimal", "low", "medium", "high", "xhigh", "max"):

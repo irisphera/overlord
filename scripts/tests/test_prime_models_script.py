@@ -45,6 +45,7 @@ class PrimeModelsScriptTests(unittest.TestCase):
         models = json.loads(self.models.read_text())["providers"]["opencode-go"]["models"]
         self.assertEqual(sorted(entry["id"] for entry in models), sorted(["custom-model", *MANAGED_OPENCODE_GO]))
         muse = next(entry for entry in models if entry["id"] == "muse-spark-1.3-contributor")
+        self.assertEqual(muse["api"], "openai-responses")
         self.assertIsNone(muse["thinkingLevelMap"]["off"])
         self.assertEqual(muse["input"], ["text", "image"])
         self.assertEqual(self.models.with_suffix(".json.bak").read_text(), original)

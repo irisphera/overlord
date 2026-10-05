@@ -90,6 +90,8 @@
           }
         },
         "muse-spark-1.3-contributor": {
+          "api": "openai-responses",
+          "baseUrl": "https://opencode.ai/zen/go/v1",
           "contextWindow": 166384,
           "limitTokens": 166384,
           "maxInputTokens": 166384,

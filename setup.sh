@@ -1555,6 +1555,10 @@ for raw in sys.argv[1:]:
                     # thinkingLevelMap.off, defaulting to "none" unless off is null. This
                     # entry replaces Prime's built-in one, whose off: null is lost, so the
                     # whole map is written here; xhigh and max must be explicit or Prime hides them.
+                    # The route is lost too: Prime falls back to Chat Completions, which the
+                    # gateway refuses for this model ("Model does not support this protocol").
+                    fields["api"] = "openai-responses"
+                    fields["baseUrl"] = "https://opencode.ai/zen/go/v1"
                     fields["thinkingLevelMap"] = {
                         "off": None, "minimal": "minimal", "low": "low",
                         "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max",

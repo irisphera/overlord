@@ -88,6 +88,14 @@ The distribution is root-owned, so the managed shell block sets `DISABLE_AUTOUPD
 - **Space Bunny:** the Zen gateway lists the model only as `space-bunny-free` (there is no `space-bunny` ID). The entry pins the OpenAI Chat Completions route (`openai-completions`, `https://opencode.ai/zen/go/v1`) with image input. The gateway accepts `minimal` through `max` but rejects `none` with HTTP 400 (probed 2026-09-23), and Prime sends `none` for `off`; the `thinkingLevelMap` therefore disables `off`, so a saved `off` is clamped to `minimal`, and maps `xhigh` and `max` explicitly so Prime offers them.
 - **MiMo V2.6:** Setup adds `mimo-v2.6-flash` and `mimo-v2.6-pro` on `opencode-go` with image input. The Zen gateway serves both only over the OpenAI Chat Completions route, so the entries pin `openai-completions` and `https://opencode.ai/zen/go/v1` (`/responses` and `/messages` answer 503; probed 2026-09-22). Their `thinkingLevelMap` disables the gateway-rejected `minimal`, `xhigh`, and `max` selectors, so a saved level above `high` is clamped to `high`.
 
+- **Muse Spark:** the gateway accepts `minimal` through `max` and rejects `none`. Compaction requests no effort, and Prime's Responses route then sends the map's `off` value, which defaults to `none`. The managed entry replaces Prime's built-in one, so it writes the whole `thinkingLevelMap` with `off` mapped to `null`.
+- **Prime without overlord:** `scripts/prime-models` applies the same policy to any `models.json`, by default `~/.prime/agent/models.json`, for example on macOS, where setup does not run. It runs the policy code from the adjacent `setup.sh`, merges like setup does, and saves `models.json.bak` before its first change. Run `prime-agent shutdown` afterwards so new sessions load the file. `.overlord/prime-agent-data/models.json` is this repository's workspace copy, and a test fails when it falls behind the policy.
+
+```bash
+python3 /path/to/overlord/scripts/prime-models            # ~/.prime/agent/models.json
+python3 /path/to/overlord/scripts/prime-models FILE...    # other models.json files
+```
+
 ### Configuration preservation
 
 Managed JSON/JSONC, zellij, and shell-block writes preserve existing file modes and the first `*.bak`, use same-directory atomic replacement, and reject symlink/non-regular configuration destinations. Malformed agent files are left unchanged with credential-safe diagnostics. Unrelated settings, sessions, auth files, and databases are preserved. A detected concurrent configuration change causes the write to be refused.

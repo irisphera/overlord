@@ -1,0 +1,32 @@
+#!/usr/bin/env python3
+"""Apply setup.sh's managed Prime model policy to models.json files.
+
+usage: prime-models [MODELS_JSON ...]   (default: ~/.prime/agent/models.json)
+
+For Prime used without overlord or setup.sh, such as on macOS. setup.sh is
+delivered as a single file, so it stays the only copy of the policy: this runs
+the same Python that configure_prime_agent_models pipes to python3. Like setup,
+it merges into an existing file, keeps models, providers and keys it does not
+manage, and saves MODELS_JSON.bak before the first change it makes.
+"""
+import subprocess
+import sys
+from pathlib import Path
+
+SETUP = Path(__file__).resolve().parent.parent / "setup.sh"
+
+
+def policy_program():
+    text = SETUP.read_text()
+    helpers = text.split("cat <<'PY_HELPERS'\n", 1)[1].split("\nPY_HELPERS\n", 1)[0]
+    policy = text.split("<<'PYEOF_PRIME'\n", 1)[1].split("\nPYEOF_PRIME\n", 1)[0]
+    return helpers + "\n" + policy
+
+
+def main(paths):
+    paths = paths or [str(Path.home() / ".prime/agent/models.json")]
+    return subprocess.run([sys.executable, "-", *paths], input=policy_program(), text=True).returncode
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

@@ -21,3 +21,4 @@
 | Container lifecycle | `overlord_py/container_lifecycle.py` | image build, create, start, setup.sh exec |
 | Runtime config | `overlord_py/runtime_config.py` | zellij config injection |
 | Persisted mounts | `overlord_py/persisted_state_mounts.py` | verifies workspace + zsh_data binds |
+| Prime models without setup | `prime-models` | runs the `configure_prime_agent_models` Python from `../setup.sh` on any `models.json` |

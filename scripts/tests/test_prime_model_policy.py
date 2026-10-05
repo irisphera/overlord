@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -32,7 +33,8 @@ class PrimeModelPolicyTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        self.home = Path(temporary.name)
+        # The policy refuses paths through symlinked directories, such as macOS's /var.
+        self.home = Path(temporary.name).resolve()
         self.agent = self.home / ".prime/agent"
         self.agent.mkdir(parents=True)
         self.models = self.agent / "models.json"
@@ -42,8 +44,9 @@ class PrimeModelPolicyTests(unittest.TestCase):
                         PI_OFFLINE="1", OPENCODE_API_KEY="offline-test-key")
 
     def configure(self):
+        # The same policy setup.sh runs, without bash 4 (macOS ships 3.2).
         result = subprocess.run(
-            ["bash", "-eu", "-c", 'source "$1"; configure_prime_agent_models', "_", str(ROOT / "setup.sh")],
+            [sys.executable, str(ROOT / "scripts/prime-models"), str(self.models)],
             env=self.env, text=True, capture_output=True, timeout=20,
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
